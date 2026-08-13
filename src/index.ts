@@ -454,9 +454,14 @@ export function installAgentRp(
     recordInput: false,
     handler: executeWorldInfoConfiguration,
   })
-  ctx.effect(() => gateway.registerPromptAttachmentConsumer('dsh-agent-rp', ({ agent, content }) => (
-    claimAgentRpPrompt(agentsByScope.get(agent) === agent, content)
-  )), 'agent-rp: prompt attachment consumer')
+  // The prompt-attachment consumer gateway arrived after the public 0.1.0-rc.6
+  // apiProxy; feature-detect it so the preset mounts on the public release too.
+  const registerPromptAttachmentConsumer = gateway.registerPromptAttachmentConsumer?.bind(gateway)
+  if (registerPromptAttachmentConsumer !== undefined) {
+    ctx.effect(() => registerPromptAttachmentConsumer('dsh-agent-rp', ({ agent, content }) => (
+      claimAgentRpPrompt(agentsByScope.get(agent) === agent, content)
+    )), 'agent-rp: prompt attachment consumer')
+  }
   const registerSessionImporter = gateway.registerPromptSessionImporter?.bind(gateway)
   if (registerSessionImporter !== undefined) ctx.effect(() => registerSessionImporter('dsh-agent-rp:sillytavern-migration', {
     recognize: ({ agent, content }) => isSillyTavernMigrationOffer(agentsByScope.get(agent) === agent, content),
