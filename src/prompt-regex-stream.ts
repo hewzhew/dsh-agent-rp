@@ -34,6 +34,7 @@ import {
   injectSillyTavernInChatPrompts,
   type SillyTavernInChatPrompt,
 } from './preset-prompt.ts'
+import { resolveMacros, type MacroMessage } from './macros.ts'
 import { resolveSessionPersonaIdentity } from './session-persona.ts'
 
 interface DialogueNode {
@@ -168,6 +169,45 @@ function isAgentLoopDispatch(options: GenerateOptions): boolean {
     || (options.sessionId !== undefined && options.purpose === undefined && Object.isFrozen(options))
 }
 
+/** Resolve chat-state and identity macros in one request's outgoing messages. */
+function resolveChatMacros(
+  messages: readonly Message[],
+  card: ImportedCharacterCard,
+  userName?: string,
+  persona?: string,
+): Message[] {
+  const macroMessages: MacroMessage[] = messages.flatMap(message =>
+    message.role === 'user' || message.role === 'assistant'
+      ? [{
+        role: message.role,
+        content: message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n'),
+      }]
+      : [])
+  const last = messages.at(-1)
+  const pendingInput = last?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+  return messages.map(message => {
+    if (!message.content.some(block => block.type === 'text')) return message
+    const content = message.content.map(block => {
+      if (block.type !== 'text') return block
+      return {
+        ...block,
+        text: resolveMacros(
+          block.text,
+          {
+            card,
+            ...(userName === undefined ? {} : { userName }),
+            ...(persona === undefined ? {} : { persona }),
+            messages: macroMessages,
+            ...(pendingInput === undefined ? {} : { pendingInput }),
+          },
+          { dropUnknown: false },
+        ).text,
+      }
+    })
+    return { ...message, content }
+  })
+}
+
 /** Apply one request's prompt view to the durable model surface. */
 export function applyPromptRegexSurface(
   session: Session,
@@ -249,20 +289,20 @@ export function installPromptRegexStream(
     const preset = readActiveSessionPreset(agent.session.events)?.preset
     const scripts = preset === undefined ? [] : presetRegexScripts(preset)
     const inChat = inChatForAgent(agent)
+    const identity = resolveSessionPersonaIdentity(
+      agent.session.events,
+      active.result.userName,
+      readSillyTavernChatIdentity(agent.session.events)?.userName,
+    )
     const hasManagedSurface = dialogueNodes(agent.session).some(node => sourceMarker(messageOf(node.current).source) !== undefined)
     const hasPromptScripts = [...scripts, ...card.frontend.regexScripts]
       .some(script => !script.markdownOnly || script.promptOnly)
-    if (!hasPromptScripts && !hasManagedSurface && inChat.length === 0) return next()
     let messages = options.messages
     if (hasPromptScripts || hasManagedSurface) {
-      const identity = resolveSessionPersonaIdentity(
-        agent.session.events,
-        active.result.userName,
-        readSillyTavernChatIdentity(agent.session.events)?.userName,
-      )
       const trace = applyPromptRegexSurface(agent.session, card, identity.userName, scripts)
       if (trace !== undefined && trace.replacementCount > 0) messages = [...agent.session.deriveMessages()]
     }
+    messages = resolveChatMacros(messages, card, identity.userName, identity.persona?.description)
     return ctx.llm.stream({
       ...options,
       messages: injectSillyTavernInChatPrompts(messages, inChat),

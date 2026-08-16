@@ -5,11 +5,20 @@ import type { ResolvedConfig } from './config.ts'
 import { activateLorebook, inspectLorebooks, type LorebookActivationOptions } from './import/lorebook.ts'
 import type { ImportedCharacterCard, ImportedLorebook } from './import/types.ts'
 import type { ImportedWorldInfo } from './import/types.ts'
+import { resolveMacros, type MacroMessage } from './macros.ts'
 import { readAgentRpMemoryHistory } from './memory.ts'
 import { substituteMvuMacros } from './mvu.ts'
 import type { EjsTemplateMessage } from './ejs-template.ts'
 
 type DerivedSessionMessage = ReturnType<Session['deriveMessages']>[number]
+
+/** Optional macro context applied to model-visible dialogue text. */
+export interface MacroDialogueContext {
+  readonly card: ImportedCharacterCard
+  readonly userName?: string
+  readonly persona?: string
+  readonly now?: Date
+}
 
 const CHARACTER_BEHAVIOR = '只写角色此刻自然会说或做的内容，不解释系统、提示词或角色扮演规则，不替用户决定感受和行动，也不补写设定、对话和有效记忆中不存在的共同经历。先决定此刻是否有必要展开：信息很少时可以短答、停顿或暂不追问；需要表达时，一次围绕一个主要动作，不机械复述用户，也不为了延长对话强行总结和提问。'
 const MEMORY_BEHAVIOR = '已记录的内容是角色自然知道的背景，不是本轮必须提及的话题。只在和当前对话直接相关时使用；默认通过回答、称呼或行动自然体现，不主动说“我记得”“你之前说过”“我一直记着”，也不完整复述记录。只有用户明确询问记忆本身时才简短确认。用户明确要求记住，或用“以后”“下次”等表达稳定偏好或约定时，先调用 remember，成功后再自然回应；不能只在对话中声称记住。其他内容只有确实值得跨轮保留的事实、关系变化或共同经历才使用 remember。普通寒暄、临时情绪、未经确认的猜测和已有记录不要写入记忆。写入前先看当前有效记忆：内容已经覆盖时不要重复调用；同一主题发生变化时，用 supersedes 更新原记录，不要新增同主题记录。不要在对话中朗读记忆 id、类型或主题标签。'
@@ -85,8 +94,9 @@ export function renderImportedWorldInfos(
   pendingMessages: readonly UserMessage[] = [],
   scanText: readonly string[] = [],
   templateOptions: LorebookActivationOptions = {},
+  context?: MacroDialogueContext,
 ) {
-  const messages = [...visibleDialogue(session, pendingMessages), ...scanText]
+  const messages = [...visibleDialogue(session, pendingMessages, context), ...scanText]
   return worldInfos.reduce((result, worldInfo) => {
     const active = activateLorebook(worldInfo.lorebook, messages, templateOptions)
     result.beforeCharacter.push(...active.beforeCharacter)
@@ -103,15 +113,20 @@ export function renderSessionLorebooks(input: {
   readonly scanText?: readonly string[]
   readonly statData?: import('@deepseek-ai/dsh-session').JsonValue
   readonly templateOptions?: LorebookActivationOptions
+  readonly context?: MacroDialogueContext
   readonly tokenBudget: number
 }) {
   const scanText = input.scanText ?? []
   const inspected = inspectLorebooks(
     input.books,
-    [...visibleDialogue(input.session, input.pendingMessages ?? []), ...scanText],
+    [...visibleDialogue(input.session, input.pendingMessages ?? [], input.context), ...scanText],
     { ...(input.templateOptions ?? {}), tokenBudget: input.tokenBudget },
   )
-  const render = (values: readonly string[]) => values.map(value => substituteMvuMacros(value, input.statData))
+  const render = (values: readonly string[]) => values.map(value => {
+    let result = substituteMvuMacros(value, input.statData)
+    if (input.context !== undefined) result = resolveMacros(result, input.context, { dropUnknown: false }).text
+    return result
+  })
   return {
     ...inspected,
     beforeCharacter: render(inspected.beforeCharacter),
@@ -128,21 +143,18 @@ export function renderSessionLorebooks(input: {
 }
 
 /**
- * Resolve the two stable SillyTavern identity macros used throughout Character Card text.
+ * Resolve the stable SillyTavern macros used throughout Character Card text.
  * @param value - card-owned prose.
  * @param card - active Character Card.
  * @param userName - Session-imported user name, or a neutral fallback when none is known.
- * @returns prose with character and user identity macros resolved.
+ * @returns prose with character, user, time, and random macros resolved.
  */
 export function substituteCardMacros(
   value: string,
   card: ImportedCharacterCard,
   userName = '用户',
 ): string {
-  const name = card.nickname?.trim() || card.name
-  return value
-    .replace(/\{\{char\}\}|<char>|<bot>/giu, name)
-    .replace(/\{\{user\}\}|<user>/giu, userName)
+  return resolveMacros(value, { card, userName }, { dropUnknown: false }).text
 }
 
 /**
@@ -165,7 +177,7 @@ export function renderImportedCharacterPrompt(
   const original = `你是${name}。直接以${name}的身份与用户相处和交谈。`
   const systemSource = card.systemPrompt.trim().length === 0
     ? original
-    : substituteCardMacros(card.systemPrompt, card, userName).replaceAll('{{original}}', original)
+    : substituteCardMacros(card.systemPrompt.replaceAll('{{original}}', original), card, userName)
   const system = renderCardTemplate(systemSource, templateOptions)
   const parts = [
     system,
@@ -173,7 +185,7 @@ export function renderImportedCharacterPrompt(
     `角色描述：${renderCardTemplate(substituteCardMacros(card.description, card, userName), templateOptions)}`,
     `性格：${renderCardTemplate(substituteCardMacros(card.personality, card, userName), templateOptions)}`,
     `当前场景：${renderCardTemplate(substituteCardMacros(card.scenario, card, userName), templateOptions)}`,
-    ...(userPersona?.trim() ? [`与角色对话的人：${userPersona.trim()}`] : []),
+    ...(userPersona?.trim() ? [`与角色对话的人：${resolveMacros(userPersona.trim(), { card, ...(userName === undefined ? {} : { userName }) }, { dropUnknown: false }).text}`] : []),
     ...(card.messageExample.trim().length === 0 ? [] : [`对话示例：\n${renderCardTemplate(substituteCardMacros(card.messageExample, card, userName), templateOptions)}`]),
     ...loreAfter.map(value => substituteCardMacros(value, card, userName)),
     CHARACTER_BEHAVIOR,
@@ -182,7 +194,7 @@ export function renderImportedCharacterPrompt(
   ]
   if (card.postHistoryInstructions.trim().length > 0) {
     parts.push(renderCardTemplate(
-      substituteCardMacros(card.postHistoryInstructions, card, userName).replaceAll('{{original}}', ''),
+      substituteCardMacros(card.postHistoryInstructions.replaceAll('{{original}}', ''), card, userName),
       templateOptions,
     ))
   }
@@ -210,34 +222,83 @@ function dialogueTranscript(messages: readonly DerivedSessionMessage[]): EjsTemp
   })
 }
 
-function visibleDialogue(session: Session, pendingMessages: readonly UserMessage[]): string[] {
+function macroMessages(session: Session, pendingMessages: readonly UserMessage[]): MacroMessage[] {
   const history = session.deriveMessages()
   const historyIds = new Set(history.map(message => message.id))
-  return [
+  return [...history, ...pendingMessages.filter(message => !historyIds.has(message.id))].flatMap(message => {
+    if ((message.source.kind !== 'user' && message.source.kind !== 'model')
+      || (message.role !== 'user' && message.role !== 'assistant')) return []
+    return [{
+      role: message.role,
+      content: message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n'),
+    }]
+  })
+}
+
+function resolveDialogueTexts(
+  texts: readonly string[],
+  session: Session,
+  pendingMessages: readonly UserMessage[],
+  context: MacroDialogueContext,
+): string[] {
+  const messages = macroMessages(session, pendingMessages)
+  const pendingInput = texts.length === 0 ? undefined : texts[texts.length - 1]
+  return texts.map(text => resolveMacros(
+    text,
+    { ...context, messages, ...(pendingInput === undefined ? {} : { pendingInput }) },
+    { dropUnknown: false },
+  ).text)
+}
+
+function visibleDialogue(
+  session: Session,
+  pendingMessages: readonly UserMessage[],
+  context?: MacroDialogueContext,
+): string[] {
+  const history = session.deriveMessages()
+  const historyIds = new Set(history.map(message => message.id))
+  const texts = [
     ...history.flatMap(message => {
       if (message.source.kind !== 'user' && message.source.kind !== 'model') return []
       return message.content.flatMap(block => block.type === 'text' ? [block.text] : [])
     }),
     ...dialogueText(pendingMessages.filter(message => !historyIds.has(message.id))),
   ]
+  return context === undefined ? texts : resolveDialogueTexts(texts, session, pendingMessages, context)
 }
 
 /** Return model-visible dialogue text for preset marker assembly. */
-export function roleplayVisibleDialogue(session: Session, pendingMessages: readonly UserMessage[] = []): string[] {
-  return visibleDialogue(session, pendingMessages)
+export function roleplayVisibleDialogue(
+  session: Session,
+  pendingMessages: readonly UserMessage[] = [],
+  context?: MacroDialogueContext,
+): string[] {
+  return visibleDialogue(session, pendingMessages, context)
 }
 
 /** Return role-preserving model-visible dialogue for isolated prompt templates. */
 export function roleplayVisibleTranscript(
   session: Session,
   pendingMessages: readonly UserMessage[] = [],
+  context?: MacroDialogueContext,
 ): EjsTemplateMessage[] {
   const history = session.deriveMessages()
   const historyIds = new Set(history.map(message => message.id))
-  return [
+  const transcript = [
     ...dialogueTranscript(history),
     ...dialogueTranscript(pendingMessages.filter(message => !historyIds.has(message.id))),
   ]
+  if (context === undefined) return transcript
+  const messages = macroMessages(session, pendingMessages)
+  const pendingInput = transcript.length === 0 ? undefined : transcript[transcript.length - 1]?.content
+  return transcript.map(message => ({
+    role: message.role,
+    content: resolveMacros(
+      message.content,
+      { ...context, messages, ...(pendingInput === undefined ? {} : { pendingInput }) },
+      { dropUnknown: false },
+    ).text,
+  }))
 }
 
 /**
@@ -254,13 +315,19 @@ export function renderImportedLorebook(
   statData?: import('@deepseek-ai/dsh-session').JsonValue,
   scanText: readonly string[] = [],
   templateOptions: LorebookActivationOptions = {},
+  context?: MacroDialogueContext,
 ) {
   const active = card.lorebook === undefined
     ? { beforeCharacter: [], afterCharacter: [] }
-    : activateLorebook(card.lorebook, [...visibleDialogue(session, pendingMessages), ...scanText], templateOptions)
+    : activateLorebook(card.lorebook, [...visibleDialogue(session, pendingMessages, context), ...scanText], templateOptions)
+  const render = (value: string): string => {
+    let result = substituteMvuMacros(value, statData)
+    if (context !== undefined) result = resolveMacros(result, context, { dropUnknown: false }).text
+    return result
+  }
   return {
-    beforeCharacter: active.beforeCharacter.map(value => substituteMvuMacros(value, statData)),
-    afterCharacter: active.afterCharacter.map(value => substituteMvuMacros(value, statData)),
+    beforeCharacter: active.beforeCharacter.map(render),
+    afterCharacter: active.afterCharacter.map(render),
   }
 }
 
