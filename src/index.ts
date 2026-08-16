@@ -76,6 +76,7 @@ import {
   roleplayVisibleTranscript,
   renderSessionLorebooks,
   substituteCardMacros,
+  type MacroDialogueContext,
 } from './prompt.ts'
 import { createEjsWorldInfoBooks, EjsTemplateEngine, type EjsTemplateContext } from './ejs-template.ts'
 import { installBundledAgentRpPreset } from './preset.ts'
@@ -764,11 +765,16 @@ export function installAgentRp(
       )
       const { persona, userName } = identity
       const mvu = readCurrentMvuState(card, agent.session.events)
+      const dialogueContext: MacroDialogueContext = {
+        card,
+        ...(userName === undefined ? {} : { userName }),
+        ...(persona === undefined ? {} : { persona: persona.description }),
+      }
       const templateOptions = ejsLorebookOptions(options.ejsTemplateEngine, {
         characterName: card.nickname?.trim() || card.name,
         userName: userName ?? '用户',
-        messages: [...roleplayVisibleDialogue(agent.session, pendingMessages), ...injectedScanText],
-        transcript: roleplayVisibleTranscript(agent.session, pendingMessages),
+        messages: [...roleplayVisibleDialogue(agent.session, pendingMessages, dialogueContext), ...injectedScanText],
+        transcript: roleplayVisibleTranscript(agent.session, pendingMessages, dialogueContext),
         variableScopes: ejsVariableScopes(tavern),
         ...(mvu === undefined ? {} : { statData: mvu.statData }),
         worldInfoBooks: createEjsWorldInfoBooks(books),
@@ -779,6 +785,7 @@ export function installAgentRp(
         pendingMessages,
         scanText: injectedScanText,
         ...(mvu === undefined ? {} : { statData: mvu.statData }),
+        context: dialogueContext,
         templateOptions,
         tokenBudget: worldInfoTokenBudget(worldInfoConfiguration),
       }))
