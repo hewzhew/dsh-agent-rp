@@ -188,12 +188,60 @@ function isFrontendDocument(info: string, source: string): boolean {
   return /<!doctype\s+html\b|<html(?:\s|>)|<head(?:\s|>)|<body(?:\s|>)/iu.test(source)
 }
 
+/** Block-level elements whose leading occurrence can be split from following prose. */
+const BLOCK_DISPLAY_TAGS = new Set([
+  'address', 'article', 'aside', 'blockquote', 'body', 'center', 'details', 'dialog', 'div',
+  'dl', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5',
+  'h6', 'head', 'header', 'hgroup', 'html', 'main', 'menu', 'nav', 'ol', 'pre', 'search',
+  'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
+])
+
+const HTML_TAG_PATTERN = /^<(\/?)([A-Za-z][A-Za-z0-9:_-]*)((?:\s[^<>]*?)?)(\/?)>/u
+
+/** Return the leading balanced block element and the untouched remainder, if one exists. */
+function splitLeadingHtmlBlock(value: string): { readonly html: string; readonly rest: string } | undefined {
+  const start = value.search(/\S/u)
+  if (start < 0) return undefined
+  const first = HTML_TAG_PATTERN.exec(value.slice(start))
+  if (first === null || first[1] === '/' || first[4] === '/') return undefined
+  const name = first[2]!.toLowerCase()
+  if (!BLOCK_DISPLAY_TAGS.has(name)) return undefined
+  let depth = 0
+  let cursor = start
+  while (cursor < value.length) {
+    if (value[cursor] !== '<') {
+      cursor += 1
+      continue
+    }
+    const match = HTML_TAG_PATTERN.exec(value.slice(cursor))
+    if (match === null) {
+      cursor += 1
+      continue
+    }
+    const tag = match[2]!.toLowerCase()
+    const closing = match[1] === '/'
+    const selfClosing = match[4] === '/'
+    if (!closing && !selfClosing && tag === name) depth += 1
+    if (closing && tag === name) depth = Math.max(0, depth - 1)
+    cursor += match[0].length
+    if (depth === 0 && closing) return { html: value.slice(0, cursor), rest: value.slice(cursor) }
+  }
+  return undefined
+}
+
 function appendMarkdown(
   segments: CharacterDisplaySegment[],
   diagnostics: MutableDiagnostics,
   text: string,
 ): void {
   if (hasDisplayHtmlOutsideCode(text)) {
+    const split = splitLeadingHtmlBlock(text)
+    if (split !== undefined && split.rest.trim() !== '') {
+      diagnostics.inlineHtml += 1
+      segments.push({ kind: 'inline-html', source: split.html })
+      appendMarkdown(segments, diagnostics, split.rest)
+      return
+    }
     diagnostics.inlineHtml += 1
     segments.push({ kind: 'inline-html', source: text })
     return

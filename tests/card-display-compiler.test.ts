@@ -32,6 +32,17 @@ test('removes model-defined wrappers and reports only safe tag metadata', () => 
   assert.doesNotMatch(JSON.stringify(compiled.diagnostics), /private sample prose/u)
 })
 
+test('splits a leading block HTML wrapper from following prose', () => {
+  const source = '<div class="scene">meta</div>\n\n正文'
+  const compiled = compileCharacterDisplay(source)
+
+  assert.deepEqual(compiled.segments, [
+    { kind: 'inline-html', source: '<div class="scene">meta</div>' },
+    { kind: 'markdown', text: '\n\n正文' },
+  ])
+  assert.deepEqual(compiled.diagnostics, [{ code: 'inline-html', count: 1 }])
+})
+
 test('preserves legacy center markup until the compatibility stage normalizes it', () => {
   const source = '<center class="portrait">name<br><img src="portrait.png"></center>'
   const compiled = compileCharacterDisplay(source)
