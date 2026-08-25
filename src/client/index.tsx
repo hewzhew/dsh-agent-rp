@@ -72,6 +72,10 @@ import {
   TavernExecutionOriginApprovalError,
 } from './tavern-preflight.ts'
 import {
+  CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+  type TavernScriptInjectedSourceRegistry,
+} from '../tavern-script-injection.ts'
+import {
   advanceTavernTranscript,
   BUILT_IN_TAVERN_SCRIPT_ORIGINS,
   parseTavernResourceBlockedReport,
@@ -9509,11 +9513,20 @@ function TavernScriptRuntime({
             projectionRef.current, script, scope, approvedScriptOrigins, sessionId, approvedImageOrigins,
             approvedStyleOrigins, approvedFontOrigins, approvedFrameOrigins, extensionSettings,
           )
+          const injectedRegistry = ctx.get(CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY) as
+          TavernScriptInjectedSourceRegistry | undefined
           const documentSource = tavernScriptFrameSource(
             script,
             execution,
             snapshot,
-            { externalBootstrap: true },
+            {
+              externalBootstrap: true,
+              ...(injectedRegistry === undefined || typeof injectedRegistry.sources !== 'function' ? {} : {
+                injectedScript: {
+                  source: injectedRegistry.sources().map(source => source.source).join('\n'),
+                },
+              }),
+            },
           )
           const navigation = tavernScriptFrameNavigation(documentSource)
           return {

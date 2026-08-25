@@ -4,6 +4,16 @@
 export const AGENT_RP_EXTENSION_API_VERSION = 0 as const
 
 export {
+  registerTavernScriptInjectedSource,
+  TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+  CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+} from './tavern-script-injection.ts'
+export type {
+  TavernScriptInjectedSource,
+  TavernScriptInjectedSourceRegistry,
+} from './tavern-script-injection.ts'
+
+export {
   registerRoleplayResourceProvider,
   ROLEPLAY_RESOURCE_CATALOG_KEY,
 } from './roleplay-resource-catalog.ts'

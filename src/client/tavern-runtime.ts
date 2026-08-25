@@ -664,7 +664,7 @@ new MutationObserver(__dshScheduleStatusPanel).observe(__dshFrameHost,{attribute
 if(__dshStatusPanelHead)new MutationObserver(__dshScheduleStatusPanel).observe(__dshStatusPanelHead,{attributes:true,characterData:true,childList:true,subtree:true});
 var __dshSurfaceReported;
 var __dshSurfaceScheduled=false;
-function __dshHasSurface(){return Array.from(document.body.children).some(function(element){if(element===__dshFrameHost||element.tagName==='SCRIPT'||element.tagName==='STYLE'||element.tagName==='LINK'||element.hidden)return false;var style=getComputedStyle(element);return style.display!=='none'&&style.visibility!=='hidden'})}
+function __dshHasSurface(){return Array.from(document.body.children).some(function(element){if(element===__dshFrameHost||element.tagName==='SCRIPT'||element.tagName==='STYLE'||element.tagName==='LINK'||element.hidden)return false;var style=getComputedStyle(element);if(style.display==='none'||style.visibility==='hidden')return false;if(element.id==='extensions_settings')return Array.from(element.children).some(function(child){var childStyle=getComputedStyle(child);return childStyle.display!=='none'&&childStyle.visibility!=='hidden'})&&element.children.length>0;return true})}
 function __dshReportSurface(){__dshSurfaceScheduled=false;var visible=__dshHasSurface();if(visible===__dshSurfaceReported)return;__dshSurfaceReported=visible;__dshPost('surface',{visible:visible})}
 function __dshScheduleSurface(){if(__dshSurfaceScheduled)return;__dshSurfaceScheduled=true;queueMicrotask(__dshReportSurface)}
 new MutationObserver(__dshScheduleSurface).observe(document.body,{attributes:true,attributeFilter:['class','hidden','style'],childList:true,subtree:true});
@@ -767,7 +767,11 @@ export function tavernScriptFrameSource(
   script: ImportedTavernHelperScript,
   execution: string | TavernScriptExecution,
   snapshot: TavernScriptSnapshot,
-  option: { readonly externalBootstrap?: boolean } = {},
+  option: {
+    readonly externalBootstrap?: boolean
+    /** Trusted Host plugin prelude installed inside the frame after the runtime surface, before card scripts. */
+    readonly injectedScript?: { readonly source: string }
+  } = {},
 ): string {
   const plan: TavernScriptExecution = typeof execution === 'string' ? {
     source: execution,
@@ -867,8 +871,9 @@ export function tavernScriptFrameSource(
     }
   })
   const frameSource = approvedFrameOrigins.length === 0 ? "'none'" : [...new Set(approvedFrameOrigins)].join(' ')
+  const injected = option.injectedScript?.source ?? ''
   const bootstrap = `void (async function(){var __dshScriptStartedAt=Date.now();try{__dshPost('startup-phase',{value:'script'});${preload}${compatibilitySetup}${dependencies}${dependencies === '' ? '' : ';'}${execute};__dshStartStatusPanel();__dshPost('ready',{markers:__dshCompatibilityMarkers(),startupMs:Math.max(0,Date.now()-__dshScriptStartedAt)})}catch(error){__dshStartStatusPanel();console.error(error);__dshPost('runtime-error',{value:__dshRuntimeError(error)})}})();`
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: ${origins}; connect-src 'none'; img-src ${imageSource}; style-src ${styleSource}; font-src ${fontSource}; frame-src ${frameSource}">${libraries}<style>html,body{background:transparent;color-scheme:dark}${compatibilityStyle}</style></head><body><script>${stylesheetSetup}${runtimeSource(snapshot, plan.compatibilityMarkers, option.externalBootstrap === true)}\n${bootstrap}</script></body></html>`
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: ${origins}; connect-src 'none'; img-src ${imageSource}; style-src ${styleSource}; font-src ${fontSource}; frame-src ${frameSource}">${libraries}<style>html,body{background:transparent;color-scheme:dark}${compatibilityStyle}</style></head><body><aside id="extensions_settings" class="extensions_settings" data-dsh-st-extension-host hidden></aside><script>${stylesheetSetup}${runtimeSource(snapshot, plan.compatibilityMarkers, option.externalBootstrap === true)}\n;${injected}\n${bootstrap}</script></body></html>`
 }
 
 /** Opaque navigation shell plus the runtime program delivered after the shell proves its origin. */

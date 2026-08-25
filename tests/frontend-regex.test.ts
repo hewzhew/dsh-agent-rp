@@ -308,10 +308,14 @@ class RuntimeElement {
   getBoundingClientRect(): { readonly height: number; readonly left: number; readonly top: number; readonly width: number } {
     return { height: 40, left: 20, top: 30, width: 40 }
   }
-  removeAttribute(name: string): void { this.attributes.delete(name) }
+  removeAttribute(name: string): void {
+    this.attributes.delete(name)
+    if (name === 'hidden') this.hidden = false
+  }
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value)
     if (name === 'id') this.id = value
+    if (name === 'hidden') this.hidden = true
   }
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
   querySelectorAll(): RuntimeElement[] { return [] }
@@ -634,6 +638,105 @@ test('builds a parseable Tavern runtime with dynamic script button APIs', async 
     source: 'dsh-agent-rp-tavern-script', action: 'resource-blocked', scriptId: 'travel',
     type: 'style', origin: 'https://styles.example.test',
   }])
+})
+
+test('runs a trusted injected frame shim before card scripts with runtime globals and outside vendors', async () => {
+  const html = tavernScriptFrameSource({
+    id: 'injected-shim', name: '受管垫片', content: '', info: '', enabled: true,
+    buttonEnabled: false, buttons: [], data: {},
+  }, 'window.__playerOrder = [window.__shimOrder ?? -1, __dshPost];', {
+    scriptScope: 'character',
+    scriptId: 'injected-shim', scriptName: '受管垫片', scriptInfo: '', buttons: [],
+    characterName: '白露', characterId: 'bailu.png', chatId: 'session-test',
+    approvedScriptOrigins: [],
+    persona: {
+      id: 'persona-12345678-1234-4123-8123-123456789abc', name: '小满', description: '怕冷，喜欢旧书。',
+    },
+    preset: {
+      name: 'V18', revision: 3,
+      value: { settings: {}, prompts: [], prompts_unused: [], extensions: {} },
+    },
+    scopes: { global: {}, preset: {}, character: {}, chat: {}, message: {}, script: {} },
+    worldbooks: {}, worldbookBindings: { global: [], character: { primary: null, additional: [] }, chat: null },
+    activeWorldbookEntries: [], messages: [], characterRegexScripts: [], presetScriptTrees: [],
+    characterScriptTrees: [], displayRegexScripts: [],
+  }, {
+    injectedScript: {
+      source: 'window.__shimOrder = 1; window.__stGlobals = { script: "sourced" };'
+        + ' if (typeof __dshPost !== "function") throw new Error("runtime surface missing");',
+    },
+  })
+  const source = html.match(/<script>([\s\S]*)<\/script>/u)?.[1]
+  assert.notEqual(source, undefined)
+  assert.ok(source!.indexOf('window.__shimOrder = 1') < source!.indexOf('window.__playerOrder'))
+  const context = runtimeAcceptanceContext([])
+  runInNewContext(source!, context)
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+  const order = context.__playerOrder as readonly unknown[]
+  assert.equal(order[0], 1)
+  assert.equal(typeof order[1], 'function')
+  assert.deepEqual(JSON.parse(JSON.stringify((context as Record<string, unknown>).__stGlobals)), {
+    script: 'sourced',
+  })
+  const navigation = tavernScriptFrameNavigation(html)
+  assert.ok(navigation.vendors.length >= 2)
+  assert.equal(navigation.vendors.some(vendor => vendor.includes('window.__shimOrder')), false)
+  assert.match(html, /<aside id="extensions_settings" class="extensions_settings" data-dsh-st-extension-host hidden><\/aside>/u)
+  assert.ok(html.indexOf('<aside id="extensions_settings"') < html.indexOf('<script>'))
+})
+
+test('ignores an empty or extension-only body surface while counting real children of the stable extension host', async () => {
+  const html = tavernScriptFrameSource({
+    id: 'extension-host', name: '扩展容器', content: '', info: '', enabled: true,
+    buttonEnabled: false, buttons: [], data: {},
+  }, 'window.__surfaceProbe = __dshHasSurface();', {
+    scriptScope: 'character',
+    scriptId: 'extension-host', scriptName: '扩展容器', scriptInfo: '', buttons: [],
+    characterName: '白露', characterId: 'bailu.png', chatId: 'session-test',
+    approvedScriptOrigins: [],
+    scopes: { global: {}, preset: {}, character: {}, chat: {}, message: {}, script: {} },
+    worldbooks: {}, worldbookBindings: { global: [], character: { primary: null, additional: [] }, chat: null },
+    activeWorldbookEntries: [], messages: [], characterRegexScripts: [], presetScriptTrees: [],
+    characterScriptTrees: [], displayRegexScripts: [],
+  }, {})
+  const source = html.match(/<script>([\s\S]*)<\/script>/u)?.[1]
+  assert.notEqual(source, undefined)
+  const context = runtimeAcceptanceContext([])
+  const host = new RuntimeElement('aside')
+  host.setAttribute('id', 'extensions_settings')
+  host.setAttribute('hidden', '')
+  ;(context.document as { body: RuntimeElement }).body.appendChild(host)
+  runInNewContext(source!, context)
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+  assert.equal((context as Record<string, unknown>).__surfaceProbe, false)
+})
+
+test('treats a populated extension host as a visible surface for the tavern panel', async () => {
+  const html = tavernScriptFrameSource({
+    id: 'extension-host', name: '扩展容器', content: '', info: '', enabled: true,
+    buttonEnabled: false, buttons: [], data: {},
+  }, 'window.__dshSettingsProbe = (function(){var host=document.getElementById("extensions_settings");if(!host)return "missing";var probe=document.createElement("span");probe.textContent="扩展设置";host.appendChild(probe);host.removeAttribute("hidden");return [__dshHasSurface(), Array.from(host.children).length, getComputedStyle(host).display];})();', {
+    scriptScope: 'character',
+    scriptId: 'extension-host', scriptName: '扩展容器', scriptInfo: '', buttons: [],
+    characterName: '白露', characterId: 'bailu.png', chatId: 'session-test',
+    approvedScriptOrigins: [],
+    scopes: { global: {}, preset: {}, character: {}, chat: {}, message: {}, script: {} },
+    worldbooks: {}, worldbookBindings: { global: [], character: { primary: null, additional: [] }, chat: null },
+    activeWorldbookEntries: [], messages: [], characterRegexScripts: [], presetScriptTrees: [],
+    characterScriptTrees: [], displayRegexScripts: [],
+  }, {})
+  const source = html.match(/<script>([\s\S]*)<\/script>/u)?.[1]
+  assert.notEqual(source, undefined)
+  const context = runtimeAcceptanceContext([])
+  const host = new RuntimeElement('aside')
+  host.setAttribute('id', 'extensions_settings')
+  host.setAttribute('hidden', '')
+  ;(context.document as { body: RuntimeElement }).body.appendChild(host)
+  runInNewContext(source!, context)
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    (context as Record<string, unknown>).__dshSettingsProbe,
+  )), [true, 1, 'block'])
 })
 
 test('preserves authorized ESM imports and plans their required public globals', async () => {

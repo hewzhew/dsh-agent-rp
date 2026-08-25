@@ -31,6 +31,11 @@ import {
   TavernResourcePreflightRegistry,
 } from './tavern-resource-preflight.ts'
 import {
+  CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+  TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+  TavernScriptInjectedSourceRegistry,
+} from './tavern-script-injection.ts'
+import {
   Config,
   resolveConfig,
   type Config as AgentRpConfig,
@@ -210,6 +215,15 @@ export {
   TAVERN_RESOURCE_PREFLIGHT_KEY,
   TavernResourcePreflightRegistry,
 } from './tavern-resource-preflight.ts'
+export {
+  registerTavernScriptInjectedSource,
+  TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+  CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY,
+} from './tavern-script-injection.ts'
+export type {
+  TavernScriptInjectedSource,
+  TavernScriptInjectedSourceRegistry,
+} from './tavern-script-injection.ts'
 export type {
   TavernResourcePreflightContributor,
   TavernResourcePreflightResolveInput,
@@ -1581,6 +1595,9 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     const resourceCatalog = new RoleplayResourceCatalog()
     const tavernResourcePreflight = new TavernResourcePreflightRegistry()
     ctx.provide(TAVERN_RESOURCE_PREFLIGHT_KEY, tavernResourcePreflight)
+    const tavernScriptInjectedSources = new TavernScriptInjectedSourceRegistry()
+    ctx.provide(TAVERN_SCRIPT_INJECTED_SOURCES_KEY, tavernScriptInjectedSources)
+    ctx.provide(CHILD_TAVERN_SCRIPT_INJECTED_SOURCES_KEY, tavernScriptInjectedSources)
     const worldbookCharacters = createWorldbookCharacterContextRegistry()
     ctx.provide(WORLDBOOK_CHARACTER_CONTEXT_KEY as never, worldbookCharacters as never)
     installWorldbookSnapshotCoalescing(ctx)
