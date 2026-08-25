@@ -84,7 +84,8 @@ export interface InstallRoleplayImageGenerationToolOptions {
 
 /** Synchronous visibility gate settled before each model request is assembled. */
 export interface RoleplayImageGenerationToolController {
-  prepare(agent: Agent, policy: RoleplayToolPolicyPlan | undefined): void
+  /** Apply one turn's policy and restore the tool only after a newer turn begins. */
+  prepare(agent: Agent, policy: RoleplayToolPolicyPlan | undefined, turn?: number): void
 }
 
 function currentToolTurn(agent: Agent, callId: string): number {
@@ -107,30 +108,43 @@ export function installRoleplayImageGenerationTool(
   options: InstallRoleplayImageGenerationToolOptions,
 ): RoleplayImageGenerationToolController {
   const policyRestrictions = new Map<Agent, () => void>()
-  const attemptedTurn = new WeakMap<Agent, number>()
-  const prepare = (agent: Agent, policy: RoleplayToolPolicyPlan | undefined): void => {
+  const attemptRestrictions = new Map<Agent, { readonly turn: number; readonly dispose: () => void }>()
+  const disposePolicyRestriction = (agent: Agent): void => {
+    const dispose = policyRestrictions.get(agent)
+    policyRestrictions.delete(agent)
+    dispose?.()
+  }
+  const disposeAttemptRestriction = (agent: Agent): void => {
+    const restriction = attemptRestrictions.get(agent)
+    attemptRestrictions.delete(agent)
+    restriction?.dispose()
+  }
+  const prepare = (agent: Agent, policy: RoleplayToolPolicyPlan | undefined, turn?: number): void => {
+    const attempt = attemptRestrictions.get(agent)
+    if (turn !== undefined && attempt !== undefined && attempt.turn !== turn) {
+      disposeAttemptRestriction(agent)
+    }
     const disabled = policy?.capability.artifactPresentation !== true
       || policy.behavior.image.mode === 'never'
     const restricted = policyRestrictions.has(agent)
     if (disabled && !restricted) {
       policyRestrictions.set(agent, agent.ctx.tools.restrict({ deny: [ROLEPLAY_IMAGE_GENERATION_TOOL] }))
     } else if (!disabled && restricted) {
-      const dispose = policyRestrictions.get(agent)
-      policyRestrictions.delete(agent)
-      dispose?.()
+      disposePolicyRestriction(agent)
     }
   }
 
   ctx.on('agent/created', ({ agent }) => { prepare(agent, options.toolPolicy(agent)) })
   ctx.on('agent/disposed', ({ agent }) => {
-    const dispose = policyRestrictions.get(agent)
-    policyRestrictions.delete(agent)
-    dispose?.()
+    disposeAttemptRestriction(agent)
+    disposePolicyRestriction(agent)
   })
   ctx.effect(() => () => {
+    for (const { dispose } of attemptRestrictions.values()) dispose()
+    attemptRestrictions.clear()
     for (const dispose of policyRestrictions.values()) dispose()
     policyRestrictions.clear()
-  }, 'agent-rp: configured image generation restrictions')
+  }, 'agent-rp: configured image generation restrictions and per-turn attempt limit')
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: ROLEPLAY_IMAGE_GENERATION_TOOL,
@@ -167,10 +181,15 @@ export function installRoleplayImageGenerationTool(
         throw new Error('roleplay image generation is disabled for this prepared turn')
       }
       const turn = currentToolTurn(exec.agent, String(exec.callId))
-      if (attemptedTurn.get(exec.agent) === turn) {
+      const previousAttempt = attemptRestrictions.get(exec.agent)
+      if (previousAttempt?.turn === turn) {
         throw new Error('this roleplay turn already attempted its configured image generation')
       }
-      attemptedTurn.set(exec.agent, turn)
+      disposeAttemptRestriction(exec.agent)
+      attemptRestrictions.set(exec.agent, {
+        turn,
+        dispose: exec.agent.ctx.tools.restrict({ deny: [ROLEPLAY_IMAGE_GENERATION_TOOL] }),
+      })
       const mode = (args.mode ?? 'scene') as ImageGenerationMode
       const job = await executeConfiguredImageGeneration(
         options.library,

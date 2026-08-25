@@ -347,6 +347,26 @@ test('imports V3 while preserving and disabling unsafe optional behavior', () =>
   assert.deepEqual(card.raw, raw)
 })
 
+test('defaults omitted V3 prompt overrides while rejecting present non-string values', () => {
+  const data = { ...v2Data(), group_only_greetings: [] } as Record<string, unknown>
+  delete data.system_prompt
+  delete data.post_history_instructions
+  const raw = { spec: 'chara_card_v3', spec_version: '3.0', data }
+
+  const card = parseCharacterCardJson(JSON.stringify(raw))
+
+  assert.equal(card.systemPrompt, '')
+  assert.equal(card.postHistoryInstructions, '')
+  assert.deepEqual(card.raw, raw)
+  assert.throws(() => parseCharacterCardJson(JSON.stringify({
+    spec: 'chara_card_v2', spec_version: '2.0', data,
+  })), /data\.system_prompt must be a string/u)
+  assert.throws(() => parseCharacterCardJson(JSON.stringify({
+    ...raw,
+    data: { ...data, system_prompt: null },
+  })), /data\.system_prompt must be a string/u)
+})
+
 test('activates Character Card V3 literal regex patterns without executing complex expressions', () => {
   const raw = {
     spec: 'chara_card_v3',

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAssistantMessage, createMessage, createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
+import {
+  CallId,
+  createAssistantMessage,
+  createMessage,
+  createToolResultMessage,
+  createUserMessage,
+  type Message,
+} from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ImportedSillyTavernPreset } from '../src/import/sillytavern-preset.ts'
 import type { ImportedCharacterCard } from '../src/import/types.ts'
@@ -461,6 +468,67 @@ test('inserts in-chat modules by depth, descending priority, and role', () => {
     { role: 'user', text: '最新问题' },
     { role: 'system', text: '末尾提醒' },
   ])
+})
+
+test('keeps a continuous chain of completed tool transactions at the request tail', () => {
+  const firstCallId = CallId('failed-image')
+  const firstAssistant = createAssistantMessage({
+    source: { provider: 'fixture', model: 'fixture' },
+    content: [
+      { type: 'text', text: '正文' },
+      { type: 'tool-call', id: firstCallId, name: 'generate_roleplay_image', arguments: '{}' },
+    ],
+  })
+  const firstResult = createToolResultMessage({
+    callId: firstCallId,
+    content: [{ type: 'text', text: 'Error: 图片服务没有配置' }],
+    isError: true,
+  })
+  const secondCallId = CallId('repeated-image')
+  const secondAssistant = createAssistantMessage({
+    source: { provider: 'fixture', model: 'fixture' },
+    content: [
+      { type: 'text', text: '继续正文' },
+      { type: 'tool-call', id: secondCallId, name: 'generate_roleplay_image', arguments: '{}' },
+    ],
+  })
+  const secondResult = createToolResultMessage({
+    callId: secondCallId,
+    content: [{ type: 'text', text: 'Error: 本回合已经尝试过图片生成' }],
+    isError: true,
+  })
+
+  const prepared = prepareSillyTavernProviderMessages([
+    message('user', '请生成插图'),
+    firstAssistant,
+    firstResult,
+    secondAssistant,
+    secondResult,
+  ], {
+    beforeHistory: [{ role: 'system', content: '历史前模块' }],
+    afterHistory: [{ role: 'system', content: '历史后模块' }],
+    inChat: [
+      { role: 'system', content: '深度一', depth: 1, order: 100 },
+      { role: 'system', content: '深度零', depth: 0, order: 100 },
+    ],
+    includeHistory: true,
+  })
+
+  assert.deepEqual(prepared.map(item => [
+    item.role,
+    item.content[0]?.type === 'text' ? item.content[0].text : item.content[0]?.type,
+  ]), [
+    ['system', '历史前模块'],
+    ['system', '深度一'],
+    ['user', '请生成插图'],
+    ['system', '深度零'],
+    ['system', '历史后模块'],
+    ['assistant', '正文'],
+    ['user', 'tool-result'],
+    ['assistant', '继续正文'],
+    ['user', 'tool-result'],
+  ])
+  assert.deepEqual(prepared.slice(-4), [firstAssistant, firstResult, secondAssistant, secondResult])
 })
 
 test('keeps ordinary preset roles on their original side of chat history', () => {

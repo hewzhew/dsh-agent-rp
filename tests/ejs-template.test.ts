@@ -123,7 +123,7 @@ test('provides deterministic JSON-safe utility and YAML helpers', () => {
     'const clone = _.cloneDeep(value); clone.stats.hp = 9;',
     'const mapped = _.mapValues({ a: 2, b: 3 }, number => number * 2);',
     'const transformed = _.transform({ a: 2, b: 3 }, (target, number, key) => { target[key] = number + 1; }, {}); %>',
-    '<%- [_.get(value, "stats.hp"), _.get(value, "missing", 5), clone.stats.hp, value.stats.hp,',
+    '<%- [_.get(value, "stats.hp"), _.get(value, "missing", 5), _.has(value, "stats.hp"), _.has(value, "missing"), clone.stats.hp, value.stats.hp,',
     '_.isEmpty(value.empty), JSON.stringify(_.pick(value, ["stats.hp", "items[1]"])),',
     'JSON.stringify(_.omit(value, "stats.mood")), JSON.stringify(mapped), JSON.stringify(transformed)].join("|") %>\n',
     '<%- YAML.stringify({ hp: 7, nested: { mood: "calm" }, items: ["a", "b"] }) %>',
@@ -132,7 +132,7 @@ test('provides deterministic JSON-safe utility and YAML helpers', () => {
   assert.deepEqual(result, {
     ok: true,
     text: [
-      '7|5|9|7|true|{"stats":{"hp":7},"items":[null,"b"]}|{"stats":{"hp":7},"items":["a","b"],"empty":{}}|{"a":4,"b":6}|{"a":3,"b":4}',
+      '7|5|true|false|9|7|true|{"stats":{"hp":7},"items":[null,"b"]}|{"stats":{"hp":7},"items":["a","b"],"empty":{}}|{"a":4,"b":6}|{"a":3,"b":4}',
       '"hp": 7',
       '"nested":',
       '  "mood": "calm"',

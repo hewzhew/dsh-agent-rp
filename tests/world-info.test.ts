@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { EjsTemplateEngine } from '../src/ejs-template.ts'
 import { activateLorebook, inspectLorebook, inspectLorebooks } from '../src/import/lorebook.ts'
 import { parseWorldInfoJson, parseWorldInfoJsonBytes } from '../src/import/world-info.ts'
 import {
@@ -326,6 +327,32 @@ test('budgets the replay-safe macro result instead of its short source placehold
   assert.equal(result.books[0]?.inspected.entries[0]?.reason, 'budget-excluded')
   assert.equal(result.books[0]?.inspected.entries[0]?.approximateTokens, 7)
   assert.equal(result.books[0]?.inspected.entries[1]?.reason, 'active-constant')
+})
+
+test('resolves identity macros before compiling EJS World Info', async () => {
+  const templateEngine = await EjsTemplateEngine.create()
+  const source = parseWorldInfoJson(world({
+    conditional: {
+      key: [],
+      content: '<% if (_.has(getvar("stat_data"), "<user>.trust")) { %><%= getvar("stat_data").<user>.trust %>:<user>/<char><% } %>',
+      constant: true,
+      order: 1,
+      position: 0,
+    },
+  }))
+  const result = createNativeWorldEngine({
+    renderMacro: value => value.replaceAll('<user>', '旅人').replaceAll('<char>', '白露'),
+    renderTemplate: template => templateEngine.render(template, {
+      characterName: '白露', userName: '旅人', messages: [], statData: { 旅人: { trust: 7 } },
+    }),
+  }).evaluate({
+    format: 0,
+    books: [{ id: 'identity-template-world', lorebook: source.lorebook }],
+    messages: [],
+  })
+
+  assert.deepEqual(result.beforeCharacter, ['7:旅人/白露'])
+  assert.equal(result.books[0]?.inspected.entries[0]?.template, 'rendered')
 })
 
 test('keeps every matched book entry when no player-selected aggregate cap exists', () => {

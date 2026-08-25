@@ -8,8 +8,9 @@ Agent RP 只执行能够从当前 Session 日志确定性重建的模板语义�
 | `char`、`user`、`charName`、`userName`、`runType` | 支持 | `runType` 在模型提示词阶段固定为 `generate` |
 | `lastMessage`、`lastUserMessage`、`lastCharMessage` 与对应楼层编号 | 支持 | 从当前可见的 user/assistant Session 消息重建；没有匹配消息时内容为空、编号为 `-1` |
 | `getChatMessage`、`getChatMessages` | 支持 | 支持负数楼层、角色筛选、最近数量和闭区间读取，只返回可见消息正文 |
+| `{{char}}`、`<char>`、`{{user}}`、`<user>` | 支持 | 角色名与玩家名在世界书 EJS 编译前替换，与 ST Prompt Template 的世界书处理顺序一致 |
 | `variables`、`stat_data`、`getvar` 及作用域别名 | 只读支持 | 合并 global、preset、character、chat、message 和当前 MVU 状态；模板不能直接改写 Session |
-| `_` 与 `YAML.stringify` | 支持 JSON 数据子集 | `_` 提供 `get`、`cloneDeep`、`mapValues`、`isEmpty`、`omit`、`pick`、`transform`；YAML 输出保持确定性并可由 YAML 1.2 读取，不提供页面对象或插件实例 |
+| `_` 与 `YAML.stringify` | 支持 JSON 数据子集 | `_` 提供 `get`、`has`、`cloneDeep`、`mapValues`、`isEmpty`、`omit`、`pick`、`transform`；YAML 输出保持确定性并可由 YAML 1.2 读取，不提供页面对象或插件实例 |
 | `setvar`、`incvar`、`decvar` | 未执行 | 需要持久事件、准备/生成/渲染阶段和失败回滚语义，不能伪装成一次性的局部修改 |
 | `getwi`、`getWorldInfo` | 只读支持 | 按当前 Session 的世界书来源和条目标识读取纯文本条目；支持当前书及显式书名，找不到返回空字符串，读取次数和累计字符受限 |
 | `getchar`、`getpreset`、`getqr` | 未执行 | 需要同样的资源身份与递归预算；原始模板仍完整保留 |

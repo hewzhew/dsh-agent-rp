@@ -182,6 +182,13 @@ const mobileFontAwesomeStyle = [
   }),
 ].join('')
 
+const extensionMenuStyle = [
+  '#extensionsMenu:empty{display:none}',
+  '#extensionsMenu{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:12px;width:100%}',
+  '#extensionsMenu .extension_container{display:block;min-width:0}',
+  '#extensionsMenu .list-group-item{align-items:center;border:1px solid rgba(255,255,255,.18);border-radius:8px;cursor:pointer;display:flex;gap:8px;padding:9px 11px}',
+].join('')
+
 /** Current session preset exposed to one isolated Tavern Helper script. */
 export interface TavernScriptPresetSnapshot {
   readonly name: string
@@ -651,6 +658,8 @@ window.TavernHelper=window;
 var __dshFrameHost=document.createElement('div');
 var __dshFrameElement=document.createElement('iframe');
 __dshFrameHost.id='chat';__dshFrameHost.className='chat';__dshFrameHost.hidden=true;__dshFrameHost.appendChild(__dshFrameElement);document.body.appendChild(__dshFrameHost);
+var __dshExtensionMenu=document.createElement('div');
+__dshExtensionMenu.id='extensionsMenu';__dshExtensionMenu.dataset.dshCompatibilitySurface='extensions-menu';__dshExtensionMenu.setAttribute('aria-label','扩展菜单');document.body.appendChild(__dshExtensionMenu);
 try{Object.defineProperty(window,'frameElement',{configurable:true,value:__dshFrameElement})}catch(error){}
 var __dshStatusPanelReady=false,__dshStatusPanelScheduled=false,__dshStatusPanelLast=__dshSnapshot.statusPanelHtml??null,__dshStatusPanelRestoring=__dshSnapshot.statusPanelHtml!==undefined,__dshStatusPanelCause,__dshStatusPanelCauseTimer;
 var __dshStatusPanelHead=document.head;
@@ -664,7 +673,7 @@ new MutationObserver(__dshScheduleStatusPanel).observe(__dshFrameHost,{attribute
 if(__dshStatusPanelHead)new MutationObserver(__dshScheduleStatusPanel).observe(__dshStatusPanelHead,{attributes:true,characterData:true,childList:true,subtree:true});
 var __dshSurfaceReported;
 var __dshSurfaceScheduled=false;
-function __dshHasSurface(){return Array.from(document.body.children).some(function(element){if(element===__dshFrameHost||element.tagName==='SCRIPT'||element.tagName==='STYLE'||element.tagName==='LINK'||element.hidden)return false;var style=getComputedStyle(element);if(style.display==='none'||style.visibility==='hidden')return false;if(element.id==='extensions_settings')return Array.from(element.children).some(function(child){var childStyle=getComputedStyle(child);return childStyle.display!=='none'&&childStyle.visibility!=='hidden'})&&element.children.length>0;return true})}
+function __dshHasSurface(){return Array.from(document.body.children).some(function(element){if(element===__dshFrameHost||element===__dshExtensionMenu&&element.children.length===0||element.tagName==='SCRIPT'||element.tagName==='STYLE'||element.tagName==='LINK'||element.hidden)return false;var style=getComputedStyle(element);if(style.display==='none'||style.visibility==='hidden')return false;if(element.id==='extensions_settings')return Array.from(element.children).some(function(child){var childStyle=getComputedStyle(child);return childStyle.display!=='none'&&childStyle.visibility!=='hidden'})&&element.children.length>0;return true})}
 function __dshReportSurface(){__dshSurfaceScheduled=false;var visible=__dshHasSurface();if(visible===__dshSurfaceReported)return;__dshSurfaceReported=visible;__dshPost('surface',{visible:visible})}
 function __dshScheduleSurface(){if(__dshSurfaceScheduled)return;__dshSurfaceScheduled=true;queueMicrotask(__dshReportSurface)}
 new MutationObserver(__dshScheduleSurface).observe(document.body,{attributes:true,attributeFilter:['class','hidden','style'],childList:true,subtree:true});
@@ -873,7 +882,7 @@ export function tavernScriptFrameSource(
   const frameSource = approvedFrameOrigins.length === 0 ? "'none'" : [...new Set(approvedFrameOrigins)].join(' ')
   const injected = option.injectedScript?.source ?? ''
   const bootstrap = `void (async function(){var __dshScriptStartedAt=Date.now();try{__dshPost('startup-phase',{value:'script'});${preload}${compatibilitySetup}${dependencies}${dependencies === '' ? '' : ';'}${execute};__dshStartStatusPanel();__dshPost('ready',{markers:__dshCompatibilityMarkers(),startupMs:Math.max(0,Date.now()-__dshScriptStartedAt)})}catch(error){__dshStartStatusPanel();console.error(error);__dshPost('runtime-error',{value:__dshRuntimeError(error)})}})();`
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: ${origins}; connect-src 'none'; img-src ${imageSource}; style-src ${styleSource}; font-src ${fontSource}; frame-src ${frameSource}">${libraries}<style>html,body{background:transparent;color-scheme:dark}${compatibilityStyle}</style></head><body><aside id="extensions_settings" class="extensions_settings" data-dsh-st-extension-host hidden></aside><script>${stylesheetSetup}${runtimeSource(snapshot, plan.compatibilityMarkers, option.externalBootstrap === true)}\n;${injected}\n${bootstrap}</script></body></html>`
+return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: ${origins}; connect-src 'none'; img-src ${imageSource}; style-src ${styleSource}; font-src ${fontSource}; frame-src ${frameSource}">${libraries}<style>html,body{background:transparent;color-scheme:dark}${extensionMenuStyle}${compatibilityStyle}</style></head><body><aside id="extensions_settings" class="extensions_settings" data-dsh-st-extension-host hidden></aside><script>${stylesheetSetup}${runtimeSource(snapshot, plan.compatibilityMarkers, option.externalBootstrap === true)}\n;${injected}\n${bootstrap}</script></body></html>`
 }
 
 /** Opaque navigation shell plus the runtime program delivered after the shell proves its origin. */

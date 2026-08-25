@@ -310,8 +310,12 @@ function cardVersion(root: JsonObject): { version: CharacterCardVersion; specVer
 
 function validateVersionFields(data: JsonObject, version: CharacterCardVersion): void {
   if (version === 1) return
-  for (const field of ['creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version'] as const) {
+  for (const field of ['creator_notes', 'creator', 'character_version'] as const) {
     requiredString(data[field], `data.${field}`)
+  }
+  for (const field of ['system_prompt', 'post_history_instructions'] as const) {
+    if (version === 2) requiredString(data[field], `data.${field}`)
+    else optionalString(data[field], `data.${field}`)
   }
   stringArray(data.alternate_greetings, 'data.alternate_greetings')
   stringArray(data.tags, 'data.tags')

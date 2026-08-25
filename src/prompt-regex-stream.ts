@@ -108,6 +108,10 @@ function sameContent(left: readonly ContentBlock[], right: readonly ContentBlock
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function traceCarrier(nodes: readonly DialogueNode[]): DialogueNode | undefined {
+  return nodes.findLast(node => !messageOf(node.current).content.some(block => block.type === 'tool-call'))
+}
+
 function sourceWithMarker(
   source: MessageSource,
   originalSeq: number,
@@ -247,7 +251,7 @@ export function applyPromptRegexSurface(
     })),
   }
   if (replacements.length === 0) {
-    const node = nodes.at(-1)
+    const node = traceCarrier(nodes)
     if (node !== undefined) {
       appendReplacement(session, node, [...messageOf(node.current).content], position, record)
     }

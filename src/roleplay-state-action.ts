@@ -372,9 +372,7 @@ export function settleSessionRoleplayStateActions(input: {
   const expectedRevisions = staged === undefined
     ? new Set(collected.map(item => item.intent.expectedRevision))
     : new Set([staged.target.expectedRevision])
-  if (staged?.outcome === 'success' && operations.length === 0) {
-    return { session: sessionThrough(input.session, closing.seq), resultEventSeqs, outcome: 'idle' }
-  }
+  const successfulUnchanged = staged?.outcome === 'success' && operations.length === 0
   const existing = input.session.events.filter((event): event is SessionEvent<'agent-rp/mvu-state'> =>
     event.type === 'agent-rp/mvu-state' && event.data.source?.kind === 'agent-action'
       && event.data.source.turn === input.turn)
@@ -390,11 +388,26 @@ export function settleSessionRoleplayStateActions(input: {
       ...(existing[0].data.lastError === undefined ? {} : { error: existing[0].data.lastError }),
     }
   }
+  if (successfulUnchanged && input.base?.lastError === undefined) {
+    return { session: sessionThrough(input.session, closing.seq), resultEventSeqs, outcome: 'idle' }
+  }
   const laterRequired = input.session.events.some(event => event.seq > closing.seq
     && event.type !== 'session/end-seed' && event.ignorable !== true)
   if (laterRequired) throw new Error('Roleplay state actions cannot be inserted after a later required Session event')
   const base = input.base
   if (base === undefined) throw new Error('Roleplay state action target is unavailable')
+  if (successfulUnchanged) {
+    const event = appendMvuState(input.session, {
+      statData: base.statData,
+      updateCount: base.updateCount,
+      source: { kind: 'agent-action', turn: input.turn, resultEventSeqs },
+    })
+    return {
+      session: sessionThrough(input.session, event.seq),
+      resultEventSeqs,
+      outcome: 'applied',
+    }
+  }
   let next: JsonValue = snapshotJsonValue(base.statData) as JsonValue
   let error: string | undefined = staged?.error
   try {

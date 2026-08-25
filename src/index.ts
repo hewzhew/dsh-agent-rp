@@ -1210,7 +1210,7 @@ export function installAgentRp(
     })
     turnCoordinator.prepare(agent, plan)
     roleplayArtifactCapability.prepare(agent, plan.tools)
-    roleplayImageGenerationCapability.prepare(agent, plan.tools)
+    roleplayImageGenerationCapability.prepare(agent, plan.tools, turn)
     // Inbox claims are published synchronously before SystemPrompt assembly.
     // The restriction must be settled here so the same assembly sees the tool schema.
     // Agent mode settles state after the visible reply at turn-stopping; the

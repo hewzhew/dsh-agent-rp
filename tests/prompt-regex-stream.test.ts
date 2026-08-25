@@ -3,7 +3,14 @@ import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { createAssistantMessage, createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import {
+  CallId,
+  createAssistantMessage,
+  createToolResultMessage,
+  createUserMessage,
+  type GenerateOptions,
+  type Message,
+} from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
@@ -156,6 +163,57 @@ function openCardConversation(active: ImportedCharacterCard): Session {
   return session
 }
 
+function openFailedToolContinuation(): {
+  readonly session: Session
+  readonly assistantId: string
+  readonly callId: string
+} {
+  const session = Session.create(SessionId('prompt-regex-failed-tool'))
+  const callId = CallId('failed-image-call')
+  session.append('turn/start', { turn: 1 })
+  session.append('step/start', { turn: 1, step: 1 })
+  session.append('user/message', createUserMessage({
+    source: { kind: 'user' }, content: [{ type: 'text', text: '请继续剧情' }],
+  }), { surfaceOp: 'append' })
+  const assistant = session.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'mock', model: 'mock' },
+      content: [
+        { type: 'text', text: 'tool answer' },
+        { type: 'tool-call', id: callId, name: 'generate_roleplay_image', arguments: '{}' },
+      ],
+    }),
+  }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  const call = session.append('tool/call', {
+    turn: 1, step: 1, callId, name: 'generate_roleplay_image', arguments: '{}',
+  })
+  session.append('tool/result', {
+    turn: 1,
+    step: 1,
+    message: createToolResultMessage({
+      callId,
+      content: [{ type: 'text', text: 'Error: 图片服务没有配置' }],
+      isError: true,
+    }),
+  }, { surfaceOp: 'append', sourceEventSeqs: [call.seq] })
+  session.append('step/end', { turn: 1, step: 1 })
+  session.append('step/start', { turn: 1, step: 2 })
+  return { session, assistantId: String(assistant.data.message.id), callId: String(callId) }
+}
+
+function toolPair(messages: readonly Message[], callId: string): {
+  readonly assistantIndex: number
+  readonly resultIndex: number
+} {
+  const assistantIndex = messages.findIndex(message => message.content.some(block =>
+    block.type === 'tool-call' && String(block.id) === callId))
+  const resultIndex = messages.findIndex(message => message.content.some(block =>
+    block.type === 'tool-result' && String(block.toolCallId) === callId))
+  return { assistantIndex, resultIndex }
+}
+
 test('logs prompt-only replacements while the visible projection keeps append-origin text', () => {
   const session = openConversation()
   const active = card([
@@ -207,6 +265,45 @@ test('preserves shared-before-prompt-only execution across semantic resource own
   assert.deepEqual(trace?.scripts.map(item => [item.source, item.index, item.outcome]), [
     ['preset', 0, 'applied'],
     ['character', 0, 'applied'],
+  ])
+})
+
+test('records a no-op trace without rewriting a tool-call assistant in the following step', () => {
+  const { session, assistantId, callId } = openFailedToolContinuation()
+
+  const trace = applyPromptRegexSurface(session, transformPlan([
+    script(2, '/not-present/gu', 'unused'),
+  ]))
+
+  assert.equal(trace?.replacementCount, 0)
+  const messages = session.deriveMessages()
+  const pair = toolPair(messages, callId)
+  assert.equal(pair.resultIndex, pair.assistantIndex + 1)
+  assert.equal(String(messages[pair.assistantIndex]?.id), assistantId)
+  assert.equal(session.events.some(event => event.type === 'assistant/message'
+    && event.data.step === 2), false)
+  let state = agentRpProjectionDefinition.init()
+  for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
+  assert.deepEqual(agentRpProjectionDefinition.wire.view(state).promptRegex, trace)
+})
+
+test('preserves a failed tool pair when prompt regex changes its assistant text', () => {
+  const { session, assistantId, callId } = openFailedToolContinuation()
+
+  const trace = applyPromptRegexSurface(session, transformPlan([
+    script(2, '/tool/gu', 'changed'),
+  ]))
+
+  assert.equal(trace?.replacementCount, 1)
+  const messages = session.deriveMessages()
+  const pair = toolPair(messages, callId)
+  assert.equal(pair.resultIndex, pair.assistantIndex + 1)
+  assert.notEqual(String(messages[pair.assistantIndex]?.id), assistantId)
+  assert.deepEqual(messages[pair.assistantIndex]?.content.map(block => block.type === 'text'
+    ? [block.type, block.text] : block.type === 'tool-call'
+      ? [block.type, String(block.id)] : [block.type]), [
+    ['text', 'changed answer'],
+    ['tool-call', callId],
   ])
 })
 

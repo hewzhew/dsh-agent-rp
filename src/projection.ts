@@ -18,7 +18,7 @@ import {
   type ImportedSillyTavernPreset,
 } from './import/sillytavern-preset.ts'
 import { DEFAULT_AGENT_RP_CHARACTER_NAME, type AgentRpProjection } from './projection-types.ts'
-import { applyMvuReply, readCurrentMvuState, readCurrentMvuStateFromLorebooks } from './mvu.ts'
+import { applyMvuReply, readCurrentMvuState, readCurrentMvuStateFromLorebooks, substituteMvuMacros } from './mvu.ts'
 import { canEditPresetPrompt, canTogglePresetPrompt } from './preset-configuration.ts'
 import { configurePreset, parsePresetConfigurationRequest } from './preset-configuration-core.ts'
 import { parsePresetLibraryResult } from './preset-library-protocol.ts'
@@ -70,6 +70,7 @@ import {
   indexTavernMessageAnnotations,
   type TavernMessageAnnotationState,
 } from './tavern-message-annotation.ts'
+import { substituteSillyTavernIdentityMacros } from './sillytavern-identity-macro.ts'
 
 export type { AgentRpProjection } from './projection-types.ts'
 
@@ -373,6 +374,10 @@ function worldInfoProjection(
     ? []
     : [{ role: node.role, content: node.text }])
   const configuredSources = sources.map(source => ({ source, configured: configuredLorebook(source, state.worldInfoConfiguration) }))
+  const identity = {
+    characterName: state.character.characterName,
+    userName: state.character.persona?.name ?? state.character.userName ?? '用户',
+  }
   const templateOptions = ejsTemplateEngine === undefined ? {} : {
     regexEngine: ejsTemplateEngine,
     renderTemplate: ejsTemplateEngine.createRenderer({
@@ -388,6 +393,10 @@ function worldInfoProjection(
         lorebook: configured.lorebook,
       }))),
     }),
+    renderMacro: (content: string) => substituteSillyTavernIdentityMacros(
+      substituteMvuMacros(content, state.mvu?.statData),
+      identity,
+    ),
   }
   let activeCount = 0
   const aggregateBudget = worldInfoTokenBudget(state.worldInfoConfiguration)

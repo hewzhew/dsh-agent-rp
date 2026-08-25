@@ -15,6 +15,8 @@ import {
 import type { LorebookActivationReason } from '../src/import/lorebook.ts'
 import { readCharacterCardPng } from '../src/import/png.ts'
 import type { ImportedCharacterCard } from '../src/import/types.ts'
+import { substituteMvuMacros } from '../src/mvu.ts'
+import { substituteSillyTavernIdentityMacros } from '../src/sillytavern-identity-macro.ts'
 import {
   resolveTavernScriptExecution, TavernScriptOriginApprovalError,
 } from '../src/tavern-script-resolver.ts'
@@ -167,12 +169,16 @@ export async function auditCharacterCardCompatibility(
     statData: variables.stat_data ?? {},
     worldInfoBooks,
   }
+  const renderMacros = (value: string): string => substituteSillyTavernIdentityMacros(
+    substituteMvuMacros(value, context.statData),
+    { characterName: context.characterName, userName: context.userName },
+  )
 
   const ejsStarted = performance.now()
   const ejsOutcomes: Counter = {}
   const templates = templateSources(card).filter(entry => entry.source.includes('<%'))
   for (const entry of templates) {
-    const result = engine.render(entry.source, context, entry.worldInfoBookId === undefined
+    const result = engine.render(renderMacros(entry.source), context, entry.worldInfoBookId === undefined
       ? {} : { worldInfoBookId: entry.worldInfoBookId })
     increment(ejsOutcomes, result.ok ? 'ok' : result.kind satisfies EjsTemplateFailureKind)
   }
@@ -184,6 +190,7 @@ export async function auditCharacterCardCompatibility(
     const inspected = createNativeWorldEngine({
       regexEngine: engine,
       renderTemplate: (template, target) => engine.render(template, context, target),
+      renderMacro: renderMacros,
     }).evaluate({
       format: 0,
       books: [{ id: 'character-card', lorebook: card.lorebook }],

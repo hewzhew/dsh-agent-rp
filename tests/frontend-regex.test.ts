@@ -1529,6 +1529,42 @@ test('reports only bounded true compatibility markers after startup and on reque
   ]), ['__辅助计算脚本_loaded__'])
 })
 
+test('hosts SillyTavern extension menu entries inside the isolated script panel', async () => {
+  const script = [
+    "window.__extensionMenuFound=$('#extensionsMenu',document).length;",
+    "var item=$('<button>',{id:'database-menu-item',text:'打开数据库',click:function(){var panel=document.createElement('section');panel.id='database-panel';document.body.appendChild(panel)}});",
+    "$('#extensionsMenu',document).append(item);",
+  ].join('')
+  const html = tavernScriptFrameSource({
+    id: 'extension-menu-runtime', name: '扩展菜单', content: '', info: '', enabled: true,
+    buttonEnabled: false, buttons: [], data: {},
+  }, script, {
+    scriptScope: 'character',
+    scriptId: 'extension-menu-runtime', scriptName: '扩展菜单', scriptInfo: '', buttons: [],
+    characterName: '角色', characterId: 'character.png', chatId: 'session-test', approvedScriptOrigins: [],
+    scopes: { global: {}, preset: {}, character: {}, chat: {}, message: {}, script: {} },
+    worldbooks: {}, worldbookBindings: { global: [], character: { primary: null, additional: [] }, chat: null },
+    activeWorldbookEntries: [], messages: [], characterRegexScripts: [], presetScriptTrees: [], characterScriptTrees: [],
+    displayRegexScripts: [],
+  })
+  assert.match(html, /#extensionsMenu:empty\{display:none\}/u)
+  const source = html.match(/<script>([\s\S]*)<\/script>/u)?.[1]
+  assert.notEqual(source, undefined)
+  const context = runtimeAcceptanceContext([])
+  runInNewContext(source!, context)
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+
+  const document = context.document as {
+    getElementById(id: string): RuntimeElement | undefined
+  }
+  const menu = document.getElementById('extensionsMenu')
+  assert.equal(context.__extensionMenuFound, 1)
+  assert.equal(menu?.dataset.dshCompatibilitySurface, 'extensions-menu')
+  assert.equal(menu?.children.length, 1)
+  document.getElementById('database-menu-item')?.click()
+  assert.notEqual(document.getElementById('database-panel'), undefined)
+})
+
 test('provides the isolated trigger required by the public mobile-phone module', () => {
   const html = tavernScriptFrameSource({
     id: 'mobile-runtime', name: '小手机', content: '', info: '', enabled: true,

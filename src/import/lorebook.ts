@@ -267,11 +267,11 @@ function candidate(
   const target = {
     ...(options.worldInfoBookId === undefined ? {} : { worldInfoBookId: options.worldInfoBookId }),
   }
-  let content = activation.content
+  let content = options.renderMacro?.(activation.content, target) ?? activation.content
   let template: LorebookEntryActivation['template']
-  if (hasExecutableTemplate(entry.content)) {
+  if (hasExecutableTemplate(content)) {
     if (options.renderTemplate === undefined) return { ...activation, candidate: false, reason: 'template-unsupported' }
-    const rendered = options.renderTemplate(entry.content, target)
+    const rendered = options.renderTemplate(content, target)
     if (!rendered.ok) return {
       ...activation,
       candidate: false,
@@ -281,7 +281,6 @@ function candidate(
     content = rendered.text
     template = 'rendered'
   }
-  content = options.renderMacro?.(content, target) ?? content
   if (content.trim().length === 0) return {
     ...activation,
     candidate: false,

@@ -261,14 +261,45 @@ function continuationPlan(
   return { ...continuation, nudgePrompt: macros.expand(continuation.nudgePrompt) }
 }
 
+function precedingToolTransactionStart(messages: readonly Message[], end: number): number | undefined {
+  const resultIds = new Set<string>()
+  let cursor = end
+  while (cursor > 0) {
+    const message = messages[cursor - 1]!
+    const results = message.content.filter(block => block.type === 'tool-result')
+    if (message.role !== 'user' || results.length === 0 || results.length !== message.content.length) break
+    results.forEach(result => resultIds.add(String(result.toolCallId)))
+    cursor -= 1
+  }
+  if (cursor === end || cursor === 0) return undefined
+  const assistant = messages[cursor - 1]!
+  const callIds = assistant.content
+    .filter(block => block.type === 'tool-call')
+    .map(block => String(block.id))
+  if (assistant.role !== 'assistant' || callIds.length === 0
+    || callIds.length !== resultIds.size || callIds.some(id => !resultIds.has(id))) return undefined
+  return cursor - 1
+}
+
+function trailingToolTransactionStart(messages: readonly Message[]): number {
+  let start = messages.length
+  while (true) {
+    const preceding = precedingToolTransactionStart(messages, start)
+    if (preceding === undefined) return start
+    start = preceding
+  }
+}
+
 /** Insert expanded in-chat modules using SillyTavern's depth, priority, and role ordering. */
 export function injectSillyTavernInChatPrompts(
   messages: readonly Message[],
   prompts: readonly RoleplayInChatPrompt[],
 ): Message[] {
   if (prompts.length === 0) return [...messages]
-  const result = [...messages]
-  const baseLength = messages.length
+  const transactionStart = trailingToolTransactionStart(messages)
+  const result = messages.slice(0, transactionStart)
+  const transaction = messages.slice(transactionStart)
+  const baseLength = result.length
   const depths = [...new Set(prompts.map(prompt => prompt.depth))].sort((left, right) => left - right)
   for (const depth of depths) {
     const atDepth = prompts.filter(prompt => prompt.depth === depth)
@@ -291,7 +322,7 @@ export function injectSillyTavernInChatPrompts(
     }
     result.splice(Math.max(0, baseLength - depth), 0, ...injected)
   }
-  return result
+  return [...result, ...transaction]
 }
 
 function orderedMessage(prompt: RoleplayOrderedPrompt): Message {
@@ -311,10 +342,12 @@ export function injectSillyTavernPromptPlan(
   plan: RoleplayProviderPromptPlan,
 ): Message[] {
   const history = plan.includeHistory ? injectSillyTavernInChatPrompts(messages, plan.inChat) : []
+  const transactionStart = trailingToolTransactionStart(history)
   return [
     ...plan.beforeHistory.map(orderedMessage),
-    ...history,
+    ...history.slice(0, transactionStart),
     ...plan.afterHistory.map(orderedMessage),
+    ...history.slice(transactionStart),
   ]
 }
 

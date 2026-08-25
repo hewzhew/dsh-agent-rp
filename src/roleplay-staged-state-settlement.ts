@@ -131,6 +131,7 @@ function parseStateSettlementResponse(text: unknown): readonly MvuStateOperation
 }
 
 const MAX_SETTLEMENT_TEXT_LENGTH = 128 * 1024
+const STATE_SETTLEMENT_MAX_TOKENS = 4_096
 
 function boundedSettlementText(text: string): string {
   return text.length <= MAX_SETTLEMENT_TEXT_LENGTH
@@ -226,7 +227,7 @@ function settlementRequest(
     ...header.config,
     reasoningEffort: ReasoningEffortId('off'),
     temperature: 0,
-    maxTokens: Math.min(header.config.maxTokens ?? 4096, 4096),
+    maxTokens: STATE_SETTLEMENT_MAX_TOKENS,
     system: [
       '你是角色扮演运行时的后台状态结算器。剧情正文已经完成；不要续写、改写、评价或解释剧情。',
       '比较本轮玩家输入、角色正文与当前状态，只计算正文已经造成的状态变化。',
@@ -259,7 +260,7 @@ function settlementVerificationRequest(
     ...model,
     reasoningEffort: ReasoningEffortId('low'),
     temperature: 0,
-    maxTokens: Math.min(header.config.maxTokens ?? 4096, 4096),
+    maxTokens: STATE_SETTLEMENT_MAX_TOKENS,
     system: [
       '你是角色扮演运行时的独立状态核验器。另一个 Worker 已生成候选结算，但它的输出不会提供给你，避免其遗漏或错误影响核验。',
       '以 current_state 为唯一基线，重新根据状态规则、玩家输入和最终正文计算本轮后的完整状态。',

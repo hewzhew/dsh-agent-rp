@@ -321,6 +321,10 @@ function compileTemplate(template: string, context: EjsTemplateContext): string 
     const __flattenPaths = values => values.flatMap(value => Array.isArray(value) ? value : [value]);
     const _ = Object.freeze({
       get: (record, path, fallback = undefined) => __readPath(record, path, fallback),
+      has: (record, path) => {
+        const missing = Object.create(null);
+        return __readPath(record, path, missing) !== missing;
+      },
       cloneDeep: value => __cloneDeep(value),
       mapValues: (record, iteratee) => {
         const result = Object.create(null);

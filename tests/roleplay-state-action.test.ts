@@ -21,7 +21,7 @@ import { resolveConfig } from '../src/config.ts'
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
 import { installAgentRp } from '../src/index.ts'
-import { readCurrentSessionMvuState } from '../src/mvu.ts'
+import { appendMvuState, readCurrentSessionMvuState } from '../src/mvu.ts'
 import {
   collectRoleplayStateActionIntents,
   installRoleplayStateActionTool,
@@ -418,7 +418,7 @@ test('settles MVU after the visible reply through a replayable local-provider st
   const reference = record.data.reference
   session.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8192 } },
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 128 } },
   })
   const narrative = session.append('assistant/message', {
     turn: 1,
@@ -443,6 +443,7 @@ test('settles MVU after the visible reply through a replayable local-provider st
   const requestTexts: string[] = []
   const requestSystems: string[] = []
   const requestReasoning: (string | undefined)[] = []
+  const requestMaxTokens: (number | undefined)[] = []
   const requestModels: Array<{ readonly provider: string; readonly model: string }> = []
   let requestCount = 0
   const fake = {
@@ -454,11 +455,13 @@ test('settles MVU after the visible reply through a replayable local-provider st
         readonly messages: readonly { readonly content: readonly unknown[] }[]
         readonly system?: string
         readonly reasoningEffort?: string
+        readonly maxTokens?: number
       }) {
         requestCount += 1
         requestTexts.push(JSON.stringify(options.messages))
         requestSystems.push(options.system ?? '')
         requestReasoning.push(options.reasoningEffort)
+        requestMaxTokens.push(options.maxTokens)
         requestModels.push({ provider: options.provider, model: options.model })
         return (async function* () {
           const delta = requestCount === 1 ? 1 : 2
@@ -505,6 +508,7 @@ test('settles MVU after the visible reply through a replayable local-provider st
   assert.match(verificationSystem, /从 current_state 直接到核验后状态/u)
   assert.doesNotMatch(verificationText, /<proposal_operations>|<candidate_state>/u)
   assert.deepEqual(requestReasoning, ['off', 'low'])
+  assert.deepEqual(requestMaxTokens, [4096, 4096])
   assert.deepEqual(requestModels, [
     { provider: 'fixture', model: 'fixture' },
     { provider: 'fast-fixture', model: 'verification-fixture' },
@@ -629,4 +633,123 @@ test('state verification follows the session model until the player selects anot
   assert.deepEqual(resolveRoleplayStateVerificationModel(sessionModel, {
     provider: 'worker-provider', model: 'worker-model',
   }), { provider: 'worker-provider', model: 'worker-model' })
+})
+
+async function emptyStagedSettlementFixture(input: {
+  readonly id: string
+  readonly previousError?: string
+  readonly verification: 'success' | 'failure'
+}) {
+  const { card, session } = cardSession(input.id, 'agent')
+  if (input.previousError !== undefined) {
+    appendMvuState(session, {
+      statData: { 角色: { 等级: 1, 称号: '学徒' } },
+      updateCount: 0,
+      lastError: input.previousError,
+    })
+  }
+  const { plan } = beginTurn(session)
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8192 } },
+  })
+  session.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: '白露检查了一遍，状态没有发生变化。' }],
+    }),
+  }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  session.append('step/end', { turn: 1, step: 1 })
+  let requestCount = 0
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream() {
+        requestCount += 1
+        return (async function* () {
+          const text = requestCount === 2 && input.verification === 'failure'
+            ? 'not a state result'
+            : '{"operations":[]}'
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const outcome = await runRoleplayStagedStateSettlement({
+    ctx: fake,
+    agent: { id: session.id, session } as Agent,
+    turn: 1,
+    plan: { step: 1, plan },
+    signal: new AbortController().signal,
+  })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const recovery = recoverSessionRoleplayTurns({ session, deployment })
+  return { card, session, outcome, recovery }
+}
+
+test('clears a previous state error after a verified unchanged settlement', async () => {
+  const { card, session, outcome, recovery } = await emptyStagedSettlementFixture({
+    id: 'staged-state-clears-error',
+    previousError: '后台状态结算失败（unknown）',
+    verification: 'success',
+  })
+
+  assert.equal(outcome.outcome, 'unchanged')
+  assert.deepEqual(recovery, { settlements: 1, presentations: 1, turns: [1] })
+  const result = session.events.findLast(event => event.type === 'agent-rp/staged-state-result')
+  assert.equal(result?.type, 'agent-rp/staged-state-result')
+  assert.deepEqual(readCurrentSessionMvuState(card, session), {
+    statData: { 角色: { 等级: 1, 称号: '学徒' } },
+    updateCount: 0,
+    source: { kind: 'agent-action', turn: 1, resultEventSeqs: [result!.seq] },
+  })
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/mvu-state').length, 2)
+  const cleared = session.events.findLast(event => event.type === 'agent-rp/mvu-state')
+  assert.equal(cleared?.type, 'agent-rp/mvu-state')
+  const interrupted = Session.create(session.id, session.events.slice(0, cleared!.seq + 1))
+  assert.deepEqual(recoverSessionRoleplayTurns({ session: interrupted, deployment }), {
+    settlements: 1, presentations: 1, turns: [1],
+  })
+  assert.equal(interrupted.events.filter(event => event.type === 'agent-rp/mvu-state').length, 2)
+  assert.deepEqual(recoverSessionRoleplayTurns({ session, deployment }), {
+    settlements: 0, presentations: 0, turns: [],
+  })
+})
+
+test('does not append an MVU snapshot for an unchanged settlement without an old error', async () => {
+  const { card, session, outcome } = await emptyStagedSettlementFixture({
+    id: 'staged-state-remains-unchanged',
+    verification: 'success',
+  })
+
+  assert.equal(outcome.outcome, 'unchanged')
+  assert.deepEqual(readCurrentSessionMvuState(card, session), {
+    statData: { 角色: { 等级: 1, 称号: '学徒' } },
+    updateCount: 0,
+  })
+  assert.equal(session.events.some(event => event.type === 'agent-rp/mvu-state'), false)
+})
+
+test('keeps a genuine staged state failure visible', async () => {
+  const { card, session, outcome } = await emptyStagedSettlementFixture({
+    id: 'staged-state-keeps-failure',
+    verification: 'failure',
+  })
+
+  assert.equal(outcome.outcome, 'failed')
+  assert.deepEqual(readCurrentSessionMvuState(card, session), {
+    statData: { 角色: { 等级: 1, 称号: '学徒' } },
+    updateCount: 0,
+    lastError: '后台状态结算失败（unknown）',
+    source: {
+      kind: 'agent-action',
+      turn: 1,
+      resultEventSeqs: [session.events.findLast(event => event.type === 'agent-rp/staged-state-result')!.seq],
+    },
+  })
 })
