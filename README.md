@@ -9,7 +9,7 @@ Character Card、Chat Completion 预设、World Info、MVU、EJS 和 Tavern Help
 - 从统一的「开始游玩」入口选择角色对话或世界场景，再组合 Persona、世界、提示策略、独立正则包与开场；已知的外部资源权限会在启动前一次处理。
 - 导入 PNG、JSON、CHARX 角色卡，以及 World Info、Chat Completion 预设、独立正则包和 SillyTavern JSONL 聊天记录；角色、Persona、世界、预设与正则包可以分别保存和复用。
 - 连续游玩一段可回溯的故事：重新生成、续写、切换回复版本、修改输入并创建分支，同时保存明确状态与长期记忆。
-- 运行更复杂的社区内容：MVU、同步 EJS、世界书正则、显示正则、轻量 HTML 前端及一部分 Tavern Helper 脚本会进入各自受限的兼容环境，单项失败不会拖垮整段会话。
+- 运行更复杂的社区内容：MVU、同步 EJS、世界书正则、显示正则、轻量 HTML 前端及一部分 Tavern Helper 脚本会进入各自兼容路径；局部文字装饰直接使用 Host 正文，复杂 HTML 与脚本继续使用隔离页面，单项失败不会拖垮整段会话。
 - 在沉浸视图与调试视图之间切换，查看实际生效的提示、世界召回、状态和运行诊断。
 
 角色本身就是顶层 Agent。这里没有额外的旁白、协调器或 Character 子代理，角色对话直接发生在普通会话中。

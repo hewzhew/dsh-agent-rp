@@ -131,6 +131,8 @@ import {
   createRoleplayDisplayPlanner,
   ROLEPLAY_STATUS_PLACEHOLDER,
 } from '../roleplay-display-plan.ts'
+import { nativeMessageDisplay } from '../native-message-display.ts'
+import { createNativeMessageActivationTable, nativeMessageChatRevision } from '../native-message-routes.ts'
 import {
   blockedCardFrameResources, compileCardFrameDocument, inlineCardSanitizerProbeState,
 } from './card-frame.ts'
@@ -141,6 +143,7 @@ import {
   CharacterDisplay,
 } from './card-display.tsx'
 import { captureCardFrameAppearance } from './card-frame-appearance.ts'
+import { useNativeMessageRenderers } from './native-message-renderer.tsx'
 import {
   characterLibraryChangedEvent,
   characterLibraryJson,
@@ -11338,6 +11341,30 @@ function roleplayComposerDockComponent(
     setCompatibilityMarkers(current => current.length === markers.length
       && current.every((marker, index) => marker === markers[index]) ? current : [...markers])
   }, [])
+  const nativeDisplayFrontend = useMemo(() => projection?.frontend === undefined ? undefined
+    : withCurrentCharacterDisplayScripts(projection.frontend, storedCharacterRuntime?.displayRegexScripts),
+  [projection?.frontend, storedCharacterRuntime?.displayRegexScripts])
+  const nativeDisplayPlanner = useMemo(() => projection === undefined ? undefined : createRoleplayDisplayPlanner({
+    projection,
+    immersive: viewMode === 'immersive',
+    overrides: displayOverrides,
+    ...(nativeDisplayFrontend === undefined ? {} : { frontend: nativeDisplayFrontend }),
+  }), [displayOverrides, nativeDisplayFrontend, projection, viewMode])
+  const nativeChatRevision = nativeMessageChatRevision(chat)
+  const nativeTavernMessages = projection?.tavern?.messages
+  const nativeCharacterPending = projection?.avatarLibraryId !== undefined && storedCharacterDetail === undefined
+    && storedCharacterRuntime?.status !== 'error'
+  const nativeMessageTable = useMemo(() => {
+    if (nativeDisplayPlanner === undefined) return undefined
+    if (nativeCharacterPending) return undefined
+    return createNativeMessageActivationTable({
+      sessionId: String(sessionId),
+      chat: nativeChatRevision.chat,
+      planner: nativeDisplayPlanner,
+      ...(nativeTavernMessages === undefined ? {} : { messages: nativeTavernMessages }),
+    })
+  }, [nativeCharacterPending, nativeChatRevision, nativeDisplayPlanner, nativeTavernMessages, sessionId])
+  useNativeMessageRenderers(ctx, nativeMessageTable)
   useEffect(() => { setDisplayOverrides(new Map()) }, [sessionId, transcriptSignature])
   useEffect(() => { setCompatibilityMarkers([]) }, [sessionId])
   useEffect(() => {
@@ -12020,6 +12047,11 @@ function roleplayComposerDockComponent(
         const alignedMessage = alignedTavernMessageByItem.get(item)
         const plan = displayPlanner.user({ seq, ...(alignedMessage === undefined ? {} : { alignedMessage }) })
         if (plan.kind === 'host') restoreHostDisplay(item, original)
+        else if (plan.kind === 'render' && nativeMessageDisplay(plan.compilation) !== undefined
+          && (original.matches('[data-agent-rp-native-message="true"]')
+            || original.querySelector('[data-agent-rp-native-message="true"]') !== null)) {
+          restoreHostDisplay(item, original)
+        }
         else if (plan.kind === 'render') mountRenderedDisplay(
           item, original, plan.compilation, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
         )
@@ -12045,6 +12077,11 @@ function roleplayComposerDockComponent(
         }
         if (original === null) continue
         if (plan.kind === 'host') restoreHostDisplay(item, original)
+        else if (nativeMessageDisplay(plan.compilation) !== undefined
+          && (original.matches('[data-agent-rp-native-message="true"]')
+            || original.querySelector('[data-agent-rp-native-message="true"]') !== null)) {
+          restoreHostDisplay(item, original)
+        }
         else mountRenderedDisplay(
           item, original, plan.compilation, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
         )
