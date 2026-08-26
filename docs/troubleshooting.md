@@ -4,7 +4,7 @@
 
 ## 更新后仍像旧版本
 
-使用 README 中与当前平台对应的安装器更新，并重启实际提供页面的 DSH Host。直接安装 GitHub 版本时，不要继续固定到旧提交；例如 `github:hewzhew/dsh-agent-rp#ac55cca` 永远只会安装该提交。反馈时请同时提供平台、DSH 启动方式和实际安装的 Agent RP Git 引用。
+使用 README 中与当前平台对应的安装器更新，并重启实际提供页面的 DSH Host。默认安装器跟随 npm 的 `next` 标签；直接安装 GitHub 版本时，不要继续固定到旧提交，例如 `github:hewzhew/dsh-agent-rp#ac55cca` 永远只会安装该提交。反馈时请同时提供平台、DSH 启动方式、安装来源和实际安装的 Agent RP 版本。
 
 不要只凭 DSH 的版本号判断 Host 能力。DSH Desktop、官方 runner 和 Agent Host 可能显示相同版本号，却包含不同的插件接口；各入口的支持范围见 README 的安装章节。
 
@@ -45,4 +45,4 @@
 
 ## 提交 Issue 前
 
-请提供预期表现、实际表现、最短复现步骤、平台、DSH 启动方式和 Agent RP Git 引用。不要上传 API Key、NPM Token、完整私人对话、无权再分发的角色卡或完整 Session Log。脚本与世界书的「复制失败详情」已经限制内容范围，优先使用这两个入口。
+请提供预期表现、实际表现、最短复现步骤、平台、DSH 启动方式、Agent RP 安装来源和版本。不要上传 API Key、NPM Token、完整私人对话、无权再分发的角色卡或完整 Session Log。脚本与世界书的「复制失败详情」已经限制内容范围，优先使用这两个入口。

@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
   [string]$DshVersion = '0.1.1-rc.2',
-  [string]$PluginSource = 'github:hewzhew/dsh-agent-rp#main',
+  [string]$PluginSource = '@hewzhew/dsh-agent-rp@next',
   [string]$RunnerSourceBase = 'https://raw.githubusercontent.com/hewzhew/dsh-agent-rp/main/host-runner',
   [string]$Registry,
   [switch]$ChinaMirror,
@@ -290,7 +290,7 @@ try {
 } catch {
   Write-Host "安装失败：$($_.Exception.Message)" -ForegroundColor Red
   Write-Host '如果卡在“准备 Agent Host”的依赖安装，可以重试 -ChinaMirror；若下载 runner 文件失败，则需要检查 GitHub 连通性。' -ForegroundColor Yellow
-  Write-Host '如果卡在“安装 Agent RP”，访问的是 GitHub；切换 npm 镜像不会修复这一段。' -ForegroundColor Yellow
+  Write-Host '如果卡在“安装 Agent RP”，可以重试 -ChinaMirror；runner 文件仍需要访问 GitHub。' -ForegroundColor Yellow
   exit 1
 } finally {
   if ($null -eq $previousRegistry) {

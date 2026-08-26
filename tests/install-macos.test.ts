@@ -18,6 +18,7 @@ import test, { type TestContext } from 'node:test'
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const installer = resolve(repositoryRoot, 'scripts/install-macos.sh')
 const pluginPackageName = '@hewzhew/dsh-agent-rp'
+const defaultPluginSource = '@hewzhew/dsh-agent-rp@next'
 const pluginSource = 'github:hewzhew/dsh-agent-rp#fixture'
 
 interface InstallerFixtureOptions {
@@ -193,6 +194,17 @@ function commandLog(fixture: InstallerFixture): Array<{
 }
 
 const skip = process.platform === 'win32'
+
+test('desktop installers default to the npm next prerelease', () => {
+  const windows = readFileSync(resolve(repositoryRoot, 'scripts/install-windows.ps1'), 'utf8')
+  const macos = readFileSync(installer, 'utf8')
+  const linux = readFileSync(resolve(repositoryRoot, 'scripts/install-linux.sh'), 'utf8')
+
+  assert.match(windows, new RegExp(`PluginSource = '${defaultPluginSource}'`, 'u'))
+  for (const source of [macos, linux]) {
+    assert.match(source, new RegExp(`PLUGIN_SOURCE="\\$\\{PLUGIN_SOURCE:-${defaultPluginSource}\\}"`, 'u'))
+  }
+})
 
 test('shows macOS installer options without touching the host', { skip }, () => {
   const result = spawnSync('/bin/bash', [installer, '--help'], { encoding: 'utf8' })

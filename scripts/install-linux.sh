@@ -5,7 +5,7 @@ set -Eeuo pipefail
 umask 077
 
 DSH_VERSION="${DSH_VERSION:-0.1.1-rc.2}"
-PLUGIN_SOURCE="${PLUGIN_SOURCE:-github:hewzhew/dsh-agent-rp#main}"
+PLUGIN_SOURCE="${PLUGIN_SOURCE:-@hewzhew/dsh-agent-rp@next}"
 RUNNER_SOURCE_BASE="${RUNNER_SOURCE_BASE:-https://raw.githubusercontent.com/hewzhew/dsh-agent-rp/main/host-runner}"
 REGISTRY="${REGISTRY:-}"
 AGENT_HOST_PORT="${AGENT_HOST_PORT:-3080}"
@@ -39,7 +39,7 @@ usage() {
 用法：bash install-linux.sh [选项]
 
   --dsh-version <v>        Agent Host 版本；必须等于当前验收版本
-  --plugin-source <spec>   插件来源，默认 github:hewzhew/dsh-agent-rp#main
+  --plugin-source <spec>   插件来源，默认 @hewzhew/dsh-agent-rp@next
   --runner-source-base <u> runner 文件来源；可使用 URL 或本地目录
   --registry <url>         本次安装使用的 npm registry
   --china-mirror           使用 https://registry.npmmirror.com

@@ -22,6 +22,10 @@ node scripts/check-prerelease-package.mjs --tag "v$version" --tarball .release-d
 
 The pack lifecycle runs the vendored-runtime check, product build, published-import consumers, and prerelease manifest policy before producing the tarball.
 
+## Installer promotion
+
+The Windows, macOS, and Linux installers default to `@hewzhew/dsh-agent-rp@next`. Keep the explicit plugin-source option for local directories and review branches, but do not point ordinary installs at `main`. Before changing user documentation for a new package line, verify the published tarball from a clean DSH home, rerun the installer against the same profile to exercise the update path, and start the resulting web profile once. The installer scripts and pinned Agent Host runner files remain hosted on GitHub; the plugin payload and its transitive dependencies come from the selected npm registry.
+
 ## One-time npm bootstrap
 
 The first publication must reserve the previously unused package name before npm can attach a trusted publisher to it. This is the only non-OIDC publication. A maintainer signs in interactively with `npm login --auth-type=web`, publishes the already audited tarball with `--access public --tag next --provenance=false`, and then runs `npm logout`. The explicit override is required because local terminals cannot issue CI provenance. Do not create or paste an npm automation token into GitHub, a terminal transcript, an Issue, or repository settings.

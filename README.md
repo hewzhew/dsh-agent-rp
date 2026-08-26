@@ -20,7 +20,7 @@ Character Card、Chat Completion 预设、World Info、MVU、EJS 和 Tavern Help
 
 ## 安装
 
-需要 Node.js 22.19+ 或 24+，以及 pnpm 11。没有 pnpm 时可以先运行 `npm install --global pnpm@11`。安装器会准备经过验证的 Agent Host、安装或更新 Agent RP，并保留 `~/.dsh` 中已有的角色与会话；它不会静默安装全局工具。
+需要 Node.js 22.19+ 或 24+，以及 pnpm 11。没有 pnpm 时可以先运行 `npm install --global pnpm@11`。安装器会准备经过验证的 Agent Host，从 npm 的 `next` 标签安装或更新 Agent RP，并保留 `~/.dsh` 中已有的角色与会话；它不会静默安装全局工具。
 
 ### DSH Desktop
 
@@ -29,7 +29,7 @@ DSH Desktop 使用自己封装的 Node、pnpm、DSH Host、数据目录和当前
 若只需协助验证纯对话兼容，可以从 Desktop 托盘打开它自带的 DSH Terminal，在当前激活的 profile 中安装插件后重启 Desktop：
 
 ```powershell
-dsh plugin add github:hewzhew/dsh-agent-rp#main
+dsh plugin add '@hewzhew/dsh-agent-rp@next'
 ```
 
 这条路径尚未列为完整支持入口。不要运行下面的 Windows 安装器来“覆盖” Desktop；它会创建一个独立 Agent Host，而不会修改 Desktop 安装包内部的运行时。完整支持需要 Desktop Host 提供与 Agent Host 等价的安全插件事件接口，或允许 Desktop 连接到经过验证的外部 Host。
@@ -52,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $installerPath -Start
 
 设置过 `DSH_HOME` 时，安装器会打印该数据目录中的实际启动路径。不要改回 `npx -p @deepseek-ai/dsh@latest dsh --profile web`；这会重新进入尚未包含插件事件能力的官方 runner。若界面提示当前 Host 缺少安全插件事件能力，请关闭旧 DSH 后从上述专用入口启动。安装器发现默认端口 3080 已被其他进程占用时不会停止它或再启动第二个 DSH，而会显示进程 PID 和后续命令。
 
-国内 npm registry 较慢时，可在安装器最后一行加 `-ChinaMirror`。这个选项只改变本次安装使用的 npm registry；下载 runner 文件或 Agent RP 源码时访问的是 GitHub，切换 npm 镜像不会修复这一段。
+国内 npm registry 较慢时，可在安装器最后一行加 `-ChinaMirror`。这个选项会同时用于 Agent Host 依赖和 Agent RP 包；安装器脚本与 runner 文件仍从 GitHub 下载。
 
 ### macOS
 
@@ -130,7 +130,7 @@ Termux 路线面向 ARM64、Android 11 及以上设备，目标是在手机本�
 
 遇到脚本加载、世界书 EJS、行动选项、工作区归属或「RP 互通」问题时，先按 [使用与故障排查](docs/troubleshooting.md) 取得对应失败详情；匿名「复制诊断」不能替代具体错误。
 
-需要比较大型卡片改动时，可运行不含社区卡片内容的 [合成兼容基准与本地真实卡、预设验收流程](docs/compatibility-benchmark.md)。EJS 的可执行与保留范围见 [EJS 兼容表](docs/ejs-compatibility.md)；后续世界书与插件生态遵循 [安全扩展能力协议](docs/extension-capabilities.md)。独立 DSH 插件可从 [社区插件接入](docs/community-plugin-development.md) 选择 Host 生命周期接口或 Agent RP 工作台 Slot；安装型第三方扩展另按 [SillyTavern 扩展宿主](docs/st-extension-host.md) 的单例生命周期设计。当前仍是源码与本地安装协作入口，不代表 npm 分发已经完成。
+需要比较大型卡片改动时，可运行不含社区卡片内容的 [合成兼容基准与本地真实卡、预设验收流程](docs/compatibility-benchmark.md)。EJS 的可执行与保留范围见 [EJS 兼容表](docs/ejs-compatibility.md)；后续世界书与插件生态遵循 [安全扩展能力协议](docs/extension-capabilities.md)。独立 DSH 插件可从 [社区插件接入](docs/community-plugin-development.md) 选择 Host 生命周期接口或 Agent RP 工作台 Slot；安装型第三方扩展另按 [SillyTavern 扩展宿主](docs/st-extension-host.md) 的单例生命周期设计。npm `next` 提供经过发布门禁与 provenance 证明的预发布包；源码分支仍只用于贡献和定向验收。
 
 ## 反馈与贡献
 
