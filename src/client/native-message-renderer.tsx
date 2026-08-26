@@ -4,7 +4,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import { useLayoutEffect, useMemo } from 'react'
 import type {
   NativeAssistantMessageOwner,
@@ -16,6 +15,7 @@ import type {
 import {
   NATIVE_MESSAGE_INLINE_ATTRIBUTES,
   NATIVE_MESSAGE_INLINE_TAGS,
+  renderNativeMessageInlineHtml,
 } from '../native-message-display.ts'
 import { selectNativeAssistantMessage, selectNativeUserMessage } from '../native-message-routes.ts'
 
@@ -43,7 +43,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 function NativeInlineMessage({ source }: { readonly source: string }) {
   const html = useMemo(() => String(DOMPurify.sanitize(
-    marked.parse(source, { async: false, breaks: true, gfm: true }) as string,
+    renderNativeMessageInlineHtml(source),
     {
       ALLOWED_ATTR: [...NATIVE_MESSAGE_INLINE_ATTRIBUTES],
       ALLOWED_TAGS: [...NATIVE_MESSAGE_INLINE_TAGS],

@@ -88,6 +88,24 @@ test('admits local text decoration while keeping document and resource HTML on t
   assert.equal(NATIVE_MESSAGE_INLINE_ATTRIBUTES.includes('href'), false)
 })
 
+test('keeps mixed Markdown native only when its rendered semantics are preserved', () => {
+  const preserved = '**粗体**、`代码`和<span style="color:#d9b36c">藤子</span>'
+  assert.deepEqual(nativeMessageDisplay(compileCharacterDisplay(preserved))?.segments, [
+    { kind: 'inline-html', source: preserved },
+  ])
+
+  const declined = [
+    '看[链接](https://example.com)<span style="color:red">藤子</span>',
+    '看 https://example.com <span style="color:red">藤子</span>',
+    '![图片](https://example.com/image.png)<span style="color:red">藤子</span>',
+    '- 第一项\n- <span style="color:red">藤子</span>',
+    '```text\n代码\n```\n<span style="color:red">藤子</span>',
+  ]
+  for (const source of declined) {
+    assert.equal(nativeMessageDisplay(compileCharacterDisplay(source)), undefined, source)
+  }
+})
+
 test('binds display plans to exact Session, Node, block, and text identities', () => {
   const planner = createRoleplayDisplayPlanner({
     projection,
@@ -124,6 +142,21 @@ test('declines complex and multi-block displays so the iframe DOM adapter remain
   })
   assert.equal(complex.users.size, 0)
   assert.equal(complex.assistants.size, 0)
+
+  const mixedMarkdownPlanner = createRoleplayDisplayPlanner({
+    projection,
+    frontend: {
+      ...frontend,
+      regexScripts: [displayScript('[藤子](https://example.com)<span style="color:red">$&</span>')],
+    },
+    immersive: true,
+    overrides: new Map(),
+  })
+  const mixedMarkdown = createNativeMessageActivationTable({
+    sessionId: 'session-a', chat: chat(), planner: mixedMarkdownPlanner, messages,
+  })
+  assert.equal(mixedMarkdown.users.size, 0)
+  assert.equal(mixedMarkdown.assistants.size, 0)
 
   const simplePlanner = createRoleplayDisplayPlanner({
     projection,

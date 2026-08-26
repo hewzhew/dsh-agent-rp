@@ -1,5 +1,6 @@
 /** Native eligibility rules for display-regex output rendered inside the Host message body. */
 
+import { marked } from 'marked'
 import type { CharacterDisplaySegment, CompiledCharacterDisplay } from './card-display-compiler.ts'
 
 /** Exact element names retained by the Host-native rich-text sanitizer. */
@@ -72,6 +73,24 @@ function nativeTag(source: string): boolean {
   return true
 }
 
+function nativeMessageHtml(source: string): boolean {
+  const matches = [...source.matchAll(htmlTag)]
+  if (matches.length === 0 || matches.length > 256) return false
+  if (matches.some(match => !nativeTag(match[0]))) return false
+  const withoutTags = source.replace(htmlTag, '')
+  return !/<\/?[A-Za-z]/u.test(withoutTags)
+}
+
+/**
+ * Expand Markdown in one local-decoration segment using the exact client renderer options.
+ *
+ * @param source - display-regex output classified as inline HTML.
+ * @returns browser HTML that still requires the client sanitizer before insertion.
+ */
+export function renderNativeMessageInlineHtml(source: string): string {
+  return marked.parse(source, { async: false, breaks: true, gfm: true }) as string
+}
+
 /**
  * Decide whether one inline-HTML segment is only local text decoration.
  *
@@ -80,11 +99,8 @@ function nativeTag(source: string): boolean {
  */
 export function isNativeMessageInlineHtml(source: string): boolean {
   if (source.length === 0 || source.length > 1024 * 1024) return false
-  const matches = [...source.matchAll(htmlTag)]
-  if (matches.length === 0 || matches.length > 256) return false
-  if (matches.some(match => !nativeTag(match[0]))) return false
-  const withoutTags = source.replace(htmlTag, '')
-  return !/<\/?[A-Za-z]/u.test(withoutTags)
+  if (!nativeMessageHtml(source)) return false
+  return nativeMessageHtml(renderNativeMessageInlineHtml(source))
 }
 
 /**
