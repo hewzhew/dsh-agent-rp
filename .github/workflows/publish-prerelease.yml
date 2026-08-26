@@ -1,0 +1,87 @@
+name: Publish npm prerelease
+
+on:
+  pull_request:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Verify release package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the reviewed revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: pnpm
+          node-version: 24.x
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Require a prerelease on main
+        if: github.event_name == 'release'
+        env:
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          test "$RELEASE_IS_PRERELEASE" = "true" || { echo "Only GitHub prereleases may publish this package." >&2; exit 1; }
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main || { echo "The release tag is not on main." >&2; exit 1; }
+          node scripts/check-prerelease-package.mjs --tag "$RELEASE_TAG"
+      - name: Build and pack the public artifact
+        run: |
+          mkdir -p .release-dist
+          pnpm pack --out .release-dist/dsh-agent-rp.tgz
+      - name: Audit the exact tarball
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            node scripts/check-prerelease-package.mjs --tag "$RELEASE_TAG" --tarball .release-dist/dsh-agent-rp.tgz
+          else
+            node scripts/check-prerelease-package.mjs --tarball .release-dist/dsh-agent-rp.tgz
+          fi
+      - name: Retain the reviewed release artifact
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: npm-prerelease-${{ github.event.release.tag_name }}
+          path: .release-dist/dsh-agent-rp.tgz
+          retention-days: 7
+
+  publish:
+    name: Publish reviewed tarball
+    if: github.event_name == 'release'
+    needs: package
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - name: Require npm trusted-publishing support
+        run: >-
+          node -e "const [major, minor] = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number); if (major < 11 || (major === 11 && minor < 5)) throw new Error('npm 11.5.1 or newer is required for trusted publishing')"
+      - name: Download the reviewed tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-prerelease-${{ github.event.release.tag_name }}
+          path: .release-dist
+      - name: Publish with npm trusted publishing
+        run: npm publish .release-dist/dsh-agent-rp.tgz --access public --tag next --provenance

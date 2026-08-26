@@ -1,8 +1,33 @@
 {
   "name": "@dsh-external/dsh-agent-rp",
-  "version": "0.0.0-rc.249",
-  "private": true,
+  "version": "0.0.0-rc.250",
+  "private": false,
+  "description": "Native roleplay runtime and SillyTavern compatibility plugin for DeepSeek Harness.",
   "license": "MIT",
+  "author": "Ocheron",
+  "homepage": "https://github.com/hewzhew/dsh-agent-rp#readme",
+  "bugs": {
+    "url": "https://github.com/hewzhew/dsh-agent-rp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewzhew/dsh-agent-rp.git"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "roleplay",
+    "sillytavern"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/",
+    "tag": "next"
+  },
   "type": "module",
   "main": "./lib/index.js",
   "bin": {
@@ -60,12 +85,13 @@
     "benchmark:compat": "tsdown benchmarks/heavy-card.ts --no-config --format esm --platform node --target es2024 --out-dir .benchmark-dist --clean && node .benchmark-dist/heavy-card.mjs",
     "generate:tavern-vendor": "node scripts/generate-tavern-vendor-sources.mjs",
     "check:tavern-vendor": "node scripts/generate-tavern-vendor-sources.mjs --check",
+    "check:release": "node scripts/check-prerelease-package.mjs",
     "clean:generated": "tsx scripts/clean-generated.ts",
     "smoke:compat": "tsdown --config tsdown.smoke.config.ts && node .smoke-dist/smoke-card-compat.mjs",
     "build": "tsdown",
     "build:host": "tsdown --config tsdown.host.config.ts",
     "check:published-imports": "node scripts/check-published-imports.mjs && tsc -p tsconfig.published-client-extension.json && tsdown fixtures/published-client-extension-consumer.ts --no-config --format cjs --platform browser --target es2024 --out-dir .test-dist/published-client-extension --clean && node scripts/check-published-client-extension.mjs",
-    "prepack": "pnpm run check:tavern-vendor && pnpm run build && pnpm run check:published-imports",
+    "prepack": "pnpm run check:tavern-vendor && pnpm run build && pnpm run check:published-imports && pnpm run check:release",
     "test": "node scripts/run-source-tests.mjs all",
     "test:external-window": "node scripts/run-source-tests.mjs external-window",
     "test:http": "node scripts/run-source-tests.mjs http",
