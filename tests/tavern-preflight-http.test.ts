@@ -319,6 +319,26 @@ test('returns and caches a Host-resolved execution graph without browser-side mo
   }
 })
 
+test('returns stable local details for expected script-resolution failures only', async () => {
+  const libraries = testLibraries([
+    script('character-script', 'const specifier = location.hash; import(specifier);'),
+  ])
+  const rejected = await invoke(registeredExecutionRoute(libraries), { body: executionRequest() })
+  assert.equal(rejected.status, 422)
+  assert.deepEqual(rejected.json, {
+    error: '远程模块的动态 import 必须使用固定 HTTPS 地址',
+    failure: 'dynamic-import-not-static',
+  })
+
+  const plans = new TavernExecutionPlanCache(async () => {
+    throw new Error(PRIVATE_PATH)
+  })
+  const unexpected = await invoke(registeredExecutionRoute(libraries, plans), { body: executionRequest() })
+  assert.equal(unexpected.status, 502)
+  assert.deepEqual(unexpected.json, { error: '脚本执行计划暂时不可用' })
+  assert.doesNotMatch(unexpected.body, /private|secret|stack|\\cards\\/iu)
+})
+
 test('preflights independent scripts concurrently while preserving library order', async () => {
   let active = 0
   let maximumActive = 0

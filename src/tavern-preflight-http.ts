@@ -26,6 +26,7 @@ import {
 } from './tavern-preflight-protocol.ts'
 import {
   TavernScriptOriginApprovalError,
+  TavernScriptResolutionError,
   TavernScriptResourceLimitError,
 } from './tavern-script-resolver.ts'
 
@@ -435,6 +436,10 @@ export function installTavernExecutionHttp(
           return
         }
         if (error instanceof TavernScriptResourceLimitError) {
+          json(response, 422, { error: error.message, failure: error.code })
+          return
+        }
+        if (error instanceof TavernScriptResolutionError) {
           json(response, 422, { error: error.message, failure: error.code })
           return
         }

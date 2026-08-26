@@ -28,6 +28,19 @@ export class TavernScriptResourceLimitError extends Error {
   }
 }
 
+/** Stable static-analysis failures that are safe to show in local script diagnostics. */
+export class TavernScriptResolutionError extends Error {
+  override readonly name = 'TavernScriptResolutionError'
+
+  constructor(
+    readonly code: 'dynamic-import-not-static' | 'invalid-module-url' | 'mag-var-update-import-form'
+      | 'module-graph-incomplete',
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 /** Script origins trusted by the built-in jsDelivr bundle resolver. */
 export const BUILT_IN_TAVERN_SCRIPT_ORIGINS = ['https://cdn.jsdelivr.net', 'https://testingcf.jsdelivr.net'] as const
 const MAX_REMOTE_SCRIPT_BYTES = 8 * 1024 * 1024
@@ -107,10 +120,10 @@ function approvedModuleUrl(specifier: string, origins: ReadonlySet<string>, base
     }
     parsed = base === undefined ? new URL(specifier) : new URL(specifier, base)
   } catch {
-    throw new Error(`远程模块必须使用完整 HTTPS 地址：${specifier}`)
+    throw new TavernScriptResolutionError('invalid-module-url', '远程模块必须使用完整 HTTPS 地址')
   }
   if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '') {
-    throw new Error(`远程模块必须使用完整 HTTPS 地址：${specifier}`)
+    throw new TavernScriptResolutionError('invalid-module-url', '远程模块必须使用完整 HTTPS 地址')
   }
   if (!origins.has(parsed.origin)) throw new TavernScriptOriginApprovalError(parsed.origin)
   return parsed
@@ -227,6 +240,50 @@ interface LoadedTavernModule {
   readonly references: readonly TavernModuleReference[]
 }
 
+interface ParsedModuleReference {
+  readonly n: string | undefined
+  readonly s: number
+  readonly e: number
+  readonly ss: number
+  readonly se: number
+  readonly d: number
+}
+
+const javascriptIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u
+const staticHttpsConstPattern = /(?:^|[;\r\n])[\t ]*const[\t ]+([A-Za-z_$][A-Za-z0-9_$]*)[\t ]*=[\t ]*(['"])(https:\/\/[^'"\\\r\n]+)\2[\t ]*(?=;|[\r\n]|$)/gmu
+
+function fixedModuleSpecifier(source: string, imported: ParsedModuleReference): string | undefined {
+  if (imported.n !== undefined) return imported.n
+  if (imported.d < 0) return undefined
+  const identifier = source.slice(imported.s, imported.e).trim()
+  if (!javascriptIdentifierPattern.test(identifier)) return undefined
+  const declarations = [...source.matchAll(staticHttpsConstPattern)].filter(match =>
+    match[1] === identifier && match.index < imported.ss)
+  return declarations.length === 1 ? declarations[0]![3] : undefined
+}
+
+function magVarUpdateAdapterRange(
+  source: string,
+  imported: ParsedModuleReference,
+): { readonly start: number; readonly end: number } | undefined {
+  if (imported.d === -1 && /^\s*import\s*['"]/u.test(source.slice(imported.ss, imported.se))) {
+    let end = imported.se
+    while (source[end] === ' ' || source[end] === '\t') end += 1
+    if (source[end] === ';') end += 1
+    return { start: imported.ss, end }
+  }
+  if (imported.d < 0) return undefined
+  const prefix = source.slice(0, imported.ss).match(/(?:^|[;{}\r\n])[\t ]*(await[\t ]+)?$/u)
+  if (prefix === null) return undefined
+  let end = imported.se
+  while (source[end] === ' ' || source[end] === '\t') end += 1
+  if (source[end] === ';') end += 1
+  let next = end
+  while (source[next] === ' ' || source[next] === '\t') next += 1
+  if (next < source.length && source[next] !== '\r' && source[next] !== '\n') return undefined
+  return { start: imported.ss - (prefix[1]?.length ?? 0), end }
+}
+
 function moduleReferences(
   source: string,
   origins: ReadonlySet<string>,
@@ -235,9 +292,14 @@ function moduleReferences(
   const [imports] = parseModule(source)
   return imports.flatMap(imported => {
     if (imported.d === -2) return []
-    if (imported.n === undefined) throw new Error('远程模块的动态 import 必须使用固定 HTTPS 地址')
+    const specifier = fixedModuleSpecifier(source, imported)
+    if (specifier === undefined) {
+      throw new TavernScriptResolutionError(
+        'dynamic-import-not-static', '远程模块的动态 import 必须使用固定 HTTPS 地址',
+      )
+    }
     return [{
-      url: approvedModuleUrl(imported.n, origins, base),
+      url: approvedModuleUrl(specifier, origins, base),
       start: imported.s,
       end: imported.e,
       dynamic: imported.d !== -1,
@@ -263,7 +325,9 @@ function replaceModuleReferences(
   let result = source
   for (const reference of [...references].sort((left, right) => right.start - left.start)) {
     const module = modulesByHref.get(reference.url.href)
-    if (module === undefined) throw new Error('远程模块依赖图不完整')
+    if (module === undefined) {
+      throw new TavernScriptResolutionError('module-graph-incomplete', '远程模块依赖图不完整')
+    }
     const replacement = reference.dynamic ? JSON.stringify(module.placeholder) : module.placeholder
     result = `${result.slice(0, reference.start)}${replacement}${result.slice(reference.end)}`
   }
@@ -499,17 +563,21 @@ export async function resolveTavernScriptExecution(
   const remoteImports: { readonly url: URL; readonly start: number; readonly end: number; readonly sideEffect: boolean }[] = []
   for (const imported of imports) {
     if (imported.d === -2) continue
-    if (imported.n === undefined) throw new Error('远程模块的动态 import 必须使用固定 HTTPS 地址')
-    const url = approvedModuleUrl(imported.n, origins)
+    const specifier = fixedModuleSpecifier(content, imported)
+    if (specifier === undefined) {
+      throw new TavernScriptResolutionError(
+        'dynamic-import-not-static', '远程模块的动态 import 必须使用固定 HTTPS 地址',
+      )
+    }
+    const url = approvedModuleUrl(specifier, origins)
     if (isMagVarUpdateBundle(url)) {
-      const statement = content.slice(imported.ss, imported.se)
-      if (imported.d !== -1 || !/^\s*import\s*['"]/u.test(statement)) {
-        throw new Error('MagVarUpdate 宿主适配仅支持副作用导入')
+      const range = magVarUpdateAdapterRange(content, imported)
+      if (range === undefined) {
+        throw new TavernScriptResolutionError(
+          'mag-var-update-import-form', 'MagVarUpdate 宿主适配仅支持不读取返回值的导入',
+        )
       }
-      let end = imported.se
-      while (content[end] === ' ' || content[end] === '\t') end += 1
-      if (content[end] === ';') end += 1
-      adapterRanges.push({ start: imported.ss, end })
+      adapterRanges.push(range)
       continue
     }
     let end = imported.se

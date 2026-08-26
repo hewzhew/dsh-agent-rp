@@ -1030,6 +1030,43 @@ test('adapts the public MagVarUpdate side-effect bundle to the Host Mvu capabili
   assert.equal(plan.source, 'window.__mvu = Mvu;')
 })
 
+test('adapts a const-bound dynamic MagVarUpdate import without loading the public bundle', async () => {
+  const plan = await resolveTavernScriptExecution([
+    "const mvuBundleUrl = 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js';",
+    'await import(mvuBundleUrl);',
+    'window.__mvu = Mvu;',
+  ].join('\n'), AbortSignal.timeout(5_000))
+
+  assert.equal(plan.mode, 'classic')
+  assert.match(plan.source, /const mvuBundleUrl/u)
+  assert.match(plan.source, /window\.__mvu = Mvu/u)
+  assert.doesNotMatch(plan.source, /\bimport\s*\(/u)
+})
+
+test('resolves a const-bound fixed HTTPS dynamic module through the isolated module graph', async () => {
+  const originalFetch = globalThis.fetch
+  const dependency = 'https://cdn.jsdelivr.net/gh/dsh-agent-rp/const-import@1.0.0/entry.js'
+  globalThis.fetch = async input => {
+    assert.equal(String(input), dependency)
+    return new Response('export const value = 42;')
+  }
+  try {
+    const plan = await resolveTavernScriptExecution([
+      `const moduleUrl = ${JSON.stringify(dependency)};`,
+      'const loaded = await import(moduleUrl);',
+      'window.__loadedValue = loaded.value;',
+    ].join('\n'), AbortSignal.timeout(5_000))
+
+    assert.equal(plan.mode, 'module')
+    assert.equal(plan.moduleDependencies?.length, 1)
+    assert.doesNotMatch(plan.source, /import\(moduleUrl\)/u)
+    assert.doesNotMatch(plan.source, new RegExp(`import\\(${JSON.stringify(dependency)}\\)`, 'u'))
+    assert.match(plan.source, /import\("__dsh_tavern_remote_module_0__"\)/u)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('rejects module references that cannot be authorized before execution', async () => {
   await assert.rejects(
     resolveTavernScriptExecution("import value from './local.js';", AbortSignal.timeout(5_000)),
@@ -1037,6 +1074,21 @@ test('rejects module references that cannot be authorized before execution', asy
   )
   await assert.rejects(
     resolveTavernScriptExecution('const path = location.hash; import(path);', AbortSignal.timeout(5_000)),
+    /固定 HTTPS 地址/u,
+  )
+  await assert.rejects(
+    resolveTavernScriptExecution(
+      "let path = 'https://cdn.jsdelivr.net/gh/dsh-agent-rp/runtime-import/entry.js'; import(path);",
+      AbortSignal.timeout(5_000),
+    ),
+    /固定 HTTPS 地址/u,
+  )
+  await assert.rejects(
+    resolveTavernScriptExecution([
+      "const base = 'https://cdn.jsdelivr.net/gh/dsh-agent-rp/';",
+      "const path = base + 'runtime-import/entry.js';",
+      'import(path);',
+    ].join('\n'), AbortSignal.timeout(5_000)),
     /固定 HTTPS 地址/u,
   )
   await assert.rejects(
