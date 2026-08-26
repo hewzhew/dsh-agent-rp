@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-external/dsh-agent-rp",
+  "name": "@hewzhew/dsh-agent-rp",
   "version": "0.0.0-rc.251",
   "private": false,
   "description": "Native roleplay runtime and SillyTavern compatibility plugin for DeepSeek Harness.",

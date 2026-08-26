@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$pluginPackageName = '@dsh-external/dsh-agent-rp'
+$pluginPackageName = '@hewzhew/dsh-agent-rp'
 $minimumPnpmMajor = 11
 $previousRegistry = $env:npm_config_registry
 $agentHostVersion = '0.1.1-rc.2'
@@ -263,7 +263,7 @@ try {
   if ($bundles -notcontains $pluginPackageName) {
     throw "插件已经写入依赖，但没有加入 DSH bundle 列表：$profileManifestPath"
   }
-  $installedManifestPath = Join-Path $dshHomePath 'profiles\web\node_modules\@dsh-external\dsh-agent-rp\package.json'
+  $installedManifestPath = Join-Path $dshHomePath 'profiles\web\node_modules\@hewzhew\dsh-agent-rp\package.json'
   if (-not (Test-Path -LiteralPath $installedManifestPath)) {
     throw "插件目录没有正确落盘：$installedManifestPath"
   }

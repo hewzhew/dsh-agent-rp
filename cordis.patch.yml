@@ -8,6 +8,6 @@
 
 - insert:
     - id: dsh-agent-rp-host
-      name: '@dsh-external/dsh-agent-rp'
+      name: '@hewzhew/dsh-agent-rp'
       config:
         mode: host

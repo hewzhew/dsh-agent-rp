@@ -17,7 +17,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 /** Preset id selected by the bundle's profile patch. */
 export const AGENT_RP_PRESET_ID = 'agent-rp'
 
-const OWNER = '@dsh-external/dsh-agent-rp'
+const OWNER = '@hewzhew/dsh-agent-rp'
 const MANIFEST = '.dsh-agent-rp-owner.json'
 const PRESET_FILES = ['agent.cordis.yml', 'preset.yml'] as const
 type PresetFiles = readonly [composition: string, metadata: string]

@@ -16,7 +16,7 @@ Agent RP 仍在高速迭代。贡献的目标不是复制内部实现，而是�
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { registerRoleplayRuntimeExtension } from '@dsh-external/dsh-agent-rp/extension/v0'
+import { registerRoleplayRuntimeExtension } from '@hewzhew/dsh-agent-rp/extension/v0'
 export const inject = ['agentRp.runtimeExtensions']
 export function apply(ctx: Context): void {
   registerRoleplayRuntimeExtension(ctx, {

@@ -17,7 +17,7 @@ import test, { type TestContext } from 'node:test'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const installer = resolve(repositoryRoot, 'scripts/install-macos.sh')
-const pluginPackageName = '@dsh-external/dsh-agent-rp'
+const pluginPackageName = '@hewzhew/dsh-agent-rp'
 const pluginSource = 'github:hewzhew/dsh-agent-rp#fixture'
 
 interface InstallerFixtureOptions {
@@ -96,16 +96,16 @@ if (args[0] === 'plugin') {
   const manifestPath = join(profileRoot, 'package.json')
   let manifest = { dependencies: {}, dsh: { profile: { bundles: [] } } }
   try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) } catch {}
-  if (action === 'add') manifest.dependencies['@dsh-external/dsh-agent-rp'] = value
-  if (!manifest.dsh.profile.bundles.includes('@dsh-external/dsh-agent-rp')) {
-    manifest.dsh.profile.bundles.push('@dsh-external/dsh-agent-rp')
+  if (action === 'add') manifest.dependencies['@hewzhew/dsh-agent-rp'] = value
+  if (!manifest.dsh.profile.bundles.includes('@hewzhew/dsh-agent-rp')) {
+    manifest.dsh.profile.bundles.push('@hewzhew/dsh-agent-rp')
   }
   mkdirSync(profileRoot, { recursive: true })
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\\n')
-  const packageRoot = join(profileRoot, 'node_modules', '@dsh-external', 'dsh-agent-rp')
+  const packageRoot = join(profileRoot, 'node_modules', '@hewzhew', 'dsh-agent-rp')
   mkdirSync(packageRoot, { recursive: true })
   writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
-    name: '@dsh-external/dsh-agent-rp',
+    name: '@hewzhew/dsh-agent-rp',
     version: '0.0.0-test',
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }, null, 2) + '\\n')

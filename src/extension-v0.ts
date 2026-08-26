@@ -1,6 +1,6 @@
 /** Versioned public contract for independent DSH plugins extending Agent RP. */
 
-/** The API version encoded by the `@dsh-external/dsh-agent-rp/extension/v0` export. */
+/** The API version encoded by the `@hewzhew/dsh-agent-rp/extension/v0` export. */
 export const AGENT_RP_EXTENSION_API_VERSION = 0 as const
 
 export {

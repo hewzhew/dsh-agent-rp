@@ -9,7 +9,7 @@ const agentRpComposition = `
     agentRp.actorRevisions: true
   config:
     - id: agent-rp-character
-      name: '@dsh-external/dsh-agent-rp'
+      name: '@hewzhew/dsh-agent-rp'
       config:
         mode: character
 `

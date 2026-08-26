@@ -38,7 +38,7 @@ export interface AgentPresetGateway {
  */
 export function isAgentRpCapabilityComposition(source: string): boolean {
   const normalized = source.replace(/\r\n?|\n/gu, '\n')
-  const packageRow = /(?:^|\n)[ \t]*name:[ \t]*(?:['"])?@dsh-external\/dsh-agent-rp(?:['"])?[ \t]*(?:#.*)?(?:\n|$)/u.exec(normalized)
+  const packageRow = /(?:^|\n)[ \t]*name:[ \t]*(?:['"])?@hewzhew\/dsh-agent-rp(?:['"])?[ \t]*(?:#.*)?(?:\n|$)/u.exec(normalized)
   if (packageRow === null) return false
   const runtimeTail = normalized.slice(packageRow.index, packageRow.index + 2_000)
   return /(?:^|\n)[ \t]*mode:[ \t]*character[ \t]*(?:#.*)?(?:\n|$)/u.test(runtimeTail)

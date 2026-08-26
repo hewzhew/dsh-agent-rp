@@ -166,7 +166,7 @@ interface SharedStExtensionGenerationDirectory {
   readonly coordinators: Set<StExtensionGenerationCoordinator>
 }
 
-const DIRECTORY_SYMBOL = Symbol.for('@dsh-external/dsh-agent-rp/st-extension-generation-directory/v0')
+const DIRECTORY_SYMBOL = Symbol.for('@hewzhew/dsh-agent-rp/st-extension-generation-directory/v0')
 
 function sharedDirectory(): SharedStExtensionGenerationDirectory {
   const existing = Reflect.get(globalThis, DIRECTORY_SYMBOL) as SharedStExtensionGenerationDirectory | undefined

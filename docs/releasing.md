@@ -1,6 +1,6 @@
 # Prerelease publication
 
-Agent RP publishes npm prereleases as `@dsh-external/dsh-agent-rp` under the `next` dist-tag. A published version is immutable; a bad release is deprecated and `next` is moved back to a known-good version instead of overwriting or routinely unpublishing it.
+Agent RP publishes npm prereleases as `@hewzhew/dsh-agent-rp` under the `next` dist-tag. A published version is immutable; a bad release is deprecated and `next` is moved back to a known-good version instead of overwriting or routinely unpublishing it.
 
 ## Release policy
 

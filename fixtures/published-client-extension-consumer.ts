@@ -3,7 +3,7 @@ import {
   AGENT_RP_ST_EXTENSION_SERVICE,
   AGENT_RP_WORKBENCH_SECTION_SLOT,
   type AgentRpWorkbenchSectionProps,
-} from '@dsh-external/dsh-agent-rp/client-extension/v0'
+} from '@hewzhew/dsh-agent-rp/client-extension/v0'
 
 /** DSH client services required by the independent fixture plugin. */
 export const inject = ['slots', AGENT_RP_ST_EXTENSION_SERVICE]

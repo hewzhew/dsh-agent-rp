@@ -2,7 +2,7 @@
 
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
-/** The API version encoded by the `@dsh-external/dsh-agent-rp/client-extension/v0` export. */
+/** The API version encoded by the `@hewzhew/dsh-agent-rp/client-extension/v0` export. */
 export const AGENT_RP_CLIENT_EXTENSION_API_VERSION = 0 as const
 
 /** Ordered external sections rendered inside the Agent RP sidebar workbench. */

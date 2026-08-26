@@ -69,13 +69,13 @@ if (!existsSync(manifest)) {
   process.exit(0)
 }
 const profile = JSON.parse(readFileSync(manifest, 'utf8'))
-if (typeof profile.dependencies?.['@dsh-external/dsh-agent-rp'] !== 'string') {
+if (typeof profile.dependencies?.['@hewzhew/dsh-agent-rp'] !== 'string') {
   process.stdout.write('未安装')
   process.exit(0)
 }
 try {
   const requireFromProfile = createRequire(manifest)
-  const installed = JSON.parse(readFileSync(requireFromProfile.resolve('@dsh-external/dsh-agent-rp/package.json'), 'utf8'))
+  const installed = JSON.parse(readFileSync(requireFromProfile.resolve('@hewzhew/dsh-agent-rp/package.json'), 'utf8'))
   process.stdout.write(`已安装 ${installed.version ?? '未知版本'}`)
 } catch {
   process.stdout.write('已登记，但依赖未就绪')

@@ -76,7 +76,7 @@ const client: UserConfig = {
   }],
   outputOptions: {
     entryFileNames: 'client.js',
-    banner: 'window.__ModuleLoader__.load({ id: "@dsh-external/dsh-agent-rp", factory: (require) => {',
+    banner: 'window.__ModuleLoader__.load({ id: "@hewzhew/dsh-agent-rp", factory: (require) => {',
     footer: 'return module.exports; } });',
     intro: 'var module = { exports: {} }; var exports = module.exports;',
   },

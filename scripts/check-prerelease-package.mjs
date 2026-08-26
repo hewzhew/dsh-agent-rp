@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const PACKAGE_NAME = '@dsh-external/dsh-agent-rp'
+const PACKAGE_NAME = '@hewzhew/dsh-agent-rp'
 const REGISTRY = 'https://registry.npmjs.org/'
 const VERSION_PATTERN = /^0\.0\.0-rc\.(?:0|[1-9]\d*)$/u
 const EXPECTED_FILES = [

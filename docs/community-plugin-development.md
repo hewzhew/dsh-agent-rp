@@ -14,14 +14,14 @@ Agent RP 为受信 DSH 插件分别发布 Host 与浏览器扩展面。扩展插
 
 ## 浏览器工作台扩展
 
-`@dsh-external/dsh-agent-rp/client-extension/v0` 声明 `agent-rp.workbench.section` 列表 Slot。它位于侧栏的 Agent RP 工作台，现代 `sidebar.destinations` 与旧版 `sidebar.footer.action` 入口共用同一个声明。外部插件必须通过 `ctx.slots.inject()` 等待 Agent RP 声明 Slot，不能依赖客户端 bundle 的下载或执行顺序。
+`@hewzhew/dsh-agent-rp/client-extension/v0` 声明 `agent-rp.workbench.section` 列表 Slot。它位于侧栏的 Agent RP 工作台，现代 `sidebar.destinations` 与旧版 `sidebar.footer.action` 入口共用同一个声明。外部插件必须通过 `ctx.slots.inject()` 等待 Agent RP 声明 Slot，不能依赖客户端 bundle 的下载或执行顺序。
 
 ```ts
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   AGENT_RP_WORKBENCH_SECTION_SLOT,
   type AgentRpWorkbenchSectionProps,
-} from '@dsh-external/dsh-agent-rp/client-extension/v0'
+} from '@hewzhew/dsh-agent-rp/client-extension/v0'
 
 export const inject = ['slots']
 
@@ -53,7 +53,7 @@ export function apply(ctx: ClientContext): void {
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   AGENT_RP_ST_EXTENSION_SERVICE,
-} from '@dsh-external/dsh-agent-rp/client-extension/v0'
+} from '@hewzhew/dsh-agent-rp/client-extension/v0'
 
 export const inject = [AGENT_RP_ST_EXTENSION_SERVICE]
 
@@ -77,7 +77,7 @@ export function apply(ctx: ClientContext): void {
 
 ## Host 扩展
 
-`@dsh-external/dsh-agent-rp/extension/v0` 提供资源、运行时模块、回合 Worker、角色修订与 Tavern 预检注册。Host 插件应把使用的 Agent RP 服务键加入 Cordis `inject`，再在 `apply()` 中调用对应注册函数；注册函数使用调用方的 effect 生命周期，插件卸载时会撤销贡献。
+`@hewzhew/dsh-agent-rp/extension/v0` 提供资源、运行时模块、回合 Worker、角色修订与 Tavern 预检注册。Host 插件应把使用的 Agent RP 服务键加入 Cordis `inject`，再在 `apply()` 中调用对应注册函数；注册函数使用调用方的 effect 生命周期，插件卸载时会撤销贡献。
 
 回合 Worker 仍需把模型可见请求和结果写入 Session。运行时解析器只能从不可变 Session 事件生成绑定；浏览器工作台 Slot 不能替代 Host 事件、权限或重放记录。
 

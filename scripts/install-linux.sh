@@ -10,7 +10,7 @@ RUNNER_SOURCE_BASE="${RUNNER_SOURCE_BASE:-https://raw.githubusercontent.com/hewz
 REGISTRY="${REGISTRY:-}"
 AGENT_HOST_PORT="${AGENT_HOST_PORT:-3080}"
 
-PLUGIN_PACKAGE_NAME='@dsh-external/dsh-agent-rp'
+PLUGIN_PACKAGE_NAME='@hewzhew/dsh-agent-rp'
 AGENT_HOST_VERSION='0.1.1-rc.2'
 MINIMUM_PNPM_MAJOR=11
 RUNNER_FILES=(

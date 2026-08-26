@@ -10,7 +10,7 @@ Agent 模式将一轮拆成职责隔离、顺序固定的模型阶段。角色 A
 
 Worker 注册表按 `review`、`settle` 阶段和稳定顺序串行执行。单个 Worker 返回 `applied`、`unchanged`、`skipped` 或 `failed`；异常被隔离，后续 Worker 仍会运行。第一版不让模型动态生成任务图，也不要求尚未进入当前 DSH 正式包的 Subagent API。
 
-受信 Host 插件可以从 `@dsh-external/dsh-agent-rp/extension/v0` 导入 `registerRoleplayTurnWorker`，注册稳定 id、阶段、顺序和 `run()`。这是进程内插件扩展点，不向角色卡或隔离脚本开放 Host 对象；第三方 Worker 仍应把模型可见请求和结果写入 Session，而不能只保存在进程内存中。
+受信 Host 插件可以从 `@hewzhew/dsh-agent-rp/extension/v0` 导入 `registerRoleplayTurnWorker`，注册稳定 id、阶段、顺序和 `run()`。这是进程内插件扩展点，不向角色卡或隔离脚本开放 Host 对象；第三方 Worker 仍应把模型可见请求和结果写入 Session，而不能只保存在进程内存中。
 
 正文审阅使用当前会话的模型提供方，但强制关闭推理并使用独立的短 system prompt。请求只包含待审阅回复，不包含酒馆预设、世界书或完整聊天历史。审阅失败或返回不可用内容时保留角色 Agent 原文。审阅成功时，原文与审阅版进入同一个回复版本组，玩家可以用回复版本切换器恢复原文。
 

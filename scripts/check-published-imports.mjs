@@ -51,7 +51,7 @@ if (hostSource.includes('"use asm"')) {
   throw new Error('Published Host bundle must not transform the es-module-lexer asm.js implementation')
 }
 
-const extension = await import('@dsh-external/dsh-agent-rp/extension/v0')
+const extension = await import('@hewzhew/dsh-agent-rp/extension/v0')
 for (const name of [
   'AGENT_RP_EXTENSION_API_VERSION',
   'registerRoleplayResourceProvider',
@@ -64,7 +64,7 @@ if (extension.AGENT_RP_EXTENSION_API_VERSION !== 0) {
   throw new Error('Published extension/v0 reports the wrong API version')
 }
 
-const clientExtension = await import('@dsh-external/dsh-agent-rp/client-extension/v0')
+const clientExtension = await import('@hewzhew/dsh-agent-rp/client-extension/v0')
 for (const name of ['AGENT_RP_CLIENT_EXTENSION_API_VERSION', 'AGENT_RP_WORKBENCH_SECTION_SLOT']) {
   if (!(name in clientExtension)) throw new Error(`Published client-extension/v0 export is missing ${name}`)
 }
