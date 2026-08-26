@@ -76,6 +76,10 @@ test('admits local text decoration while keeping document and resource HTML on t
   assert.equal(isNativeMessageInlineHtml('<span style="color:var(--accent)!important">藤子</span>'), true)
   assert.equal(isNativeMessageInlineHtml('<span onclick="run()">藤子</span>'), false)
   assert.equal(isNativeMessageInlineHtml('<span style="background:url(https://example.com/x)">藤子</span>'), false)
+  assert.equal(isNativeMessageInlineHtml('<span style="color:red&#59;position:fixed">藤子</span>'), false)
+  assert.equal(isNativeMessageInlineHtml(
+    '<span style="color:red&#59;background:u&#114;l&#40;https://example.com/x&#41;">藤子</span>',
+  ), false)
   assert.equal(isNativeMessageInlineHtml('<a href="https://example.com/">藤子</a>'), false)
   assert.equal(isNativeMessageInlineHtml('<span href="https://example.com/">藤子</span>'), false)
   assert.equal(isNativeMessageInlineHtml('<div style="position:fixed">藤子</div>'), false)

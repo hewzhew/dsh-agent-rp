@@ -6,6 +6,6 @@ DSH 的 `conversation.chat.userText` 与 `conversation.chat.assistantText` chain
 
 每次投影更新会从 Host Chat snapshot 与 Tavern transcript 构造一个不可变的 Session 激活表。表以 `sessionId + nodeKey` 定位用户正文，以 `sessionId + nodeKey + blockIndex` 定位 Assistant 正文，并记录生成它的原始文本；selector 只读取 owner、scope 与闭包中的这份不可变表，文本或 Session 不一致时立即 decline。导入聊天中不能按 durable seq 对齐的消息只在完整可见角色顺序一致时按顺序绑定，避免把正则结果交给错误消息。
 
-纯 Markdown 与不加载资源、不声明文档样式、不接管布局的局部文字装饰走原生 chain。`<span style="color:…">`、旧式 `<font color="…">` 和同类局部排版会直接继承 Host 消息主题；`<style>`、自定义元素、图片、表单、事件、脚本、远程资源和完整文档仍进入既有 iframe。原生 eligibility 同时检查正则输出和 Markdown 解析后的实际 HTML；粗体、行内代码与删除线等可完整保留的语义仍可和局部装饰混用，链接、图片、列表、引用、标题与代码块等当前原生允许集不能无损表示的结构会整条进入兼容 renderer，不会经过清洗后静默丢失。旧 Host 没有正文 chain 时，声明感知注册保持等待，原 DOM 适配器继续执行相同显示计划；新 Host 上 DOM 适配器仍负责隐藏回复版本、旧会话提示、设定消息折叠和复杂 iframe，并在发现原生 marker 时撤下旧替换。
+纯 Markdown 与不加载资源、不声明文档样式、不接管布局的局部文字装饰走原生 chain。`<span style="color:…">`、旧式 `<font color="…">` 和同类局部排版会直接继承 Host 消息主题；`<style>`、自定义元素、图片、表单、事件、脚本、远程资源和完整文档仍进入既有 iframe。原生 eligibility 同时检查正则输出和 Markdown 解析后的实际 HTML；粗体、行内代码与删除线等可完整保留的语义仍可和局部装饰混用，链接、图片、列表、引用、标题与代码块等当前原生允许集不能无损表示的结构会整条进入兼容 renderer，不会经过清洗后静默丢失。原生 style 值拒绝 HTML 字符引用，防止浏览器解码后增加新的 CSS 声明或资源引用。旧 Host 没有正文 chain 时，声明感知注册保持等待，原 DOM 适配器继续执行相同显示计划；新 Host 上 DOM 适配器仍负责隐藏回复版本、旧会话提示、设定消息折叠和复杂 iframe，并在发现原生 marker 时撤下旧替换。
 
 迁移验收覆盖同一输入在 DOM 与原生适配器下得到相同显示计划、关闭规则后恢复 Host 正文、回复版本切换、用户与 Assistant 正则深度、脚本 `refreshOneMessage` 覆盖、Session 与文本防串线、流式 Assistant decline、推理和多文本 block 保留旧路径，以及复杂前端继续进入既有 iframe。Agent RP 不复制 DSH 的完整消息组件。

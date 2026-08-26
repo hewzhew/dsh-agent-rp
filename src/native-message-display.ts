@@ -30,7 +30,7 @@ export interface NativeMessageDisplay {
 }
 
 function nativeStyle(value: string): boolean {
-  if (value.length > 1_024 || /(?:url\s*\(|expression\s*\(|@|[{}\\])/iu.test(value)) return false
+  if (value.length > 1_024 || /(?:url\s*\(|expression\s*\(|[&@{}\\])/iu.test(value)) return false
   const declarations = value.split(';').map(item => item.trim()).filter(Boolean)
   if (declarations.length === 0 || declarations.length > 16) return false
   return declarations.every(declaration => {
