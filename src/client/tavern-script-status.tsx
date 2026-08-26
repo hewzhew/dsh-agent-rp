@@ -7,6 +7,7 @@ import type { TavernScriptTreeScope } from '../tavern-helper.ts'
 import type { TavernScriptRuntimePhase } from './tavern-runtime.ts'
 
 const MAX_LOCAL_ERROR_LENGTH = 2_000
+const MAX_FAILURE_LABEL_LENGTH = 240
 const MAX_FAILURE_REPORT_LENGTH = 64 * 1024
 
 /** One script's local, player-visible lifecycle status. */
@@ -37,7 +38,9 @@ function phaseLabel(phase: TavernScriptRuntimePhase): string {
   }
 }
 
-function failed(phase: TavernScriptRuntimePhase): boolean {
+function failed(
+  phase: TavernScriptRuntimePhase,
+): phase is Extract<TavernScriptRuntimePhase, 'load-error' | 'runtime-error'> {
   return phase === 'load-error' || phase === 'runtime-error'
 }
 
@@ -47,9 +50,46 @@ function boundedError(error: string): string {
     : `${error.slice(0, MAX_LOCAL_ERROR_LENGTH)}…`
 }
 
+function boundedLabel(value: string, fallback: string): string {
+  const normalized = value.replace(/\s+/gu, ' ').trim() || fallback
+  return normalized.length <= MAX_FAILURE_LABEL_LENGTH
+    ? normalized
+    : `${normalized.slice(0, MAX_FAILURE_LABEL_LENGTH)}…`
+}
+
+/** Structured local details for one failed Tavern Helper script. */
+export interface TavernScriptFailureDetail {
+  readonly key: string
+  readonly name: string
+  readonly scope: TavernScriptTreeScope
+  readonly phase: Extract<TavernScriptRuntimePhase, 'load-error' | 'runtime-error'>
+  readonly error: string
+  readonly errorLength: number
+  readonly errorTruncated: boolean
+}
+
+/** Collect every currently available failed-script detail with bounded string values. */
+export function tavernScriptFailureDetails(
+  entries: readonly TavernScriptStatusEntry[],
+): readonly TavernScriptFailureDetail[] {
+  return entries.flatMap(entry => {
+    if (!failed(entry.phase)) return []
+    const error = entry.error ?? '未提供本地错误'
+    return [{
+      key: boundedLabel(entry.key, 'unknown'),
+      name: boundedLabel(entry.name, '未命名脚本'),
+      scope: entry.scope,
+      phase: entry.phase,
+      error: boundedError(error),
+      errorLength: error.length,
+      errorTruncated: error.length > MAX_LOCAL_ERROR_LENGTH,
+    }]
+  })
+}
+
 /** Build an explicitly requested local report that includes failed script names and errors. */
 export function tavernScriptFailureReport(entries: readonly TavernScriptStatusEntry[]): string | undefined {
-  const failures = entries.filter(entry => failed(entry.phase))
+  const failures = tavernScriptFailureDetails(entries)
   if (failures.length === 0) return undefined
   const report = [
     'Agent RP 酒馆脚本失败详情',
@@ -57,11 +97,12 @@ export function tavernScriptFailureReport(entries: readonly TavernScriptStatusEn
     `失败数: ${failures.length}`,
     '',
     ...failures.flatMap((entry, index) => [
-      `[${index + 1}] ${entry.name.trim() || '未命名脚本'}`,
+      `[${index + 1}] ${entry.name}`,
       `范围: ${scopeLabel(entry.scope)}`,
       `阶段: ${phaseLabel(entry.phase)}`,
       '错误:',
       boundedError(entry.error ?? '未提供本地错误'),
+      ...(entry.errorTruncated ? [`错误已截断: 是（原始长度 ${entry.errorLength} 字符）`] : []),
       '',
     ]),
   ].join('\n').trimEnd()

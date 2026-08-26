@@ -1,7 +1,7 @@
 /** Deterministic activation of the safe Character Card lorebook subset. */
 
 import type { ImportedLorebook, ImportedLorebookEntry } from './types.ts'
-import type { EjsTemplateResult, EjsTemplateTarget } from '../ejs-template.ts'
+import type { EjsTemplateErrorDetail, EjsTemplateResult, EjsTemplateTarget } from '../ejs-template.ts'
 
 /** Runtime result of selecting lorebook entries for one prompt. */
 export interface ActiveLorebook {
@@ -46,6 +46,7 @@ export interface LorebookEntryActivation {
   readonly matchedSecondaryKeys: readonly string[]
   readonly approximateTokens: number
   readonly template?: 'rendered' | Exclude<EjsTemplateResult, { readonly ok: true }>['kind']
+  readonly templateError?: EjsTemplateErrorDetail
   /** Resolved prompt text retained only for collection-level budgeting and assembly. */
   readonly resolvedContent: string
 }
@@ -112,6 +113,7 @@ interface CandidateDecision {
   readonly matchedSecondaryKeys: readonly string[]
   readonly content: string
   readonly template?: LorebookEntryActivation['template']
+  readonly templateError?: LorebookEntryActivation['templateError']
 }
 
 function includesKey(text: string, key: string, caseSensitive: boolean, matchWholeWords: boolean): boolean {
@@ -277,6 +279,7 @@ function candidate(
       candidate: false,
       reason: 'template-error',
       template: rendered.kind,
+      ...(rendered.error === undefined ? {} : { templateError: rendered.error }),
     }
     content = rendered.text
     template = 'rendered'
@@ -387,6 +390,7 @@ function inspectLorebookWithMatcher(
     matchedSecondaryKeys: decision.matchedSecondaryKeys,
     approximateTokens: approximateTokens(decision.content),
     ...(decision.template === undefined ? {} : { template: decision.template }),
+    ...(decision.templateError === undefined ? {} : { templateError: decision.templateError }),
     resolvedContent: decision.content,
   }))
   const active = activeContent(book, entries)

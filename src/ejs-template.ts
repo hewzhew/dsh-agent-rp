@@ -102,10 +102,21 @@ export type EjsTemplateFailureKind =
   | 'resource-unsupported'
   | 'resource-limit'
 
+/** JSON-safe error returned by the isolated EJS runtime for explicit local Debug reports. */
+export interface EjsTemplateErrorDetail {
+  readonly name?: string
+  readonly message: string
+  readonly stack?: string
+}
+
 /** Result of one isolated template evaluation. */
 export type EjsTemplateResult =
   | { readonly ok: true; readonly text: string }
-  | { readonly ok: false; readonly kind: EjsTemplateFailureKind }
+  | {
+    readonly ok: false
+    readonly kind: EjsTemplateFailureKind
+    readonly error?: EjsTemplateErrorDetail
+  }
 
 interface TemplateSegment {
   readonly kind: 'text' | 'code' | 'escaped' | 'raw'
@@ -463,6 +474,34 @@ function failureKind(value: unknown): EjsTemplateFailureKind {
   return 'runtime-error'
 }
 
+function templateErrorDetail(value: unknown): EjsTemplateErrorDetail | undefined {
+  if (typeof value === 'object' && value !== null) {
+    const record = value as { readonly name?: unknown; readonly message?: unknown; readonly stack?: unknown }
+    const name = typeof record.name === 'string' && record.name.trim() !== '' ? record.name : undefined
+    const message = typeof record.message === 'string' && record.message !== '' ? record.message : undefined
+    const stack = typeof record.stack === 'string' && record.stack !== '' ? record.stack : undefined
+    if (message !== undefined) return {
+      ...(name === undefined ? {} : { name }),
+      message,
+      ...(stack === undefined ? {} : { stack }),
+    }
+  }
+  if (typeof value === 'string' && value !== '') return { message: value }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return { message: String(value) }
+  }
+  return undefined
+}
+
+function templateFailure(value: unknown): Extract<EjsTemplateResult, { readonly ok: false }> {
+  const error = templateErrorDetail(value)
+  return {
+    ok: false,
+    kind: failureKind(value),
+    ...(error === undefined ? {} : { error }),
+  }
+}
+
 interface ParsedRegexPattern {
   readonly source: string
   readonly flags: string
@@ -633,7 +672,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
       if (errorHandle !== undefined) {
         const error = vm.dump(errorHandle)
         errorHandle.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       const promiseHandle = result.value
       if (promiseHandle === undefined) return { ok: false, kind: 'runtime-error' }
@@ -644,7 +683,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
         jobError.dispose()
         jobs.dispose()
         promiseHandle.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       jobs.dispose()
       const settled = vm.getPromiseState(promiseHandle)
@@ -653,7 +692,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
       if (settled.type === 'rejected') {
         const error = vm.dump(settled.error)
         settled.error.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       const value = vm.dump(settled.value)
       settled.value.dispose()
@@ -661,7 +700,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
         ? { ok: true, text: value }
         : { ok: false, kind: 'runtime-error' }
     } catch (error) {
-      return { ok: false, kind: failureKind(error) }
+      return templateFailure(error)
     } finally {
       vm.dispose()
       runtime.dispose()

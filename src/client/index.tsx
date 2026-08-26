@@ -165,6 +165,10 @@ import {
   installAgentRpBrowserCompatibilityDiagnostic,
 } from './compatibility-diagnostic.ts'
 import {
+  collectAgentRpCopiedDiagnostic,
+  serializeAgentRpCopiedDiagnostic,
+} from './debug-diagnostic-report.ts'
+import {
   AgentRpRuntimeDiagnosticRegistry,
   createAgentRpRuntimeDiagnosticSource,
   installAgentRpRuntimeDiagnostic,
@@ -590,6 +594,7 @@ interface PreparedChatMigration {
 
 type HeaderProps = PropsRuntime<'conversation.session.header.actions'> & {
   readonly runtimeDiagnostics: AgentRpRuntimeDiagnosticRegistry
+  readonly workspaceSettings: WorkspaceSettingsSource
   readonly loadAvatar: (attachmentId: string) => Promise<string | undefined>
   readonly renameSession: (sessionId: SessionId, title: string) => Promise<void>
   readonly configurePreset: (sessionId: SessionId, request: PresetConfigurationRequest) => Promise<void>
@@ -3976,6 +3981,27 @@ function WorkspaceSettingsSection({
         </div>
       </div>
     </details>
+    <section style={{
+      border: '1px solid var(--dsw-alias-border-l2, #3d3d43)', borderRadius: '12px', marginBottom: '22px',
+      padding: '14px',
+    }}>
+      <h3 style={{ fontSize: '13px', margin: '0 0 7px' }}>诊断 Debug</h3>
+      <label style={{
+        alignItems: 'flex-start', cursor: writable ? 'pointer' : 'default', display: 'flex', gap: '10px',
+      }}>
+        <input type="checkbox" checked={settings.debug.enabled} disabled={!writable} onChange={event => {
+          write({ ...settings, debug: { enabled: event.target.checked } })
+        }} />
+        <span>
+          <strong style={{ display: 'block', fontSize: '13px', fontWeight: 580 }}>
+            在诊断复制中包含完整错误信息
+          </strong>
+          <span style={{ display: 'block', fontSize: '12px', lineHeight: 1.55, marginTop: '3px', opacity: .56 }}>
+            开启后，“复制诊断”会包含失败脚本和世界书错误，世界书“复制失败详情”还会包含 EJS 错误名称、消息和调用栈。错误消息可能包含模板运行时值；报告超过长度上限时会明确标记截断。诊断不会自动上传。
+          </span>
+        </span>
+      </label>
+    </section>
     <NativeIdentitySettingsPanel />
     <TurnWorkerSettingsPanel settings={settings} writable={writable} onSave={write} loadModelCatalog={loadModelCatalog} />
     <ToolStrategySettingsPanel settings={settings} writable={writable} onSave={write} />
@@ -4162,10 +4188,16 @@ function RoleplayHeader({
   startCharacterSession, exportChat,
   listMemory, manageMemory, manageState, manageTurnMode,
   listPresets, listPersonas, savePersona, deletePersona, applyPersona, loadModelCapabilities, runtimeDiagnostics,
+  workspaceSettings,
 }: HeaderProps) {
   const summary = useSessions(state => state.byId[sessionId])
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
+  const debugEnabled = useSyncExternalStore(
+    workspaceSettings.subscribe,
+    workspaceSettings.getSnapshot,
+    workspaceSettings.getSnapshot,
+  ).value.debug.enabled
   const [open, setOpen] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
@@ -4587,6 +4619,7 @@ function RoleplayHeader({
           onLibrary={request => managePresetLibrary(sessionId, request)}
         />)}
     {worldInfoOpen && <WorldInfoManagerDialog
+      debugEnabled={debugEnabled}
       worldInfo={projection.worldInfo}
       onClose={() => { setWorldInfoOpen(false) }}
       listWorldInfos={listWorldInfos}
@@ -5083,7 +5116,8 @@ function WorldInfoLibraryAttachDialog({ books, listWorldInfos, onAttach, onClose
   </div>
 }
 
-function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, onImport, onSave }: {
+function WorldInfoManagerDialog({ debugEnabled, worldInfo, listWorldInfos, onAttach, onClose, onImport, onSave }: {
+  readonly debugEnabled: boolean
   readonly worldInfo: WorldInfoProjection
   readonly listWorldInfos: HeaderProps['listWorldInfos']
   readonly onAttach: (importId: string) => Promise<void>
@@ -5122,7 +5156,7 @@ function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, 
   const enabledCount = allEntries.filter(candidate => candidate.enabled && !candidate.deleted).length
   const blockedCount = allEntries.filter(candidate => !candidate.deleted
     && (candidate.compatibilityBlockers.length > 0 || candidate.hasDecorators)).length
-  const failureReport = worldInfoFailureReport(worldInfo.books)
+  const failureReport = worldInfoFailureReport(worldInfo.books, { includeDebugErrors: debugEnabled })
   useEffect(() => { setCopyFailureNotice(undefined) }, [failureReport])
   const mutate = (request: WorldInfoConfigurationRequest, after?: () => void): void => {
     setSaving(true)
@@ -5178,7 +5212,9 @@ function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, 
           {importing ? '导入中…' : '从文件导入'}
         </button>
         {failureReport !== undefined && <button type="button" data-agent-rp-world-info-copy-failures
-          title="复制包含世界书名、条目标识和稳定失败类别的详情；发送前请检查内容"
+          title={debugEnabled
+            ? '复制包含世界书标识、失败类别和 EJS 运行时错误的详情；发送前请检查内容'
+            : '复制包含世界书名、条目标识和稳定失败类别的详情；开启全局 Debug 后可包含 EJS 运行时错误'}
           onClick={() => {
             if (navigator.clipboard === undefined) {
               setCopyFailureNotice('无法复制')
@@ -9192,11 +9228,12 @@ function TavernStatusPanels({ projection }: { readonly projection: AgentRpProjec
 }
 
 function TavernScriptRuntime({
-  characterDisplayRegexScripts, ctx, inputActions, onCompatibilityMarkersChange, onDisplayOverride, projection, runGeneration, runModelList, runMutation,
+  characterDisplayRegexScripts, ctx, debugEnabled, inputActions, onCompatibilityMarkersChange, onDisplayOverride, projection, runGeneration, runModelList, runMutation,
   runPresetConfiguration, runPromptPreview, runTrigger, sessionId, runtimeDiagnostics,
 }: {
   readonly characterDisplayRegexScripts?: readonly ImportedRegexScript[]
   readonly ctx: Context
+  readonly debugEnabled: boolean
   readonly inputActions: ComposerDockProps['inputActions']
   readonly onCompatibilityMarkersChange: (markers: readonly string[]) => void
   readonly onDisplayOverride: (scriptId: string, messageId: number, value: string) => void
@@ -11085,7 +11122,9 @@ function TavernScriptRuntime({
               textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>{entry.script.name || '未命名脚本'}</button>)}
           </div>
-          <button type="button" aria-live="polite" title="复制不含角色名、正文、脚本源码和 URL 的兼容诊断" onClick={() => {
+          <button type="button" aria-live="polite" title={debugEnabled
+            ? '复制包含失败脚本和世界书错误详情的兼容诊断；发送前请检查内容'
+            : '复制不含角色名、正文、脚本源码和 URL 的兼容诊断'} onClick={() => {
             if (navigator.clipboard === undefined) {
               setDiagnosticNotice('无法复制')
               return
@@ -11099,10 +11138,15 @@ function TavernScriptRuntime({
                 ...snapshot,
                 session: { ...snapshot.session, turns },
               }
-              const report = JSON.stringify(collectAgentRpBrowserCompatibilitySnapshot(
+              const snapshotWithChecks = collectAgentRpBrowserCompatibilitySnapshot(
                 document,
                 withTurns,
-              ), null, 2)
+              )
+              const report = serializeAgentRpCopiedDiagnostic(collectAgentRpCopiedDiagnostic(snapshotWithChecks, {
+                debugEnabled,
+                tavernScripts: localScriptStatuses,
+                worldInfoBooks: projection.worldInfo.books,
+              }))
               return navigator.clipboard.writeText(report)
             }).then(() => {
               setDiagnosticNotice('诊断已复制')
@@ -11203,6 +11247,7 @@ const chipStyle = {
 function roleplayComposerDockComponent(
   ctx: Context,
   runtimeDiagnostics: AgentRpRuntimeDiagnosticRegistry,
+  workspaceSettings: WorkspaceSettingsSource,
   runImageGeneration: RunImageGeneration,
   runTavernMutation: RunTavernMutation,
   runTavernGeneration: RunTavernGeneration,
@@ -11218,6 +11263,11 @@ function roleplayComposerDockComponent(
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
   const chat = useSession(state => state.chat)
+  const debugEnabled = useSyncExternalStore(
+    workspaceSettings.subscribe,
+    workspaceSettings.getSnapshot,
+    workspaceSettings.getSnapshot,
+  ).value.debug.enabled
   const viewMode = useRoleplayViewMode(sessionId)
   const [drawOpen, setDrawOpen] = useState(false)
   const [displayOverrides, setDisplayOverrides] = useState<ReadonlyMap<number, string>>(() => new Map())
@@ -12339,7 +12389,7 @@ function roleplayComposerDockComponent(
           </>}
       </div>
     </section></div>}
-    <TavernScriptRuntime key={sessionId} ctx={ctx} inputActions={inputActions}
+    <TavernScriptRuntime key={sessionId} ctx={ctx} debugEnabled={debugEnabled} inputActions={inputActions}
       {...(storedCharacterRuntime === undefined ? {} : { characterDisplayRegexScripts: storedCharacterRuntime.displayRegexScripts })}
       runtimeDiagnostics={runtimeDiagnostics}
       onCompatibilityMarkersChange={onCompatibilityMarkersChange} onDisplayOverride={onDisplayOverride} projection={projection}
@@ -13304,7 +13354,7 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions', id: 'agent-rp-character-header', order: -100,
-  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} loadAvatar={loadAvatar} renameSession={renameSession} configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset} managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo} attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters} readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter} importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration} prepareRpDistributionChatMigration={prepareRpDistributionChatMigration} launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory} manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode} startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks} importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack} listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona} deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
+  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} workspaceSettings={workspaceSettings} loadAvatar={loadAvatar} renameSession={renameSession} configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset} managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo} attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters} readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter} importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration} prepareRpDistributionChatMigration={prepareRpDistributionChatMigration} launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory} manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode} startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks} importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack} listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona} deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'agent-rp',
@@ -13409,7 +13459,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
     name: 'conversation.composer.dock', id: 'agent-rp-status', order: -100,
   }, roleplayComposerDockComponent(
-    ctx, runtimeDiagnostics, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
+    ctx, runtimeDiagnostics, workspaceSettings, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
     runTavernTrigger, configurePreset,
   )))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({

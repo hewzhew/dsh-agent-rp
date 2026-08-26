@@ -105,6 +105,10 @@ export interface AgentRpSettings {
   readonly toolGuidance: ResolvedToolGuidanceConfig
   /** Independent model workers run after the character Agent finishes its visible reply. */
   readonly turnWorkers: RoleplayTurnWorkerSettings
+  /** Controls whether user-requested copied diagnostics include local error details. */
+  readonly debug: {
+    readonly enabled: boolean
+  }
 }
 
 /** Workspace policy for the first deterministic multi-Agent turn pipeline. */
@@ -194,6 +198,7 @@ export const DEFAULT_AGENT_RP_SETTINGS: AgentRpSettings = {
     narrativeReview: { enabled: false },
     stateVerification: { model: null },
   },
+  debug: { enabled: false },
 }
 
 function text(value: unknown, fallback: string, max: number, label: string): string {
@@ -376,6 +381,16 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
   }
   const imageGeneration = normalizeImageGenerationSettings(record.imageGeneration)
   const toolGuidance = normalizeToolGuidanceConfig(record.toolGuidance)
+  const debugRecord = record.debug
+  if (debugRecord !== undefined
+    && (typeof debugRecord !== 'object' || debugRecord === null || Array.isArray(debugRecord))) {
+    throw new Error('Agent RP Debug 设置无效')
+  }
+  const debugEnabled = bool(
+    (debugRecord as Record<string, unknown> | undefined)?.enabled,
+    DEFAULT_AGENT_RP_SETTINGS.debug.enabled,
+    'Agent RP Debug 开关',
+  )
   const turnWorkersRecord = record.turnWorkers
   if (turnWorkersRecord !== undefined
     && (typeof turnWorkersRecord !== 'object' || turnWorkersRecord === null || Array.isArray(turnWorkersRecord))) {
@@ -455,6 +470,7 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
       narrativeReview: { enabled: narrativeReviewEnabled },
       stateVerification: { model: normalizedStateVerificationModel },
     },
+    debug: { enabled: debugEnabled },
   }
 }
 

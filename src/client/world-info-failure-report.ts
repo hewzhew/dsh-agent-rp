@@ -1,6 +1,6 @@
 /** Player-requested local report for World Info evaluation failures. */
 
-import type { EjsTemplateFailureKind } from '../ejs-template.ts'
+import type { EjsTemplateErrorDetail, EjsTemplateFailureKind } from '../ejs-template.ts'
 import type { LorebookActivationReason } from '../import/lorebook.ts'
 
 const MAX_REPORT_LABEL_LENGTH = 240
@@ -26,6 +26,7 @@ export interface WorldInfoFailureReportBook {
     readonly comment?: string
     readonly reason: LorebookActivationReason
     readonly template?: 'rendered' | EjsTemplateFailureKind
+    readonly templateError?: EjsTemplateErrorDetail
   }[]
 }
 
@@ -50,25 +51,62 @@ function sourceLabel(source: WorldInfoFailureReportBook['source']): string {
   return source === 'character' ? '角色卡' : '独立世界书'
 }
 
+/** Structured local details for one World Info evaluation failure. */
+export interface WorldInfoFailureDetail {
+  readonly bookName: string
+  readonly bookSource: WorldInfoFailureReportBook['source']
+  readonly entryName: string
+  readonly sourceId: string
+  readonly reason: WorldInfoFailureReason
+  readonly template?: Exclude<NonNullable<WorldInfoFailureReportBook['entries'][number]['template']>, 'rendered'>
+  readonly error?: EjsTemplateErrorDetail
+}
+
+/** Collect every currently available World Info failure with bounded identifiers. */
+export function worldInfoFailureDetails(
+  books: readonly WorldInfoFailureReportBook[],
+): readonly WorldInfoFailureDetail[] {
+  return books.flatMap(book => book.entries.flatMap(entry => {
+    if (!failureReason(entry.reason)) return []
+    const template = entry.reason === 'template-error' && entry.template !== undefined && entry.template !== 'rendered'
+      ? entry.template : undefined
+    return [{
+      bookName: boundedLabel(book.name, '未命名世界书'),
+      bookSource: book.source,
+      entryName: boundedLabel(entry.name ?? entry.comment ?? '', `条目 ${entry.sourceId}`),
+      sourceId: boundedLabel(entry.sourceId, '未知'),
+      reason: entry.reason,
+      ...(template === undefined ? {} : { template }),
+      ...(entry.templateError === undefined ? {} : { error: entry.templateError }),
+    }]
+  }))
+}
+
 /** Build a local report without copying entry content, keywords, expressions, or model-visible text. */
-export function worldInfoFailureReport(books: readonly WorldInfoFailureReportBook[]): string | undefined {
-  const failures = books.flatMap(book => book.entries
-    .filter(entry => failureReason(entry.reason))
-    .map(entry => ({ book, entry })))
+export function worldInfoFailureReport(
+  books: readonly WorldInfoFailureReportBook[],
+  options: { readonly includeDebugErrors?: boolean } = {},
+): string | undefined {
+  const failures = worldInfoFailureDetails(books)
   if (failures.length === 0) return undefined
+  const includeDebugErrors = options.includeDebugErrors === true
   const report = [
     'Agent RP 世界书失败详情',
-    '格式: agent-rp-world-info-failures-v0',
+    `格式: ${includeDebugErrors ? 'agent-rp-world-info-failures-debug-v0' : 'agent-rp-world-info-failures-v0'}`,
     `失败数: ${failures.length}`,
     '',
-    ...failures.flatMap(({ book, entry }, index) => [
-      `[${index + 1}] ${boundedLabel(entry.name ?? entry.comment ?? '', `条目 ${entry.sourceId}`)}`,
-      `世界书: ${boundedLabel(book.name, '未命名世界书')}`,
-      `来源: ${sourceLabel(book.source)}`,
-      `条目编号: ${boundedLabel(entry.sourceId, '未知')}`,
+    ...failures.flatMap((entry, index) => [
+      `[${index + 1}] ${entry.entryName}`,
+      `世界书: ${entry.bookName}`,
+      `来源: ${sourceLabel(entry.bookSource)}`,
+      `条目编号: ${entry.sourceId}`,
       `类别: ${entry.reason}`,
-      ...(entry.reason === 'template-error' && entry.template !== undefined && entry.template !== 'rendered'
-        ? [`细分: ${entry.template}`] : []),
+      ...(entry.template === undefined ? [] : [`细分: ${entry.template}`]),
+      ...(includeDebugErrors && entry.error !== undefined ? [
+        ...(entry.error.name === undefined ? [] : [`错误名称: ${entry.error.name}`]),
+        `错误消息: ${entry.error.message}`,
+        ...(entry.error.stack === undefined ? [] : ['调用栈:', entry.error.stack]),
+      ] : []),
       '',
     ]),
   ].join('\n').trimEnd()

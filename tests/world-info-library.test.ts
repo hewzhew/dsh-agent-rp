@@ -7,7 +7,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { readActiveSessionWorldInfos } from '../src/import/session-world-info.ts'
-import { agentRpProjectionDefinition } from '../src/projection.ts'
+import { EjsTemplateEngine } from '../src/ejs-template.ts'
+import { agentRpProjectionDefinition, createAgentRpProjectionDefinition } from '../src/projection.ts'
 import { WorldInfoLibrary } from '../src/world-info-library.ts'
 import { executeWorldInfoLibraryCommand } from '../src/world-info-library-command.ts'
 
@@ -71,6 +72,58 @@ test('imports Host-owned World Info through a private command without a model tu
   const projected = agentRpProjectionDefinition.wire.view(state)
   assert.equal(projected.worldInfo.books[0]?.name, '海城')
   assert.equal(projected.worldInfoCount, 1)
+})
+
+test('projects the isolated EJS runtime error for Debug-gated World Info reports', async context => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-rp-world-info-debug-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const library = new WorldInfoLibrary({ root })
+  const upload = library.importFile({
+    data: Buffer.from(JSON.stringify({
+      name: '控制器世界书',
+      entries: {
+        104: {
+          uid: 104,
+          key: [],
+          keysecondary: [],
+          content: '<%= boundaryState.enabled %>',
+          constant: true,
+          selective: false,
+          order: 10,
+          position: 0,
+          disable: false,
+        },
+      },
+    }), 'utf8'),
+    filename: '控制器世界书.json',
+  })
+  const session = Session.create(SessionId('world-info-debug-error'))
+  const commandId = CommandId('world-info-debug-error-import')
+  const rawInput = JSON.stringify({ format: 0, importId: upload.id })
+  session.append('command/run', {
+    commandId, name: 'rp-world-info-import', args: ` ${rawInput}`, source: { kind: 'user' },
+  })
+  const result = executeWorldInfoLibraryCommand(library, {
+    agent: { session } as Agent,
+    commandId,
+    rawInput,
+  })
+  session.append('command/done', { commandId, ...result })
+
+  const definition = createAgentRpProjectionDefinition(await EjsTemplateEngine.create())
+  let state = definition.init()
+  for (const event of session.events) state = definition.apply(state, event)
+  const entry = definition.wire.view(state).worldInfo.books[0]?.entries[0]
+  assert.equal(entry?.reason, 'template-error')
+  assert.equal(entry?.template, 'runtime-error')
+  assert.deepEqual({
+    name: entry?.templateError?.name,
+    message: entry?.templateError?.message,
+  }, {
+    name: 'ReferenceError',
+    message: "'boundaryState' is not defined",
+  })
+  assert.match(entry?.templateError?.stack ?? '', /agent-rp:ejs/u)
 })
 
 test('deduplicates the same World Info bytes and rejects non-World-Info JSON', context => {

@@ -29,13 +29,20 @@ test('settles self-contained async EJS without exposing Host callbacks', () => {
   assert.deepEqual(result, { ok: true, text: '42' })
 })
 
-test('bounds pending and rejected async EJS without leaking error text', () => {
+test('bounds pending EJS and preserves rejected runtime errors for Debug reports', () => {
   assert.deepEqual(engine.render('<% await new Promise(() => {}); %>private pending text', {
     characterName: '角色', userName: '用户', messages: [],
   }), { ok: false, kind: 'execution-limit' })
-  assert.deepEqual(engine.render('<% await Promise.reject(new Error("private rejection text")); %>', {
+  const rejected = engine.render('<% await Promise.reject(new Error("private rejection text")); %>', {
     characterName: '角色', userName: '用户', messages: [],
-  }), { ok: false, kind: 'runtime-error' })
+  })
+  assert.equal(rejected.ok, false)
+  if (rejected.ok) return
+  assert.equal(rejected.kind, 'runtime-error')
+  assert.deepEqual({ name: rejected.error?.name, message: rejected.error?.message }, {
+    name: 'Error', message: 'private rejection text',
+  })
+  assert.match(rejected.error?.stack ?? '', /agent-rp:ejs/u)
 })
 
 test('bounds all templates rendered through one prompt context', () => {
@@ -161,7 +168,7 @@ test('reads plain Session World Info by current or explicit book identity', () =
   assert.deepEqual(result, { ok: true, text: '第一段|第二段|' })
 })
 
-test('does not leak an unrendered nested World Info template', () => {
+test('rejects an unrendered nested World Info template with a Debug error', () => {
   const result = engine.render('<%= await getWorldInfo("嵌套") %>', {
     characterName: '角色', userName: '用户', messages: [],
     worldInfoBooks: [{
@@ -170,7 +177,10 @@ test('does not leak an unrendered nested World Info template', () => {
     }],
   }, { worldInfoBookId: 'book' })
 
-  assert.deepEqual(result, { ok: false, kind: 'resource-unsupported' })
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.kind, 'resource-unsupported')
+  assert.equal(result.error?.message, '__AGENT_RP_EJS_RESOURCE_UNSUPPORTED__')
 })
 
 test('keeps large resource reads separate from the final output limit', () => {
@@ -197,7 +207,10 @@ test('bounds cumulative World Info reads inside one isolated render', () => {
     }],
   }, { worldInfoBookId: 'book' })
 
-  assert.deepEqual(result, { ok: false, kind: 'resource-limit' })
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.kind, 'resource-limit')
+  assert.equal(result.error?.message, '__AGENT_RP_EJS_RESOURCE_LIMIT__')
 })
 
 test('retains current-book identity while inspecting several lorebooks', () => {
@@ -234,13 +247,26 @@ test('parses JSON context without treating special object keys as source syntax'
   assert.deepEqual(result, { ok: true, text: 'own value' })
 })
 
-test('interrupts non-terminating templates and reports source errors without source text', () => {
-  assert.deepEqual(engine.render('<% while (true) {} %>', {
+test('interrupts non-terminating templates with a Debug error and classifies source errors', () => {
+  const interrupted = engine.render('<% while (true) {} %>', {
     characterName: '角色', userName: '用户', messages: [],
-  }), { ok: false, kind: 'execution-limit' })
-  assert.deepEqual(engine.render('<% if ( %>private fixture', {
+  })
+  assert.equal(interrupted.ok, false)
+  if (!interrupted.ok) {
+    assert.equal(interrupted.kind, 'execution-limit')
+    assert.deepEqual({ name: interrupted.error?.name, message: interrupted.error?.message }, {
+      name: 'InternalError', message: 'interrupted',
+    })
+  }
+  const syntax = engine.render('<% if ( %>private fixture', {
     characterName: '角色', userName: '用户', messages: [],
-  }), { ok: false, kind: 'syntax-error' })
+  })
+  assert.equal(syntax.ok, false)
+  if (syntax.ok) return
+  assert.equal(syntax.kind, 'syntax-error')
+  assert.deepEqual({ name: syntax.error?.name, message: syntax.error?.message }, {
+    name: 'SyntaxError', message: "expecting ')'",
+  })
 })
 
 test('uses replayable turn entropy for EJS randomness and keeps unseeded renders deterministic', () => {
@@ -253,9 +279,13 @@ test('uses replayable turn entropy for EJS randomness and keeps unseeded renders
   assert.equal(first.ok, true)
   assert.deepEqual(replay, first)
   assert.notDeepEqual(anotherTurn, first)
-  assert.deepEqual(engine.render(template, {
+  const unseeded = engine.render(template, {
     characterName: '角色', userName: '用户', messages: [],
-  }), { ok: false, kind: 'runtime-error' })
+  })
+  assert.equal(unseeded.ok, false)
+  if (unseeded.ok) return
+  assert.equal(unseeded.kind, 'runtime-error')
+  assert.equal(unseeded.error?.message, '__AGENT_RP_EJS_NONDETERMINISTIC__')
 })
 
 test('matches World Info regex in one isolated bounded runtime', () => {
@@ -327,4 +357,8 @@ test('activates rendered EJS lore and keeps failures out of the prompt', () => {
   assert.equal(inspected.entries[0]?.template, 'rendered')
   assert.equal(inspected.entries[1]?.reason, 'template-error')
   assert.equal(inspected.entries[1]?.template, 'execution-limit')
+  assert.deepEqual({
+    name: inspected.entries[1]?.templateError?.name,
+    message: inspected.entries[1]?.templateError?.message,
+  }, { name: 'InternalError', message: 'interrupted' })
 })

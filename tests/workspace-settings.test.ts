@@ -99,6 +99,21 @@ test('normalizes the optional narrative review Worker without changing older set
   }), /正文审阅 Worker 开关/u)
 })
 
+test('defaults the global Debug switch to disabled and validates explicit values', () => {
+  assert.deepEqual(normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [],
+  }).debug, { enabled: false })
+  assert.deepEqual(normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], debug: { enabled: true },
+  }).debug, { enabled: true })
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], debug: true,
+  }), /Agent RP Debug 设置无效/u)
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], debug: { enabled: 'yes' },
+  }), /Agent RP Debug 开关无效/u)
+})
+
 test('normalizes an explicit state verification model without guessing unavailable routes', () => {
   assert.deepEqual(normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],
@@ -276,9 +291,11 @@ test('persists workspace settings outside the DSH settings allowlist', (t) => {
       narrativeReview: { enabled: false },
       stateVerification: { model: { provider: 'fixture', model: 'fast-fixture' } },
     },
+    debug: { enabled: true },
   }
   assert.deepEqual(store.set({
     workspaceMode: 'selected', workspaceIds: ['workspace-a'], turnWorkers: expected.turnWorkers,
+    debug: expected.debug,
   }), expected)
   assert.deepEqual(new WorkspaceSettingsStore({ path }).get(), expected)
   assert.match(readFileSync(path, 'utf8'), /"format": 0/u)

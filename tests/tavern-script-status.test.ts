@@ -88,5 +88,6 @@ test('bounds individual errors and the complete local failure report', () => {
   assert.ok(report !== undefined)
   assert.ok(report.length <= 64 * 1024)
   assert.match(report, /x{2000}…/u)
+  assert.match(report, /错误已截断: 是（原始长度 2100 字符）/u)
   assert.match(report, /…内容已截断$/u)
 })
