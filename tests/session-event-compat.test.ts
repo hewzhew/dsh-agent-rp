@@ -327,8 +327,9 @@ test('rejects unsafe Tavern regeneration before changing a published-host Sessio
   assert.deepEqual(session.surface.nodes, beforeSurface)
 })
 
-test('writes and exactly replays a prepared turn with a local newer DSH Host', async (t) => {
-  const dshRoot = process.env['DSH_SOURCE_DIR'] ?? resolve(process.cwd(), '..', 'dsh')
+test('writes and exactly replays a prepared turn with a compatible local DSH Host', async (t) => {
+  const configuredDshRoot = process.env['DSH_SOURCE_DIR']
+  const dshRoot = configuredDshRoot ?? resolve(process.cwd(), '..', 'dsh')
   const entry = resolve(dshRoot, 'packages', 'core', 'session', 'lib', 'index.js')
   if (!existsSync(entry)) {
     t.skip('local DSH session build is unavailable; set DSH_SOURCE_DIR to enable this matrix leg')
@@ -337,7 +338,13 @@ test('writes and exactly replays a prepared turn with a local newer DSH Host', a
 
   const local = await import(pathToFileURL(entry).href)
   const session = local.Session.create(local.SessionId('agent-rp-new-host-write'))
-  assert.equal(supportsAgentRpSessionEvents(session as Session), true)
+  if (!supportsAgentRpSessionEvents(session as Session)) {
+    if (configuredDshRoot !== undefined) {
+      assert.fail(`DSH_SOURCE_DIR does not expose the replay-safe plugin-event seam: ${entry}`)
+    }
+    t.skip('local DSH session build predates the replay-safe plugin-event seam')
+    return
+  }
 
   const written = appendAgentRpSessionEvent(session as Session, 'agent-rp/state', state)
   assert.equal(written.ignorable, true)
