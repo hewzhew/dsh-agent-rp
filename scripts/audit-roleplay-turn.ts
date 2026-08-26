@@ -80,6 +80,11 @@ import {
 
 type Counter = Readonly<Record<string, number>>
 
+const DEFAULT_STATE_VERIFICATION_SETTINGS = {
+  model: null,
+  reasoningEffort: null,
+} as const
+
 /** Private file inputs consumed by the local audit. Paths are never returned. */
 export interface RoleplayTurnAuditInput {
   readonly cardPath: string
@@ -353,6 +358,7 @@ async function appendSyntheticTurn(
       agent: { id: session.id, session } as Agent,
       turn,
       plan: { step: 1, plan },
+      verification: DEFAULT_STATE_VERIFICATION_SETTINGS,
       signal: new AbortController().signal,
     })
   }

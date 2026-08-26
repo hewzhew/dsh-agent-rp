@@ -88,11 +88,11 @@ test('retains Thetail tool guidance settings without importing provider-specific
 
 test('normalizes the optional narrative review Worker without changing older settings files', () => {
   assert.deepEqual(normalizeAgentRpSettings({ workspaceMode: 'all', workspaceIds: [] }).turnWorkers,
-    { narrativeReview: { enabled: false }, stateVerification: { model: null } })
+    { narrativeReview: { enabled: false }, stateVerification: { model: null, reasoningEffort: null } })
   assert.deepEqual(normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],
     turnWorkers: { narrativeReview: { enabled: true } },
-  }).turnWorkers, { narrativeReview: { enabled: true }, stateVerification: { model: null } })
+  }).turnWorkers, { narrativeReview: { enabled: true }, stateVerification: { model: null, reasoningEffort: null } })
   assert.throws(() => normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],
     turnWorkers: { narrativeReview: { enabled: 'yes' } },
@@ -103,10 +103,14 @@ test('normalizes an explicit state verification model without guessing unavailab
   assert.deepEqual(normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],
     turnWorkers: {
-      stateVerification: { model: { provider: 'deepseek', model: 'DeepSeek-V4-Flash' } },
+      stateVerification: {
+        model: { provider: 'deepseek', model: 'DeepSeek-V4-Flash' },
+        reasoningEffort: 'max',
+      },
     },
   }).turnWorkers.stateVerification, {
     model: { provider: 'deepseek', model: 'DeepSeek-V4-Flash' },
+    reasoningEffort: 'max',
   })
   assert.throws(() => normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],
@@ -116,6 +120,14 @@ test('normalizes an explicit state verification model without guessing unavailab
     workspaceMode: 'all', workspaceIds: [],
     turnWorkers: { stateVerification: { model: { provider: 'fixture', model: ' fixture ' } } },
   }), /状态核验 Worker 模型无效/u)
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [],
+    turnWorkers: { stateVerification: { model: null, reasoningEffort: '' } },
+  }), /状态核验 Worker 推理强度无效/u)
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [],
+    turnWorkers: { stateVerification: { model: null, reasoningEffort: ' max' } },
+  }), /状态核验 Worker 推理强度无效/u)
 })
 
 test('updates one workspace through the active policy list', () => {
@@ -274,7 +286,7 @@ test('persists workspace settings outside the DSH settings allowlist', (t) => {
     workspaceIds: ['workspace-a'],
     turnWorkers: {
       narrativeReview: { enabled: false },
-      stateVerification: { model: { provider: 'fixture', model: 'fast-fixture' } },
+      stateVerification: { model: { provider: 'fixture', model: 'fast-fixture' }, reasoningEffort: 'high' },
     },
   }
   assert.deepEqual(store.set({

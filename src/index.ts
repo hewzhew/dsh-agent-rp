@@ -832,7 +832,7 @@ export function installAgentRp(
           ? { outcome: 'skipped' }
           : runRoleplayStagedStateSettlement({
               ...input,
-              verificationModel: workspaceSettings.get().turnWorkers.stateVerification.model,
+              verification: workspaceSettings.get().turnWorkers.stateVerification,
             })
       },
     }),

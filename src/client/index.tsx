@@ -347,6 +347,12 @@ import {
   type AgentRpSettings, type ImageGenerationProfile, type ImageGenerationSettings,
 } from '../workspace-settings.ts'
 import {
+  resolveStateVerificationReasoningChoices,
+  updateStateVerificationSettings,
+  type AvailableModelCatalog,
+  type CurrentModelCapabilities,
+} from './state-verification-reasoning.ts'
+import {
   AGENT_RP_IMAGE_PATH,
   decodeImageGenerationRecord,
   generatedImageAssetUrl,
@@ -536,37 +542,6 @@ interface DraftResolver {
 interface DraftRuntimeAttachment extends DraftAttachmentLike {
   readonly id: string
   readonly file: File
-}
-
-interface CurrentModelCapabilities {
-  readonly current: {
-    readonly provider: string
-    readonly model: string
-    readonly reasoningEffort?: string
-  }
-  readonly providerName?: string
-  readonly modelName?: string
-  readonly reasoning?: {
-    readonly efforts: readonly {
-      readonly id: string
-      readonly name: string
-      readonly description?: string
-    }[]
-    readonly defaultEffort?: string
-  }
-}
-
-interface AvailableModelCatalog {
-  readonly current: CurrentModelCapabilities['current']
-  readonly groups: readonly {
-    readonly id: string
-    readonly name: string
-    readonly models: readonly {
-      readonly id: string
-      readonly name: string
-      readonly reasoning?: CurrentModelCapabilities['reasoning']
-    }[]
-  }[]
 }
 
 interface ClientModelGateway {
@@ -3643,6 +3618,7 @@ function TurnWorkerSettingsPanel({ settings, writable, onSave, loadModelCatalog 
 }) {
   const enabled = settings.turnWorkers.narrativeReview.enabled
   const selectedModel = settings.turnWorkers.stateVerification.model
+  const selectedReasoningEffort = settings.turnWorkers.stateVerification.reasoningEffort
   const [modelCatalog, setModelCatalog] = useState<AvailableModelCatalog>()
   const [modelCatalogError, setModelCatalogError] = useState<string>()
   useEffect(() => {
@@ -3663,6 +3639,14 @@ function TurnWorkerSettingsPanel({ settings, writable, onSave, loadModelCatalog 
   })))
   const selectedValue = selectedModel === null ? '' : JSON.stringify([selectedModel.provider, selectedModel.model])
   const savedModelIsListed = selectedModel === null || modelOptions.some(option => option.value === selectedValue)
+  const resolvedReasoning = resolveStateVerificationReasoningChoices(
+    modelCatalog,
+    selectedModel,
+    selectedReasoningEffort,
+  )
+  const defaultEffort = resolvedReasoning.reasoning?.defaultEffort
+  const defaultEffortName = resolvedReasoning.reasoning?.efforts
+    .find(effort => effort.id === defaultEffort)?.name
   return <section style={{ borderTop: '1px solid var(--dsw-alias-border-l2, #34343a)', marginTop: '26px', paddingTop: '23px' }}>
     <div style={{ alignItems: 'flex-start', display: 'flex', gap: '14px', justifyContent: 'space-between' }}>
       <div>
@@ -3684,20 +3668,21 @@ function TurnWorkerSettingsPanel({ settings, writable, onSave, loadModelCatalog 
       </label>
     </div>
     <label style={{ display: 'grid', fontSize: '12px', gap: '6px', marginTop: '14px', opacity: writable ? 1 : .62 }}>状态核验模型
-      <select value={selectedValue} disabled={!writable} onChange={event => {
+      <select value={selectedValue} disabled={!writable || modelCatalog === undefined} onChange={event => {
         const option = modelOptions.find(candidate => candidate.value === event.target.value)
         if (event.target.value !== '' && option === undefined) return
         onSave({
           ...settings,
           turnWorkers: {
             ...settings.turnWorkers,
-            stateVerification: {
+            stateVerification: updateStateVerificationSettings(settings.turnWorkers.stateVerification, {
+              type: 'model',
               model: option === undefined ? null : { provider: option.provider, model: option.model },
-            },
+            }, modelCatalog?.current),
           },
         })
       }} style={settingsFieldStyle}>
-        <option value="">跟随当前会话模型（可靠默认）</option>
+        <option value="">跟随当前会话模型</option>
         {!savedModelIsListed && selectedModel !== null && <option value={selectedValue}>
           {selectedModel.provider} · {selectedModel.model}（当前不可用）
         </option>}
@@ -3705,7 +3690,43 @@ function TurnWorkerSettingsPanel({ settings, writable, onSave, loadModelCatalog 
       </select>
     </label>
     <p style={{ fontSize: '11px', lineHeight: 1.55, margin: '7px 0 0', opacity: .56 }}>
-      只改变独立核验请求；候选结算和角色正文仍使用会话模型。选择更快的模型可以缩短有状态回合，模型不可用时会明确保留原状态并记录失败。
+      该设置只改变独立核验请求；候选结算和角色正文仍使用当前会话模型。选择更快的模型可以缩短有状态回合。状态核验模型不可用时，状态结算 Worker 会保留原状态并写入失败记录。
+    </p>
+    <label style={{ display: 'grid', fontSize: '12px', gap: '6px', marginTop: '14px', opacity: writable ? 1 : .62 }}>状态核验推理强度
+      <select value={selectedReasoningEffort ?? ''} disabled={!writable || modelCatalog === undefined} onChange={event => {
+        const reasoningEffort = event.target.value === '' ? null : event.target.value
+        const choice = resolvedReasoning.choices.find(candidate => candidate.id === reasoningEffort)
+        if (choice?.supported !== true) return
+        onSave({
+          ...settings,
+          turnWorkers: {
+            ...settings.turnWorkers,
+            stateVerification: updateStateVerificationSettings(settings.turnWorkers.stateVerification, {
+              type: 'reasoning-effort',
+              reasoningEffort,
+            }),
+          },
+        })
+      }} style={settingsFieldStyle}>
+        {resolvedReasoning.choices.map((choice) => {
+          const effort = choice.id === null
+            ? undefined
+            : resolvedReasoning.reasoning?.efforts.find(candidate => candidate.id === choice.id)
+          const label = choice.id === null
+            ? `模型默认${defaultEffort === undefined
+              ? ''
+              : ` · ${defaultEffortName ?? defaultEffort}（${defaultEffort}）`}`
+            : choice.supported
+              ? `${effort?.name ?? choice.id} · ${choice.id}`
+              : `${choice.id}（当前生效的状态核验模型不支持）`
+          return <option key={choice.id ?? 'model-default'} value={choice.id ?? ''} disabled={!choice.supported}>
+            {label}
+          </option>
+        })}
+      </select>
+    </label>
+    <p style={{ fontSize: '11px', lineHeight: 1.55, margin: '7px 0 0', opacity: .56 }}>
+      可选强度来自当前生效的状态核验模型。未显式选择状态核验模型时，当前会话模型生效。选择“模型默认”时，独立核验请求不发送 reasoningEffort。玩家修改状态核验模型选择，并且修改前后的生效提供方或模型不同时，推理强度会重置为模型默认；跟随当前会话模型时，会话模型变化不会改写这里保存的推理强度。
     </p>
     {modelCatalog === undefined && modelCatalogError === undefined && <p role="status" style={{ fontSize: '11px', margin: '7px 0 0', opacity: .5 }}>正在读取当前会话可用模型…</p>}
     {modelCatalogError !== undefined && <p role="alert" style={{ color: 'var(--dsw-alias-state-warning, #d6a955)', fontSize: '11px', margin: '7px 0 0' }}>

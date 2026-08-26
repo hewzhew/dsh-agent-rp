@@ -113,16 +113,22 @@ export interface RoleplayTurnWorkerSettings {
   readonly narrativeReview: {
     readonly enabled: boolean
   }
-  /** Model route for the independent state verification pass; null follows the active session. */
-  readonly stateVerification: {
-    readonly model: RoleplayWorkerModelSelection | null
-  }
+  /** Model route and reasoning effort for the independent state verification pass. */
+  readonly stateVerification: RoleplayStateVerificationSettings
 }
 
 /** Explicit provider route used by one background Roleplay Worker. */
 export interface RoleplayWorkerModelSelection {
   readonly provider: string
   readonly model: string
+}
+
+/** Exact model controls for the independent state verification pass. */
+export interface RoleplayStateVerificationSettings {
+  /** Explicit Worker route; null follows the active session model. */
+  readonly model: RoleplayWorkerModelSelection | null
+  /** Exact effort id; null preserves the effective model's provider default. */
+  readonly reasoningEffort: string | null
 }
 
 const DEFAULT_IMAGE_PROFILE_ID = 'default'
@@ -192,7 +198,7 @@ export const DEFAULT_AGENT_RP_SETTINGS: AgentRpSettings = {
   toolGuidance: DEFAULT_TOOL_GUIDANCE,
   turnWorkers: {
     narrativeReview: { enabled: false },
-    stateVerification: { model: null },
+    stateVerification: { model: null, reasoningEffort: null },
   },
 }
 
@@ -410,6 +416,15 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
     }
     normalizedStateVerificationModel = { provider: model.provider, model: model.model }
   }
+  const stateVerificationReasoningEffort = (stateVerification as Record<string, unknown> | undefined)
+    ?.reasoningEffort ?? null
+  if (stateVerificationReasoningEffort !== null
+    && (typeof stateVerificationReasoningEffort !== 'string'
+      || stateVerificationReasoningEffort === ''
+      || stateVerificationReasoningEffort.trim() !== stateVerificationReasoningEffort
+      || stateVerificationReasoningEffort.length > 256)) {
+    throw new Error('状态核验 Worker 推理强度无效')
+  }
   let imageProfiles: ImageGenerationProfile[]
   let activeImageProfileId: string
   if (record.imageProfiles === undefined) {
@@ -453,7 +468,10 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
     toolGuidance,
     turnWorkers: {
       narrativeReview: { enabled: narrativeReviewEnabled },
-      stateVerification: { model: normalizedStateVerificationModel },
+      stateVerification: {
+        model: normalizedStateVerificationModel,
+        reasoningEffort: stateVerificationReasoningEffort,
+      },
     },
   }
 }

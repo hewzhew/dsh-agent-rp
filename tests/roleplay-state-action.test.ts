@@ -33,6 +33,7 @@ import {
 } from '../src/roleplay-state-action.ts'
 import {
   collectRoleplayStagedStateSettlement,
+  resolveRoleplayStateVerificationConfig,
   resolveRoleplayStateVerificationModel,
   runRoleplayStagedStateSettlement,
 } from '../src/roleplay-staged-state-settlement.ts'
@@ -64,6 +65,7 @@ import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
 installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '状态行动测试角色' })
+const MODEL_DEFAULT_STATE_VERIFICATION = { model: null, reasoningEffort: null } as const
 
 class RecordingAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []
@@ -593,7 +595,10 @@ test('settles MVU after the visible reply through a replayable local-provider st
     agent,
     turn: 1,
     plan: { step: 2, plan },
-    verificationModel: { provider: 'fast-fixture', model: 'verification-fixture' },
+    verification: {
+      model: { provider: 'fast-fixture', model: 'verification-fixture' },
+      reasoningEffort: 'max',
+    },
     signal: new AbortController().signal,
   })
   await runRoleplayStagedStateSettlement({
@@ -601,6 +606,7 @@ test('settles MVU after the visible reply through a replayable local-provider st
     agent,
     turn: 1,
     plan: { step: 2, plan },
+    verification: MODEL_DEFAULT_STATE_VERIFICATION,
     signal: new AbortController().signal,
   })
   assert.equal(requestCount, 2)
@@ -621,7 +627,7 @@ test('settles MVU after the visible reply through a replayable local-provider st
   assert.match(verificationSystem, /独立状态核验器/u)
   assert.match(verificationSystem, /从 current_state 直接到核验后状态/u)
   assert.doesNotMatch(verificationText, /<proposal_operations>|<candidate_state>/u)
-  assert.deepEqual(requestReasoning, ['off', 'low'])
+  assert.deepEqual(requestReasoning, ['off', 'max'])
   assert.deepEqual(requestMaxTokens, [4096, 4096])
   assert.deepEqual(requestModels, [
     { provider: 'fixture', model: 'fixture' },
@@ -685,6 +691,9 @@ test('settles MVU after the visible reply through a replayable local-provider st
     plans: [reference],
   })?.operations, [{ op: 'delta', path: '/角色/等级', value: 1 }])
   assert.equal(verificationRequest.data.proposalResultSeq, proposalResult.seq)
+  assert.equal(verificationRequest.data.dispatch.reasoningEffort, 'max')
+  assert.equal(verificationRequest.data.dispatch.provider, 'fast-fixture')
+  assert.equal(verificationRequest.data.dispatch.model, 'verification-fixture')
   const staged = collectRoleplayStagedStateSettlement({
     events: session.events,
     sessionId: String(session.id),
@@ -759,6 +768,22 @@ test('state verification follows the session model until the player selects anot
   }), { provider: 'worker-provider', model: 'worker-model' })
 })
 
+test('state verification uses the saved effort or omits the field for the model default', () => {
+  const session = { provider: 'session-provider', model: 'session-model', reasoningEffort: 'high' as const }
+  assert.deepEqual(resolveRoleplayStateVerificationConfig(session, {
+    model: null,
+    reasoningEffort: null,
+  }), { provider: 'session-provider', model: 'session-model' })
+  assert.deepEqual(resolveRoleplayStateVerificationConfig(session, {
+    model: { provider: 'worker-provider', model: 'worker-model' },
+    reasoningEffort: 'max',
+  }), { provider: 'worker-provider', model: 'worker-model', reasoningEffort: 'max' })
+  assert.deepEqual(resolveRoleplayStateVerificationConfig(session, {
+    model: { provider: 'worker-provider', model: 'worker-model' },
+    reasoningEffort: 'low',
+  }), { provider: 'worker-provider', model: 'worker-model', reasoningEffort: 'low' })
+})
+
 function preparedEmptyStagedSettlement(input: {
   readonly id: string
   readonly previousError?: string
@@ -820,6 +845,7 @@ async function emptyStagedSettlementFixture(input: {
     agent: { id: session.id, session } as Agent,
     turn: 1,
     plan: { step: 1, plan },
+    verification: MODEL_DEFAULT_STATE_VERIFICATION,
     signal: new AbortController().signal,
   })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -874,6 +900,7 @@ async function providerFailureSettlementFixture(input: {
     agent: { id: session.id, session } as Agent,
     turn: 1,
     plan: { step: 1, plan },
+    verification: MODEL_DEFAULT_STATE_VERIFICATION,
     signal: new AbortController().signal,
   })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })

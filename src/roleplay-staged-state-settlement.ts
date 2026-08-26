@@ -29,7 +29,10 @@ import type { BoundRoleplayTurnPlan, RoleplayTurnPlanReference } from './rolepla
 import { appendAgentRpSessionEvent } from './session-event-compat.ts'
 import { applyMvuOperations, type MvuStateOperation } from './mvu.ts'
 import type { RoleplayTurnWorkerOutcome } from './roleplay-turn-worker.ts'
-import type { RoleplayWorkerModelSelection } from './workspace-settings.ts'
+import type {
+  RoleplayStateVerificationSettings,
+  RoleplayWorkerModelSelection,
+} from './workspace-settings.ts'
 import { stringifySillyTavernPromptJson } from './sillytavern-identity-macro.ts'
 
 interface RoleplayStagedStateRequestBase {
@@ -328,16 +331,15 @@ function settlementVerificationRequest(
   agent: Agent,
   evidence: string,
   target: RoleplayStateActionPlan,
-  modelSelection: RoleplayWorkerModelSelection | null | undefined,
+  verification: RoleplayStateVerificationSettings,
   signal: AbortSignal,
 ): GenerateOptions {
   const header = agent.session.requestHeader()
   if (header === undefined) throw new Error('Roleplay staged settlement has no provider request header')
-  const model = resolveRoleplayStateVerificationModel(header.config, modelSelection)
+  const { reasoningEffort: _sessionReasoningEffort, ...headerConfig } = header.config
   return {
-    ...header.config,
-    ...model,
-    reasoningEffort: ReasoningEffortId('low'),
+    ...headerConfig,
+    ...resolveRoleplayStateVerificationConfig(header.config, verification),
     temperature: 0,
     maxTokens: STATE_SETTLEMENT_MAX_TOKENS,
     system: [
@@ -365,6 +367,19 @@ export function resolveRoleplayStateVerificationModel(
   return selection === null || selection === undefined
     ? { provider: sessionModel.provider, model: sessionModel.model }
     : { provider: selection.provider, model: selection.model }
+}
+
+/** Resolve the independent verification route and its exact persisted effort without model-specific fallback. */
+export function resolveRoleplayStateVerificationConfig(
+  sessionConfig: Pick<GenerateOptions, 'provider' | 'model'>,
+  verification: RoleplayStateVerificationSettings,
+): Pick<GenerateOptions, 'provider' | 'model'> & Partial<Pick<GenerateOptions, 'reasoningEffort'>> {
+  return {
+    ...resolveRoleplayStateVerificationModel(sessionConfig, verification.model),
+    ...(verification.reasoningEffort === null
+      ? {}
+      : { reasoningEffort: ReasoningEffortId(verification.reasoningEffort) }),
+  }
 }
 
 function matchingPlanEvent(
@@ -587,7 +602,7 @@ export async function runRoleplayStagedStateSettlement(input: {
   readonly agent: Agent
   readonly turn: number
   readonly plan: BoundRoleplayTurnPlan
-  readonly verificationModel?: RoleplayWorkerModelSelection | null
+  readonly verification: RoleplayStateVerificationSettings
   readonly signal: AbortSignal
 }): Promise<RoleplayTurnWorkerOutcome> {
   const target = input.plan.plan.act.stateActions[0]
@@ -644,7 +659,7 @@ export async function runRoleplayStagedStateSettlement(input: {
       input.agent,
       evidence,
       target,
-      input.verificationModel,
+      input.verification,
       input.signal,
     ),
     stage: 'verification',
