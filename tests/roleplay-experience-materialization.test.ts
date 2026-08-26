@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { CharacterLibrary } from '../src/character-library.ts'
+import { CharacterWorldBindingStore } from '../src/character-world-binding-store.ts'
 import { readActiveSessionCharacter } from '../src/import/session-character.ts'
 import { readActiveSessionPreset } from '../src/import/session-preset.ts'
 import { readActiveSessionWorldInfos } from '../src/import/session-world-info.ts'
@@ -44,11 +45,16 @@ import { agentRpProjectionDefinition } from '../src/projection.ts'
 function fixture(context: test.TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'agent-rp-experience-materialization-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
-  const characters = new CharacterLibrary({ root: join(root, 'characters') })
+  const bindings = new CharacterWorldBindingStore({ root: join(root, 'character-world-bindings') })
+  const worldInfos = new WorldInfoLibrary({ root: join(root, 'worlds'), bindings })
+  const characters = new CharacterLibrary({
+    root: join(root, 'characters'),
+    worldInfoLibrary: worldInfos,
+    worldBindings: bindings,
+  })
   const personas = new PersonaLibrary({ root: join(root, 'personas') })
   const presets = new PresetLibrary({ root: join(root, 'presets') })
   const regexPacks = new RegexPackLibrary({ root: join(root, 'regex-packs') })
-  const worldInfos = new WorldInfoLibrary({ root: join(root, 'worlds') })
   const chats = new SillyTavernChatLibrary({ root: join(root, 'chats') })
   const character = characters.importFile({
     data: new TextEncoder().encode(JSON.stringify({
@@ -167,6 +173,51 @@ test('materializes five independent resources into one exact replayable characte
     }),
   })
   assert.equal(plan.prompt.transforms.operations[0]?.owner, 'regex')
+})
+
+test('keeps one snapshot when an actor-bound world is also selected explicitly', context => {
+  const value = fixture(context)
+  const binding = value.characters.get(value.character.id).worldBinding
+  assert.ok(binding !== undefined)
+  value.characters.updateWorldBinding(value.character.id, {
+    format: 0,
+    revision: binding.revision,
+    primaryWorldInfoId: value.world.id,
+    additionalWorldInfoIds: [],
+  })
+  const actorId = characterLibraryRoleplayResourceId(value.character.id)
+  const worldId = worldInfoLibraryRoleplayResourceId(value.world.id)
+  const request = parseAgentRpSessionLaunchRequest({
+    format: 0,
+    sourceSessionId: 'source-session',
+    kind: 'experience',
+    mode: 'character',
+    actor: { kind: 'actor', id: actorId },
+    worlds: [{ kind: 'world', id: worldId }],
+  })
+  if (request.kind !== 'experience') assert.fail('experience request was not parsed')
+  const prepared = prepareAgentRpSession(
+    value.characters,
+    value.chats,
+    value.presets,
+    value.worldInfos,
+    request,
+    value.catalog,
+  )
+  const session = Session.create(SessionId('bound-world-selected-explicitly'), prepared.seed)
+
+  assert.deepEqual(readActiveSessionWorldInfos(session.events).map(entry => ({
+    attachmentId: entry.result.sourceAttachmentId,
+    placement: entry.placement,
+    purpose: entry.purpose,
+  })), [{
+    attachmentId: `library:${value.world.id}`,
+    placement: 'actor',
+    purpose: 'character-binding',
+  }])
+  assert.deepEqual(readRoleplayExperienceSelection(session.events)?.worlds, [{
+    kind: 'world', id: worldId,
+  }])
 })
 
 test('normalizes older experience provenance without a regex-pack selection', () => {

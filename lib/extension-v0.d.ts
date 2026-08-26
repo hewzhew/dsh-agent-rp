@@ -68,7 +68,7 @@ interface RoleplayResourceProvider {
   list(): readonly RoleplayResourceDescriptor[];
   /** Return bounded kind-specific presentation details without exposing source payloads. */
   inspect?(descriptor: RoleplayResourceDescriptor): RoleplayResourceDetail;
-  /** Freeze one owned selection into a complete replayable Session-event prefix. */
+  /** Preserve the Session-event prefix and append a snapshot when the selection is not already active. */
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization;
 }
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
@@ -83,7 +83,7 @@ interface RoleplayResourceMaterializationInput {
   readonly events: readonly SessionEvent[];
   readonly context: RoleplayResourceMaterializationContext;
 }
-/** Complete event prefix after one provider has appended its immutable snapshot. */
+/** Complete event prefix after one provider has preserved it and optionally appended a snapshot. */
 interface RoleplayResourceMaterialization {
   readonly events: readonly SessionEvent[];
   readonly title?: string;

@@ -43,8 +43,8 @@ function navigableSeed(events: readonly SessionEvent[]): readonly SessionEvent[]
 
 /**
  * Materialize independently selected resources in semantic experience order.
- * Providers may only append immutable Session events; their source formats never
- * become part of this assembly contract.
+ * Providers preserve the current Session prefix and append immutable events when
+ * the selected resource is not already active; source formats stay provider-owned.
  */
 export function prepareRoleplayExperienceSession(
   catalog: RoleplayResourceCatalog,

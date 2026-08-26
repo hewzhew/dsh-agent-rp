@@ -103,6 +103,17 @@ test('dispatches materialization to the owner while enforcing append-only Sessio
   assert.deepEqual(first.events.map(event => event.seq), [0, 1])
 
   catalog.register({
+    id: 'fixture:world-no-op',
+    list: () => [{ id: 'world:existing', kind: 'world', name: '已有世界', availability: 'available' }],
+    materialize: input => ({ events: input.events }),
+  })
+  assert.deepEqual(catalog.materialize(
+    { kind: 'world', id: 'world:existing' },
+    first.events,
+    { mode: 'character' },
+  ).events, first.events)
+
+  catalog.register({
     id: 'fixture:world-rewriter',
     list: () => [{ id: 'world:rewrite', kind: 'world', name: '错误世界', availability: 'available' }],
     materialize: input => ({ events: input.events.slice(1) }),

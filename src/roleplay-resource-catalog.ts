@@ -28,7 +28,7 @@ export interface RoleplayResourceProvider {
   list(): readonly RoleplayResourceDescriptor[]
   /** Return bounded kind-specific presentation details without exposing source payloads. */
   inspect?(descriptor: RoleplayResourceDescriptor): RoleplayResourceDetail
-  /** Freeze one owned selection into a complete replayable Session-event prefix. */
+  /** Preserve the Session-event prefix and append a snapshot when the selection is not already active. */
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization
 }
 
@@ -46,7 +46,7 @@ export interface RoleplayResourceMaterializationInput {
   readonly context: RoleplayResourceMaterializationContext
 }
 
-/** Complete event prefix after one provider has appended its immutable snapshot. */
+/** Complete event prefix after one provider has preserved it and optionally appended a snapshot. */
 export interface RoleplayResourceMaterialization {
   readonly events: readonly SessionEvent[]
   readonly title?: string
@@ -245,7 +245,7 @@ export class RoleplayResourceCatalog {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid Session events`)
     }
     const next = structuredClone(result.events)
-    if (next.length <= prefix.length
+    if (next.length < prefix.length
       || !next.slice(0, prefix.length).every((event, index) => isDeepStrictEqual(event, prefix[index]))) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} must only append Session events`)
     }
