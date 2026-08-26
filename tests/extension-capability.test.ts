@@ -85,11 +85,11 @@ test('aggregates independent runtime plans without treating user activation as a
     summarizeAgentRpCapabilityPlan(resolveAgentRpCapabilityPlan(TAVERN_LEGACY_ADAPTER_MANIFEST)),
   ])
   assert.deepEqual(summary, {
-    requirements: 18,
+    requirements: 19,
     requiredUnavailable: 0,
     optionalUnavailable: 0,
     resolutions: {
-      available: 18,
+      available: 19,
       'approval-required': 0,
       unsupported: 0,
       'version-mismatch': 0,
@@ -127,7 +127,15 @@ test('publishes truthful Session variable ownership and runtime-specific payload
     'session.variables.replace', 'world-engine-v0', 'unregistered runtime', 'fallback',
   ), 'fallback')
 
-  for (const id of ['chat.session.mutate', 'world-info.session.mutate', 'prompt-injection.session.replace'] as const) {
+  const chatMutation = AGENT_RP_CAPABILITIES['chat.session.mutate']
+  assert.equal(chatMutation.stateOwner, 'session')
+  assert.equal(chatMutation.modelVisible, true)
+  assert.deepEqual(chatMutation.runtimePolicies, {
+    'card-frame-v0': { requestBytes: 64 * 1024, resultBytes: 4096 },
+    'tavern-script-frame-v0': { requestBytes: 2 * 1024 * 1024, resultBytes: 4096 },
+  })
+
+  for (const id of ['world-info.session.mutate', 'prompt-injection.session.replace'] as const) {
     const definition = AGENT_RP_CAPABILITIES[id]
     assert.equal(definition.stateOwner, 'session')
     assert.equal(definition.modelVisible, true)

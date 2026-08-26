@@ -31,12 +31,15 @@ export type CardRuntimePhase = typeof CARD_RUNTIME_PHASES[number]
 /** One registered light-frontend capability and its fixed security policy. */
 export const CARD_CAPABILITIES = {
   'chat.send': AGENT_RP_CAPABILITIES['chat.send'],
+  'chat.session.mutate': AGENT_RP_CAPABILITIES['chat.session.mutate'],
   'greeting.select': AGENT_RP_CAPABILITIES['greeting.select'],
   'ui.external-window.open': AGENT_RP_CAPABILITIES['ui.external-window.open'],
   'identity.native.attest': AGENT_RP_CAPABILITIES['identity.native.attest'],
 } as const
 
 const CARD_CHAT_SEND_REQUEST_BYTES = AGENT_RP_CAPABILITIES['chat.send']
+  .runtimePolicies['card-frame-v0'].requestBytes
+const CARD_CHAT_SESSION_MUTATE_REQUEST_BYTES = AGENT_RP_CAPABILITIES['chat.session.mutate']
   .runtimePolicies['card-frame-v0'].requestBytes
 const CARD_VARIABLE_REQUEST_BYTES = AGENT_RP_CAPABILITIES['session.variables.replace']
   .runtimePolicies['card-frame-v0'].requestBytes
@@ -63,6 +66,18 @@ export interface CardChatSendRequest {
   readonly token: string
   readonly requestId: string
   readonly value: string
+}
+
+/** One bounded request to append one user message without triggering model generation. */
+export interface CardChatSessionMutateCapabilityRequest {
+  readonly source: 'dsh-agent-rp-card'
+  readonly action: 'capability-request'
+  readonly capability: 'chat.session.mutate'
+  readonly token: string
+  readonly requestId: string
+  readonly operation: 'create-chat-messages'
+  readonly messages: readonly [{ readonly role: 'user'; readonly message: string }]
+  readonly insertAt: 'end'
 }
 
 /** One external HTTPS window request from a registered light frontend. */
@@ -148,6 +163,43 @@ export function parseCardChatSendCapabilityRequest(value: unknown): CardChatSend
   return {
     source: 'dsh-agent-rp-card', action: 'capability-request', capability: 'chat.send',
     token: record.token, requestId: record.requestId, value: record.value,
+  }
+}
+
+/** Parse one bounded light-frontend request to append one user message. */
+export function parseCardChatSessionMutateCapabilityRequest(
+  value: unknown,
+): CardChatSessionMutateCapabilityRequest | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const fields = new Set([
+    'source', 'action', 'capability', 'token', 'requestId', 'operation', 'messages', 'insertAt',
+  ])
+  if (Object.keys(record).some(key => !fields.has(key))
+    || record.source !== 'dsh-agent-rp-card' || record.action !== 'capability-request'
+    || record.capability !== 'chat.session.mutate'
+    || typeof record.token !== 'string' || !/^[\w:-]{1,128}$/u.test(record.token)
+    || typeof record.requestId !== 'string'
+    || !/^card-chat-session-mutate-[1-9]\d{0,8}$/u.test(record.requestId)
+    || record.operation !== 'create-chat-messages' || record.insertAt !== 'end'
+    || !Array.isArray(record.messages) || record.messages.length !== 1) return undefined
+  const message = record.messages[0]
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) return undefined
+  const messageRecord = message as Record<string, unknown>
+  if (Object.keys(messageRecord).some(key => key !== 'role' && key !== 'message')
+    || messageRecord.role !== 'user' || typeof messageRecord.message !== 'string'
+    || messageRecord.message.trim() === '') return undefined
+  try {
+    const serialized = JSON.stringify(record)
+    if (serialized === undefined
+      || new TextEncoder().encode(serialized).byteLength > CARD_CHAT_SESSION_MUTATE_REQUEST_BYTES) return undefined
+  } catch {
+    return undefined
+  }
+  return {
+    source: 'dsh-agent-rp-card', action: 'capability-request', capability: 'chat.session.mutate',
+    token: record.token, requestId: record.requestId, operation: 'create-chat-messages',
+    messages: [{ role: 'user', message: messageRecord.message }], insertAt: 'end',
   }
 }
 

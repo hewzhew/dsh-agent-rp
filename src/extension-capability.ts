@@ -74,6 +74,7 @@ export const AGENT_RP_CAPABILITIES = {
   'chat.session.mutate': {
     version: 0,
     runtimePolicies: {
+      'card-frame-v0': { requestBytes: 64 * 1024, resultBytes: 4096 },
       'tavern-script-frame-v0': { requestBytes: 2 * 1024 * 1024, resultBytes: 4096 },
     },
     effect: 'session-write',
@@ -235,6 +236,7 @@ export const CARD_FRONTEND_CAPABILITY_MANIFEST = {
   runtime: 'card-frame-v0',
   requirements: [
     { capability: 'chat.send', version: 0, optional: false },
+    { capability: 'chat.session.mutate', version: 0, optional: false },
     { capability: 'session.variables.replace', version: 0, optional: false },
     { capability: 'ui.external-window.open', version: 0, optional: false },
     { capability: 'identity.native.attest', version: 0, optional: true },

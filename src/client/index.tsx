@@ -154,7 +154,8 @@ import {
 } from './character-library-client.ts'
 import { CharacterContentEditor } from './character-content-editor.tsx'
 import {
-  parseCardCapabilityRequest, parseCardChatSendCapabilityRequest, parseCardExternalWindowCapabilityRequest,
+  parseCardCapabilityRequest, parseCardChatSendCapabilityRequest, parseCardChatSessionMutateCapabilityRequest,
+  parseCardExternalWindowCapabilityRequest,
   parseCardExternalWindowControlRequest, parseCardExternalWindowDeliveryReport,
   parseCardNativeIdentityCapabilityRequest,
   parseCardResourceBlockedReport, parseCardRuntimeReport,
@@ -11718,6 +11719,37 @@ function roleplayComposerDockComponent(
           respond(false, '消息发送失败')
         }).finally(() => {
           pendingCardSends.delete(target)
+        })
+        return
+      }
+      const chatSessionMutationRequest = parseCardChatSessionMutateCapabilityRequest(event.data)
+      if (chatSessionMutationRequest !== undefined) {
+        const sourceFrame = registeredCardFrame(chatSessionMutationRequest.token, event.source)
+        if (sourceFrame === undefined) return
+        sourceFrame.dataset.agentRpCapabilityRequest = chatSessionMutationRequest.capability
+        const target = event.source as Window
+        const respond = (ok: boolean, error?: string): void => {
+          target.postMessage({
+            source: 'dsh-agent-rp-host', action: 'capability-result', capability: 'chat.session.mutate',
+            requestId: chatSessionMutationRequest.requestId, ok,
+            ...(error === undefined ? {} : { error }),
+          }, '*')
+        }
+        if (pendingCardMutations.has(target)) {
+          respond(false, '上一条卡片会话变更仍在保存')
+          return
+        }
+        pendingCardMutations.add(target)
+        void runTavernMutation(sessionId, {
+          format: 0, operation: 'create-chat-messages',
+          messages: chatSessionMutationRequest.messages, insertAt: 'end',
+        }).then(() => {
+          respond(true)
+        }, reason => {
+          ctx.logger.warn(`agent-rp: card chat session mutation failed: ${String(reason)}`)
+          respond(false, '卡片用户消息保存失败')
+        }).finally(() => {
+          pendingCardMutations.delete(target)
         })
         return
       }

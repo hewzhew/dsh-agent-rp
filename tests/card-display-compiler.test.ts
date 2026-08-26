@@ -21,6 +21,7 @@ import {
   parseCardResourceBlockedReport, parseCardRuntimeReport,
   parseCardVariableReplaceRequest,
 } from '../src/client/card-capability.ts'
+import * as cardCapability from '../src/client/card-capability.ts'
 import { cardRemoteResourceRequirements } from '../src/card-remote-resource.ts'
 import { AGENT_RP_CAPABILITIES } from '../src/extension-capability.ts'
 import { validExternalWindowMessage } from '../src/client/external-window.ts'
@@ -90,6 +91,29 @@ function cardChatRuntimeStatements(documentSource: string): string {
   return statements.join('\n')
 }
 
+function cardCreateMessageRuntimeStatements(documentSource: string): string {
+  const statements = [
+    /^var __dshCardChat=[^\r\n]*$/mu,
+    /^var __dshCardPending=[^\r\n]*$/mu,
+    /^function __dshSetCardCapabilityState[^\r\n]*$/mu,
+    /^function __dshCloneCardMessage[^\r\n]*$/mu,
+    /^function __dshCardCreateMessages[^\r\n]*$/mu,
+    /^window\.getChatMessages=[^\r\n]*$/mu,
+    /^window\.createChatMessages=[^\r\n]*$/mu,
+  ].map((pattern) => {
+    const statement = documentSource.match(pattern)?.[0]
+    assert.ok(statement, `compiled card frame is missing ${pattern.source}`)
+    return statement
+  })
+  const capabilityResultListener = [...documentSource.matchAll(/^addEventListener\('message'[^\r\n]*$/gmu)]
+    .map(match => match[0])
+    .find(statement => statement.includes('__dshCardPending'))
+  assert.ok(capabilityResultListener, 'compiled card frame is missing its capability-result listener')
+  const triggerSlash = documentSource.match(/window\.triggerSlash=function\(value\)\{[^;]+\};/u)?.[0]
+  assert.ok(triggerSlash, 'compiled card frame is missing triggerSlash')
+  return [...statements, capabilityResultListener, triggerSlash].join('\n')
+}
+
 function runCardActionOptionsFixture(message: CardChatFixtureMessage): {
   readonly document: CardActionOptionsFixtureDocument
   readonly getChatMessages: () => CardChatFixtureMessage[]
@@ -117,6 +141,98 @@ function runCardActionOptionsFixture(message: CardChatFixtureMessage): {
     getChatMessages: getChatMessages as () => CardChatFixtureMessage[],
   }
 }
+
+test('creates one user message through the isolated card facade before one trigger', async () => {
+  const source = compileCardFrameDocument('<!doctype html><html><body>panel</body></html>', {
+    origin: 'http://127.0.0.1:3091', capabilityToken: 'frame-token:0',
+  })
+  const posted: unknown[] = []
+  let receiveHostMessage: ((event: { readonly source: unknown; readonly data: unknown }) => void) | undefined
+  const parent = {
+    postMessage(message: unknown): void {
+      posted.push(JSON.parse(JSON.stringify(message)) as unknown)
+    },
+  }
+  const sandbox: Record<string, unknown> = {
+    __dshCardCapabilityToken: 'frame-token:0',
+    __dshCardGreetingChoices: null,
+    addEventListener(type: string, listener: (event: { readonly source: unknown; readonly data: unknown }) => void): void {
+      if (type === 'message') {
+        receiveHostMessage = listener
+        sandbox.__testReceiveHostMessage = listener
+      }
+    },
+    clearTimeout,
+    document: { documentElement: { dataset: {} } },
+    navigator: { userActivation: { isActive: true } },
+    parent,
+    setTimeout,
+  }
+  sandbox.window = sandbox
+  const context = createContext(sandbox)
+  runInContext(cardCreateMessageRuntimeStatements(source), context)
+
+  const createChatMessages = sandbox.createChatMessages
+  const getChatMessages = sandbox.getChatMessages
+  const triggerSlash = sandbox.triggerSlash
+  assert.equal(typeof createChatMessages, 'function')
+  assert.equal(typeof getChatMessages, 'function')
+  assert.equal(typeof triggerSlash, 'function')
+  const pending = (createChatMessages as (
+    messages: readonly { readonly role: 'user'; readonly message: string }[],
+    option: { readonly refresh: 'affected' },
+  ) => Promise<void>)([{ role: 'user', message: '继续调查线索' }], { refresh: 'affected' })
+
+  assert.equal(posted.length, 1)
+  const request = posted[0] as Record<string, unknown>
+  assert.deepEqual(request, {
+    source: 'dsh-agent-rp-card', action: 'capability-request', capability: 'chat.session.mutate',
+    token: 'frame-token:0', requestId: 'card-chat-session-mutate-1',
+    operation: 'create-chat-messages', messages: [{ role: 'user', message: '继续调查线索' }], insertAt: 'end',
+  })
+
+  const parser = Reflect.get(cardCapability, 'parseCardChatSessionMutateCapabilityRequest')
+  assert.equal(typeof parser, 'function')
+  assert.deepEqual((parser as (value: unknown) => unknown)(request), request)
+  assert.equal((parser as (value: unknown) => unknown)({
+    ...request, messages: [{ role: 'user', message: '' }],
+  }), undefined)
+  assert.equal((parser as (value: unknown) => unknown)({
+    ...request, messages: [{ role: 'assistant', message: '越权内容' }],
+  }), undefined)
+  assert.equal((parser as (value: unknown) => unknown)({ ...request, insertAt: 0 }), undefined)
+  assert.equal((parser as (value: unknown) => unknown)({ ...request, operation: 'delete-chat-messages' }), undefined)
+  assert.equal((parser as (value: unknown) => unknown)({ ...request, sessionId: 'another-session' }), undefined)
+  assert.equal((parser as (value: unknown) => unknown)({
+    ...request, messages: [{ role: 'user', message: '猫'.repeat(30_000) }],
+  }), undefined)
+
+  assert.notEqual(receiveHostMessage, undefined)
+  sandbox.__testHostData = {
+    source: 'dsh-agent-rp-host', action: 'capability-result', capability: 'chat.session.mutate',
+    requestId: request.requestId, ok: true,
+  }
+  runInContext('__testReceiveHostMessage({ source: parent, data: __testHostData })', context)
+  const pendingSize = runInContext('__dshCardPending.size', context) as number
+  if (pendingSize !== 0) {
+    clearTimeout(runInContext('__dshCardPending.values().next().value.timer', context) as ReturnType<typeof setTimeout>)
+  }
+  assert.equal(pendingSize, 0, 'Host success response must settle the card mutation request')
+  await pending
+  ;(triggerSlash as (value: string) => void)('/trigger')
+
+  const chat = (getChatMessages as () => readonly Record<string, unknown>[])()
+  assert.equal(chat.length, 2)
+  assert.deepEqual({ role: chat[1]?.role, message: chat[1]?.message, is_user: chat[1]?.is_user }, {
+    role: 'user', message: '继续调查线索', is_user: true,
+  })
+  assert.equal(posted.filter(message => (
+    message as { readonly action?: unknown }
+  ).action === 'trigger-slash').length, 1)
+  assert.deepEqual(posted[1], {
+    source: 'dsh-agent-rp-card', action: 'trigger-slash', token: 'frame-token:0', value: '/trigger',
+  })
+})
 
 test('removes model-defined wrappers and reports only safe tag metadata', () => {
   const source = '<scene>private sample prose</scene>'
