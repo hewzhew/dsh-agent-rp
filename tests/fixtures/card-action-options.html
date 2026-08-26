@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>合成行动选项状态栏</title>
+</head>
+<body>
+  <section id="action-options" aria-label="行动选项"></section>
+  <p id="action-options-missing" hidden>没有可用的行动选项</p>
+  <script data-action-options-fixture>
+    (() => {
+      const messages = getChatMessages('0-' + getCurrentMessageId(), { role: 'assistant' })
+      const optionsRoot = document.getElementById('action-options')
+      const missing = document.getElementById('action-options-missing')
+      document.documentElement.dataset.actionOptionsMessages = Array.isArray(messages) ? 'array' : 'not-array'
+      const latest = Array.isArray(messages)
+        ? [...messages].reverse().find(message => message.is_user !== true && typeof (message.message ?? message.mes) === 'string')
+        : undefined
+      const text = latest?.message ?? latest?.mes ?? ''
+      const json = text.match(/<JSONPatch>\s*([\s\S]*?)\s*<\/JSONPatch>/u)?.[1]
+      let patches = []
+      try {
+        patches = JSON.parse(json ?? '[]')
+      } catch {
+        patches = []
+      }
+      const options = patches
+        .filter(patch => patch?.op === 'replace' && /^\/行动选项\/[0-3]$/u.test(patch.path) && typeof patch.value === 'string')
+        .sort((left, right) => left.path.localeCompare(right.path))
+      optionsRoot.replaceChildren()
+      for (const option of options) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = option.value
+        optionsRoot.append(button)
+      }
+      missing.hidden = options.length === 4
+      document.documentElement.dataset.actionOptionsState = options.length === 4 ? 'ready' : 'missing'
+    })()
+  </script>
+</body>
+</html>

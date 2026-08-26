@@ -31,6 +31,8 @@
 
 `Invalid asm.js: Unexpected token` 是旧 Host bundle 内联并改写 `es-module-lexer` 后产生的 V8 警告，不是某个 Tavern 脚本的 `load-error`，也不能单独解释行动选项缺失。当前构建把该解析器保留为正常运行时依赖；更新并重启 Host 后仍出现时，请附上实际安装的 Git 引用和完整启动命令。
 
+完整 HTML 轻前端里的 `getChatMessages(range, option)` 会同步返回消息数组。状态栏若发现 `Array.isArray(getChatMessages(...))` 为 `false` 或返回值是 Promise，说明浏览器仍在使用旧的 Agent RP 客户端资源；请更新插件、重启 Host，并在复现信息中附上页面实际加载的 `client.js?rev=...` 地址。
+
 ## 新角色会话进入「未分组」
 
 从某个工作区里的空白会话打开 Agent RP 并开始游玩时，新角色会话应加入同一工作区。Agent RP 设置中的工作区开关只控制该工作区是否显示 Agent RP 入口，不负责把任意来源会话强制放进该工作区。

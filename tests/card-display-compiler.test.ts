@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { createContext, runInContext } from 'node:vm'
 import {
   cardDisplayCustomElementTags,
   compileCharacterDisplay,
@@ -22,6 +24,99 @@ import {
 import { cardRemoteResourceRequirements } from '../src/card-remote-resource.ts'
 import { AGENT_RP_CAPABILITIES } from '../src/extension-capability.ts'
 import { validExternalWindowMessage } from '../src/client/external-window.ts'
+
+class CardActionOptionsFixtureElement {
+  readonly children: CardActionOptionsFixtureElement[] = []
+  readonly dataset: Record<string, string> = {}
+  hidden = false
+  textContent = ''
+  type = ''
+
+  constructor(readonly tagName: string, readonly id = '') {}
+
+  append(...children: CardActionOptionsFixtureElement[]): void {
+    this.children.push(...children)
+  }
+
+  replaceChildren(...children: CardActionOptionsFixtureElement[]): void {
+    this.children.splice(0, this.children.length, ...children)
+  }
+}
+
+class CardActionOptionsFixtureDocument {
+  readonly documentElement = new CardActionOptionsFixtureElement('html')
+  readonly options = new CardActionOptionsFixtureElement('section', 'action-options')
+  readonly missing = new CardActionOptionsFixtureElement('p', 'action-options-missing')
+  readonly #elements = new Map([
+    [this.options.id, this.options],
+    [this.missing.id, this.missing],
+  ])
+
+  createElement(tagName: string): CardActionOptionsFixtureElement {
+    return new CardActionOptionsFixtureElement(tagName)
+  }
+
+  getElementById(id: string): CardActionOptionsFixtureElement | null {
+    return this.#elements.get(id) ?? null
+  }
+}
+
+const actionOptionsFixture = readFileSync(
+  new URL('./fixtures/card-action-options.html', import.meta.url),
+  'utf8',
+)
+
+interface CardChatFixtureMessage {
+  extra: Record<string, unknown>
+  is_user: boolean
+  mes: string
+  message: string
+  swipes: string[]
+  [key: string]: unknown
+}
+
+function cardChatRuntimeStatements(documentSource: string): string {
+  const statements = [
+    /^function __dshSetCardCapabilityState[^\r\n]*$/mu,
+    /^function __dshCloneCardMessage[^\r\n]*$/mu,
+    /^window\.getChatMessages=[^\r\n]*$/mu,
+    /^window\.getLastMessageId=[^\r\n]*$/mu,
+    /^window\.getCurrentMessageId=[^\r\n]*$/mu,
+  ].map((pattern) => {
+    const statement = documentSource.match(pattern)?.[0]
+    assert.ok(statement, `compiled card frame is missing ${pattern.source}`)
+    return statement
+  })
+  return statements.join('\n')
+}
+
+function runCardActionOptionsFixture(message: CardChatFixtureMessage): {
+  readonly document: CardActionOptionsFixtureDocument
+  readonly getChatMessages: () => CardChatFixtureMessage[]
+} {
+  const documentSource = compileCardFrameDocument(actionOptionsFixture, {
+    origin: 'http://127.0.0.1:3091',
+  })
+  const fixtureScript = documentSource.match(
+    /<script data-action-options-fixture>([\s\S]*?)<\/script>/u,
+  )?.[1]
+  assert.ok(fixtureScript)
+  const document = new CardActionOptionsFixtureDocument()
+  const sandbox: Record<string, unknown> = {
+    __dshCardChat: [message],
+    document,
+  }
+  sandbox.window = sandbox
+  const context = createContext(sandbox)
+  runInContext(cardChatRuntimeStatements(documentSource), context)
+  const getChatMessages = sandbox.getChatMessages
+  assert.equal(typeof getChatMessages, 'function')
+  runInContext(fixtureScript, context)
+  return {
+    document,
+    getChatMessages: getChatMessages as () => CardChatFixtureMessage[],
+  }
+}
 
 test('removes model-defined wrappers and reports only safe tag metadata', () => {
   const source = '<scene>private sample prose</scene>'
@@ -305,6 +400,81 @@ test('exposes only card-owned greeting choices through the isolated chat facade'
   assert.match(source, /Object\.defineProperty\(window,'localStorage'/u)
   assert.match(source, /value\.length>2097152/u)
   assert.doesNotMatch(source, /writeFile|parent\.localStorage|top\.localStorage|document\.cookie/u)
+})
+
+test('returns isolated card chat messages synchronously', () => {
+  const original: CardChatFixtureMessage = {
+    extra: { source: 'greeting' },
+    is_user: false,
+    mes: '合成开场',
+    message: '合成开场',
+    swipes: ['合成开场', '另一个开场'],
+  }
+  const runtime = runCardActionOptionsFixture(original)
+  const first = runtime.getChatMessages()
+  const second = runtime.getChatMessages()
+
+  assert.equal(Array.isArray(first), true)
+  assert.equal(typeof (first as { then?: unknown }).then, 'undefined')
+  assert.notEqual(first, second)
+  assert.notEqual(first[0], second[0])
+  assert.notEqual(first[0]?.extra, second[0]?.extra)
+  assert.notEqual(first[0]?.swipes, second[0]?.swipes)
+
+  first.push({ ...original, extra: {}, swipes: [] })
+  first[0]!.message = '调用者改写正文'
+  first[0]!.mes = '调用者改写正文'
+  first[0]!.extra.source = 'caller'
+  first[0]!.swipes[0] = '调用者改写开场'
+
+  const unchanged = runtime.getChatMessages()
+  assert.equal(unchanged.length, 1)
+  assert.equal(unchanged[0]?.message, original.message)
+  assert.equal(unchanged[0]?.mes, original.mes)
+  assert.deepEqual({ ...unchanged[0]?.extra }, original.extra)
+  assert.deepEqual([...(unchanged[0]?.swipes ?? [])], original.swipes)
+})
+
+test('renders four synthetic JSONPatch action options from the synchronous card chat facade', () => {
+  const message = [
+    '合成剧情正文。',
+    '<JSONPatch>',
+    '[',
+    '  {"op":"replace","path":"/行动选项/0","value":"调查窗边声响"},',
+    '  {"op":"replace","path":"/行动选项/1","value":"查看桌上信件"},',
+    '  {"op":"replace","path":"/行动选项/2","value":"询问同行伙伴"},',
+    '  {"op":"replace","path":"/行动选项/3","value":"安静等待片刻"}',
+    ']',
+    '</JSONPatch>',
+  ].join('\n')
+  const runtime = runCardActionOptionsFixture({
+    extra: {}, is_user: false, mes: message, message, swipes: [message],
+  })
+
+  assert.equal(runtime.document.documentElement.dataset.actionOptionsMessages, 'array')
+  assert.equal(runtime.document.documentElement.dataset.actionOptionsState, 'ready')
+  assert.equal(runtime.document.missing.hidden, true)
+  assert.deepEqual(runtime.document.options.children.map(child => child.textContent), [
+    '调查窗边声响',
+    '查看桌上信件',
+    '询问同行伙伴',
+    '安静等待片刻',
+  ])
+  assert.deepEqual(runtime.document.options.children.map(child => child.type), [
+    'button', 'button', 'button', 'button',
+  ])
+})
+
+test('keeps the synthetic action-options missing state without a valid JSONPatch', () => {
+  const runtime = runCardActionOptionsFixture({
+    extra: {}, is_user: false, mes: '没有状态补丁的合成剧情。',
+    message: '没有状态补丁的合成剧情。', swipes: [],
+  })
+
+  assert.equal(runtime.document.documentElement.dataset.actionOptionsMessages, 'array')
+  assert.equal(runtime.document.documentElement.dataset.actionOptionsState, 'missing')
+  assert.equal(runtime.document.missing.hidden, false)
+  assert.deepEqual(runtime.document.options.children, [])
 })
 
 test('accepts only authenticated audience-bound native identity requests from light frontends', () => {
