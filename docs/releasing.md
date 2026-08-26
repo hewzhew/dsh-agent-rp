@@ -6,6 +6,7 @@ Agent RP publishes npm prereleases as `@dsh-external/dsh-agent-rp` under the `ne
 
 - The version in `package.json` and GitHub tag must match exactly as `0.0.0-rc.N` and `v0.0.0-rc.N`.
 - The tagged commit must already belong to `main`, and the GitHub Release must be marked as a prerelease.
+- The package job runs on a GitHub-hosted Windows runner so the checked-in browser vendor payloads are verified with their canonical generation toolchain; every platform installs the same audited tarball.
 - `.github/workflows/publish-prerelease.yml` builds and packs once, audits that exact tarball, and passes the retained artifact to the publish job.
 - npm publication uses GitHub OIDC trusted publishing with provenance. The repository does not store an npm automation token.
 - User installation documentation changes only after a clean install and an update from an older npm prerelease both succeed.

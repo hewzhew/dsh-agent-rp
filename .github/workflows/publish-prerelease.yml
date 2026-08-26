@@ -11,19 +11,19 @@ permissions:
 jobs:
   package:
     name: Verify release package
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Check out the reviewed revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           run_install: false
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           cache: pnpm
           node-version: 24.x
@@ -35,26 +35,27 @@ jobs:
           RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          test "$RELEASE_IS_PRERELEASE" = "true" || { echo "Only GitHub prereleases may publish this package." >&2; exit 1; }
+          if ($env:RELEASE_IS_PRERELEASE -ne 'true') { throw 'Only GitHub prereleases may publish this package.' }
           git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main || { echo "The release tag is not on main." >&2; exit 1; }
-          node scripts/check-prerelease-package.mjs --tag "$RELEASE_TAG"
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'The release tag is not on main.' }
+          node scripts/check-prerelease-package.mjs --tag $env:RELEASE_TAG
       - name: Build and pack the public artifact
         run: |
-          mkdir -p .release-dist
+          [System.IO.Directory]::CreateDirectory((Join-Path $PWD '.release-dist')) | Out-Null
           pnpm pack --out .release-dist/dsh-agent-rp.tgz
       - name: Audit the exact tarball
         env:
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
         run: |
-          if [ -n "$RELEASE_TAG" ]; then
-            node scripts/check-prerelease-package.mjs --tag "$RELEASE_TAG" --tarball .release-dist/dsh-agent-rp.tgz
-          else
+          if ([string]::IsNullOrEmpty($env:RELEASE_TAG)) {
             node scripts/check-prerelease-package.mjs --tarball .release-dist/dsh-agent-rp.tgz
-          fi
+          } else {
+            node scripts/check-prerelease-package.mjs --tag $env:RELEASE_TAG --tarball .release-dist/dsh-agent-rp.tgz
+          }
       - name: Retain the reviewed release artifact
         if: github.event_name == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           if-no-files-found: error
           name: npm-prerelease-${{ github.event.release.tag_name }}
@@ -72,14 +73,14 @@ jobs:
       id-token: write
     steps:
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
       - name: Require npm trusted-publishing support
         run: >-
           node -e "const [major, minor] = require('node:child_process').execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number); if (major < 11 || (major === 11 && minor < 5)) throw new Error('npm 11.5.1 or newer is required for trusted publishing')"
       - name: Download the reviewed tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-prerelease-${{ github.event.release.tag_name }}
           path: .release-dist
