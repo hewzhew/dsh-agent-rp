@@ -54,6 +54,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $installerPath -Start
 
 国内 npm registry 较慢时，可在安装器最后一行加 `-ChinaMirror`。这个选项只改变本次安装使用的 npm registry；下载 runner 文件或 Agent RP 源码时访问的是 GitHub，切换 npm 镜像不会修复这一段。
 
+### macOS
+
+Apple Silicon 与 Intel Mac 使用独立安装器。安装器会在 `~/.dsh/bin/dsh-agent-rp` 创建稳定入口，并使用与 Windows、Linux 相同的冻结 Agent Host 和插件事件补丁：
+
+```bash
+installer_path="$(mktemp)"
+curl -fsSL https://raw.githubusercontent.com/hewzhew/dsh-agent-rp/main/scripts/install-macos.sh -o "$installer_path"
+bash "$installer_path" --start
+```
+
+若缺少原生构建工具，请先运行 `xcode-select --install` 并安装 Python 3。使用自定义 `DSH_HOME` 时必须传入绝对路径；安装完成后始终使用安装器打印的专用入口启动，不能改回官方 runner。更新时以同一用户重新运行安装器。
+
 ### Linux
 
 普通 Linux 桌面或服务器使用独立安装器。请以以后实际运行 DSH 的非特权用户执行；默认会在 `~/.dsh/bin/dsh-agent-rp` 创建稳定入口：
