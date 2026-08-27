@@ -306,6 +306,8 @@
 .story-event-observations { display: grid; gap: 7px; }
 .story-event-observations > strong { font-size: 12px; }
 .story-event-observations > p { color: var(--studio-muted); font-size: 10px; line-height: 1.5; margin: 0; }
+.story-event-observation-editor { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 9px; display: grid; gap: 8px; padding: 9px; }
+.story-event-observation-editor .story-studio-input { resize: vertical; }
 .story-event-change-set { display: grid; gap: 9px; }
 .story-event-change-set-heading { align-items: flex-start; display: flex; gap: 10px; justify-content: space-between; }
 .story-event-change-set-heading > div { display: grid; gap: 3px; }

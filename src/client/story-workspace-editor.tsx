@@ -331,11 +331,12 @@ function compileCharacterPreview(workspace: StoryWorkspaceSnapshot, character: S
   ].join('\n\n')
 }
 
-function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
+function NodeInspector({ workspace, node, update, onSelect, onOpenEvent, onDelete }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly node: StoryNode
   readonly update: UpdateWorkspace
   readonly onSelect: (selection: StudioSelection | undefined) => void
+  readonly onOpenEvent: (eventId: string) => void
   readonly onDelete: () => void
 }) {
   const patch = (transform: (value: StoryNode) => StoryNode): void => {
@@ -381,10 +382,13 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
     && candidate.lifecycle === 'canonical' && candidate.status !== 'dropped'
     && (candidate.kind === 'arc' || candidate.kind === 'beat'))
   const parent = node.parentId === undefined ? undefined : workspace.graph.nodes.find(candidate => candidate.id === node.parentId)
+  const sourceEvent = node.sourceEventId === undefined ? undefined : workspace.events.find(event => event.id === node.sourceEventId)
   const canAccept = parent === undefined || parent.lifecycle === 'canonical'
   return <>
     <h2>{node.title}</h2>
     <div className="story-studio-inspector-subtitle">{nodeKindLabels[node.kind]} · {node.lifecycle === 'suggested' ? '候选变更' : '正式故事数据'}</div>
+    {sourceEvent !== undefined && <button className="story-citation-link" type="button"
+      onClick={() => { onOpenEvent(sourceEvent.id) }}>来源：第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗</button>}
     {node.lifecycle === 'suggested' && <div className="story-studio-actions" style={{ marginBottom: 14 }}>
       <button className="story-studio-button story-studio-button-primary" type="button"
         disabled={!canAccept} onClick={() => { patch(value => ({ ...value, lifecycle: 'canonical' })) }}>
@@ -648,8 +652,33 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
   const suggestedNodes = workspace.graph.nodes.filter(node => suggestionBatch.nodeIds.includes(node.id))
   const suggestedEdges = workspace.graph.edges.filter(edge => suggestionBatch.edgeIds.includes(edge.id))
   const suggestionCount = suggestedNodes.length + suggestedEdges.length
+  const linkedNode = event.nodeId === undefined ? undefined : workspace.graph.nodes.find(node => node.id === event.nodeId)
   const patch = (transform: (value: StoryEvent) => StoryEvent): void => {
-    update(current => ({ ...current, events: current.events.map(item => item.id === event.id ? transform(item) : item) }))
+    update(current => {
+      const nextEvent = transform(current.events.find(item => item.id === event.id) ?? event)
+      return {
+        ...current,
+        events: current.events.map(item => item.id === event.id ? nextEvent : item),
+        facts: current.facts.map(fact => fact.source.kind === 'event' && fact.source.eventId === event.id
+          ? { ...fact, source: { ...fact.source, evidence: nextEvent.evidence } }
+          : fact),
+      }
+    })
+  }
+  const patchObservation = (factId: string, transform: (value: StoryFact) => StoryFact): void => {
+    update(current => ({
+      ...current,
+      facts: current.facts.map(fact => fact.id === factId ? transform(fact) : fact),
+    }))
+  }
+  const toggleObserver = (fact: StoryFact, characterId: string, checked: boolean): void => {
+    patchObservation(fact.id, current => ({
+      ...current,
+      knowledgeMode: 'override',
+      knownBy: checked
+        ? [...new Set([...current.knownBy, characterId])]
+        : current.knownBy.filter(id => id !== characterId),
+    }))
   }
   return <>
     <h2>{event.title}</h2><div className="story-studio-inspector-subtitle">第 {event.turn} 回合 · 已发生事件</div>
@@ -660,6 +689,8 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
       onChange={change => { patch(current => change.target.value === '' ? eventWithoutNode(current) : { ...current, nodeId: change.target.value }) }}>
       <option value="">未关联</option>{workspace.graph.nodes.filter(node => node.lifecycle === 'canonical').map(node => <option key={node.id} value={node.id}>{node.title}</option>)}
     </select></Field>
+    {linkedNode !== undefined && <button className="story-studio-button" type="button"
+      onClick={() => { onSelect({ kind: 'node', id: linkedNode.id }) }}>在故事地图中打开“{linkedNode.title}”</button>}
     <div className="story-studio-field"><span>参与人物</span><div className="story-studio-checks">
       {workspace.characters.map(character => <label className="story-studio-check" key={character.id}>
         <input type="checkbox" checked={event.participantIds.includes(character.id)} onChange={change => { patch(current => ({
@@ -670,9 +701,14 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
     </div></div>
     <hr className="story-studio-divider" />
     <div className="story-event-observations"><strong>由此事件形成的认知</strong>
-      {observations.map(fact => <div className="story-studio-fact" key={fact.id}><p>{fact.text}</p><small>
-        {fact.knownBy.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '尚未分配给人物'}
-      </small></div>)}
+      {observations.map(fact => <div className="story-event-observation-editor" key={fact.id}>
+        <textarea aria-label="事件人物事实" className="story-studio-input" rows={3} value={fact.text}
+          onChange={change => { patchObservation(fact.id, current => ({ ...current, text: change.target.value })) }} />
+        <div className="story-studio-checks">{workspace.characters.map(character => <label className="story-studio-check" key={character.id}>
+          <input type="checkbox" checked={fact.knownBy.includes(character.id)}
+            onChange={change => { toggleObserver(fact, character.id, change.target.checked) }} />{character.name}
+        </label>)}</div>
+      </div>)}
       {observations.length === 0 && <p>这次事件还没有形成可供人物使用的观察。</p>}
       <button className="story-studio-button" type="button" onClick={onOpenKnowledge}>在认知矩阵中核对</button>
     </div>
@@ -1450,13 +1486,14 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   const selectedOutput = selection?.kind === 'output' ? workspace?.outputs.find(output => output.id === selection.id) : undefined
 
   const inspector = workspace === undefined ? <EmptyInspector />
-    : selectedNode !== undefined ? <NodeInspector workspace={workspace} node={selectedNode} update={update} onSelect={setSelection} onDelete={() => { deleteNode(selectedNode.id) }} />
+    : selectedNode !== undefined ? <NodeInspector workspace={workspace} node={selectedNode} update={update} onSelect={setSelection}
+      onOpenEvent={id => { select({ kind: 'event', id }) }} onDelete={() => { deleteNode(selectedNode.id) }} />
       : selectedEdge !== undefined ? <EdgeInspector workspace={workspace} edge={selectedEdge} update={update} onDelete={() => { deleteEdge(selectedEdge.id) }} />
         : selectedCharacter !== undefined ? <CharacterInspector workspace={workspace} character={selectedCharacter} update={update}
           perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
           onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
           : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update}
-            onOpenKnowledge={() => { setView('characters'); setSelection(undefined) }} onSelect={setSelection}
+            onOpenKnowledge={() => { setView('characters') }} onSelect={select}
             onDelete={() => { deleteEvent(selectedEvent.id) }} />
             : selectedSource !== undefined ? <SourceInspector source={selectedSource} update={update} onDelete={() => {
               update(current => ({
@@ -1485,13 +1522,18 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   } else if (view === 'timeline') {
     const events = [...workspace.events].sort((left, right) => left.turn - right.turn)
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>事件时间线</h1><p>已经发生的情节及其最终正文证据。</p></div></div>
-      <div className="story-studio-card-list">{events.map(event => <article className="story-studio-card" data-selected={selection?.kind === 'event' && selection.id === event.id}
-        key={event.id} onClick={() => { setSelection({ kind: 'event', id: event.id }) }}>
-        <h3>第 {event.turn} 回合 · {event.title}</h3><p>{event.summary}</p>
-        <div className="story-studio-card-meta"><span>{event.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '未标注参与人物'}</span>
-          <span>{workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id).length} 条人物观察</span>
-          {event.nodeId !== undefined && <span>关联：{workspace.graph.nodes.find(node => node.id === event.nodeId)?.title ?? '剧情节点'}</span>}</div>
-      </article>)}{events.length === 0 && <div className="story-studio-empty"><span>第一轮故事完成后，事件会出现在这里。</span></div>}</div>
+      <div className="story-studio-card-list">{events.map(event => {
+        const batch = storySuggestionBatch(workspace, event.id)
+        const pending = batch.nodeIds.length + batch.edgeIds.length
+        return <article className="story-studio-card" data-selected={selection?.kind === 'event' && selection.id === event.id}
+          key={event.id} onClick={() => { setSelection({ kind: 'event', id: event.id }) }}>
+          <h3>第 {event.turn} 回合 · {event.title}</h3><p>{event.summary}</p>
+          <div className="story-studio-card-meta"><span>{event.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '未标注参与人物'}</span>
+            <span>{workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id).length} 条人物观察</span>
+            {pending > 0 && <span>{pending} 项候选变更</span>}
+            {event.nodeId !== undefined && <span>关联：{workspace.graph.nodes.find(node => node.id === event.nodeId)?.title ?? '剧情节点'}</span>}</div>
+        </article>
+      })}{events.length === 0 && <div className="story-studio-empty"><span>第一轮故事完成后，事件会出现在这里。</span></div>}</div>
     </div>
   } else if (view === 'characters') {
     main = <CharacterKnowledgeView workspace={workspace} selectedCharacterId={selectedCharacter?.id} update={update}
