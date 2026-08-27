@@ -348,6 +348,20 @@
 .story-character-hero-copy > span { color: var(--story-accent); font-size: 9px; font-weight: 700; letter-spacing: .07em; }
 .story-character-hero-copy h1 { font-size: 23px; margin: 3px 0 0; }
 .story-character-hero-copy p { color: var(--studio-muted); font-size: 11px; line-height: 1.5; margin: 5px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.story-character-now { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.story-character-now span {
+  background: color-mix(in srgb, var(--story-accent) 8%, var(--studio-bg));
+  border: 1px solid color-mix(in srgb, var(--story-accent) 22%, var(--studio-border));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--story-accent) 72%, currentColor);
+  font-size: 9px;
+  line-height: 1.4;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .story-character-hero-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
 .story-character-tabs { border-bottom: 1px solid var(--studio-border); display: flex; gap: 4px; margin: 16px 0 18px; overflow-x: auto; }
 .story-character-tabs button {

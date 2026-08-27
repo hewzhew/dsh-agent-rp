@@ -1604,7 +1604,7 @@ export function compileStoryCharacterContext(
     ...(character.profile.systemPrompt.trim() === '' ? [] : ['## 扮演指令', character.profile.systemPrompt]),
     ...(character.profile.description.trim() === '' ? [] : ['## 人物描述', character.profile.description]),
     ...(character.profile.personality.trim() === '' ? [] : ['## 性格与行为', character.profile.personality]),
-    ...(character.profile.scenario.trim() === '' ? [] : ['## 场景基线', character.profile.scenario]),
+    ...(character.profile.scenario.trim() === '' ? [] : ['## 入场情境', character.profile.scenario]),
     ...(character.profile.exampleDialogue.trim() === '' ? [] : ['## 对话示例', character.profile.exampleDialogue]),
     ...(Object.values(character.state).every(value => value.trim() === '') ? [] : [
       '## 当前场地状态',
@@ -1620,7 +1620,7 @@ export function compileStoryCharacterContext(
     ...(worldContext === '' ? [] : ['## 此人物可见的世界状态', worldContext]),
     '## 本轮玩家输入',
     playerInput,
-    '只能依据以上材料决定该人物此刻相信什么、注意到什么和采取什么行动。不得假设其他人物的私有知识，也不得读取导演故事图、建议节点或未公开的未来安排。',
+    '只能依据以上材料决定该人物此刻相信什么、注意到什么和采取什么行动。入场情境只描述本局起点；与当前场地状态冲突时，以当前场地状态为准。不得假设其他人物的私有知识，也不得读取导演故事图、建议节点或未公开的未来安排。',
     ...(character.profile.postHistoryInstructions.trim() === '' ? [] : ['## 历史后指令', character.profile.postHistoryInstructions]),
   ].join('\n\n')
   return {

@@ -410,7 +410,7 @@ function compileCharacterPreview(workspace: StoryWorkspaceSnapshot, character: S
     ...(character.profile.systemPrompt.trim() === '' ? [] : ['## 扮演指令', character.profile.systemPrompt]),
     ...(character.profile.description.trim() === '' ? [] : ['## 人物描述', character.profile.description]),
     ...(character.profile.personality.trim() === '' ? [] : ['## 性格与行为', character.profile.personality]),
-    ...(character.profile.scenario.trim() === '' ? [] : ['## 场景基线', character.profile.scenario]),
+    ...(character.profile.scenario.trim() === '' ? [] : ['## 入场情境', character.profile.scenario]),
     ...(character.profile.exampleDialogue.trim() === '' ? [] : ['## 对话示例', character.profile.exampleDialogue]),
     ...(Object.values(character.state).every(value => value.trim() === '') ? [] : [
       '## 当前场地状态',
@@ -707,7 +707,12 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
     <header className="story-character-hero">
       <div className="story-character-avatar" aria-hidden="true">{character.name.slice(0, 1)}</div>
       <div className="story-character-hero-copy"><span>{character.actor === undefined ? '本场地手写人物' : '已绑定资源中心角色卡'}</span><h1>{character.name}</h1>
-        <p>{character.profile.description.trim().split('\n').find(Boolean)?.slice(0, 120) || '还没有人物描述。'}</p></div>
+        <p>{character.profile.description.trim().split('\n').find(Boolean)?.slice(0, 120) || '还没有人物描述。'}</p>
+        <div className="story-character-now">
+          {character.state.location.trim() !== '' && <span>位置 · {character.state.location}</span>}
+          {character.state.condition.trim() !== '' && <span>状态 · {character.state.condition}</span>}
+          {character.state.objective.trim() !== '' && <span>目标 · {character.state.objective}</span>}
+        </div></div>
       <div className="story-character-hero-actions"><button className="story-studio-button" type="button" onClick={() => {
         if (perspectiveId === character.id) setPerspectiveId(undefined)
         else {
@@ -719,11 +724,11 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
         <button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button></div>
     </header>
     <nav className="story-character-tabs" aria-label="人物编辑区">
-      {([['profile', '人物档案'], ['state', '场地状态'], ['knowledge', `认知与经历 · ${String(knownFacts.length)}`], ['agent', 'Agent 输入']] as const)
+      {([['profile', '人物设定'], ['state', '当前动态'], ['knowledge', `认知与经历 · ${String(knownFacts.length)}`], ['agent', 'Agent 输入']] as const)
         .map(([id, label]) => <button aria-current={tab === id ? 'page' : undefined} key={id} type="button" onClick={() => { setTab(id) }}>{label}</button>)}
     </nav>
     {tab === 'profile' && <div className="story-character-editor-grid">
-      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>角色卡</strong><span>稳定身份会跨场景复用；临时状态放在“场地状态”。</span></div></div>
+      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>人物设定</strong><span>角色卡中持续影响人物身份与行动方式的内容。</span></div></div>
         <div className="story-character-fields">
           <Field label="角色卡来源"><select className="story-studio-input" value={character.actor?.id ?? ''} disabled={busy || dirty}
             onChange={event => { onBindActor(character.id, event.target.value === '' ? undefined : event.target.value) }}>
@@ -735,13 +740,12 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
           <TextField label="性格与行为" rows={7} value={character.profile.personality} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, personality: value } })) }} />
         </div>
       </section>
-      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>场景与声音</strong><span>对应角色卡的场景基线与示例对话。</span></div></div>
-        <TextField label="场景基线" rows={6} value={character.profile.scenario} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, scenario: value } })) }} />
-        <TextField label="对话示例" rows={10} value={character.profile.exampleDialogue} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, exampleDialogue: value } })) }} />
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>说话样本</strong><span>用对白校准措辞、节奏和人物之间的称呼，不规定当前剧情。</span></div></div>
+        <TextField label="示例对话" rows={18} value={character.profile.exampleDialogue} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, exampleDialogue: value } })) }} />
       </section>
     </div>}
     {tab === 'state' && <div className="story-character-editor-grid">
-      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>当前场地状态</strong><span>只描述此刻；故事回合可以持续更新这些字段。</span></div></div>
+      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>此刻</strong><span>由世界事件、连续性记录或手动修订持续更新。</span></div></div>
         <div className="story-character-state-grid">
           <TextField label="当前位置" rows={2} value={character.state.location} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, location: value } })) }} />
           <TextField label="身心状态" rows={2} value={character.state.condition} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, condition: value } })) }} />
@@ -749,8 +753,8 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
         <TextField label="当前目标" rows={3} value={character.state.objective} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, objective: value } })) }} />
         <TextField label="本局备注" rows={7} value={character.state.notes} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, notes: value } })) }} />
       </section>
-      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>为什么单独保存</strong><span>角色卡回答“这个人是谁”，场地状态回答“这个人现在怎样”。</span></div></div>
-        <p className="story-character-help">换一局或进入另一段故事时，可以继续复用人物档案，而不会把上一局的位置、伤势或临时目标误当成永久性格。</p>
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>入场情境</strong><span>角色卡 · Scenario</span></div></div>
+        <TextField label="本局开始时" rows={12} value={character.profile.scenario} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, scenario: value } })) }} />
       </section>
     </div>}
     {tab === 'knowledge' && <div className="story-character-knowledge-layout">

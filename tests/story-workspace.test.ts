@@ -438,7 +438,15 @@ test('compiles inherited scene knowledge while preserving private fact overrides
       edges: [],
     },
     characters: [
-      character(aliceId, '阿梨', '阿梨遇事先观察。'),
+      {
+        ...character(aliceId, '阿梨', '阿梨遇事先观察。'),
+        profile: {
+          ...character(aliceId, '阿梨').profile,
+          description: '阿梨遇事先观察。',
+          scenario: '本局开始时，阿梨还在旧车站候车室。',
+        },
+        state: { location: '桥边', condition: '衣角被雨打湿', objective: '确认徽章来历', notes: '' },
+      },
       character(bobId, '柏舟', '柏舟说话直接。'),
     ],
     events: [{
@@ -516,6 +524,9 @@ test('compiles inherited scene knowledge while preserving private fact overrides
   })
 
   assert.match(compiled.text, /桥边的雨已经停了/u)
+  assert.match(compiled.text, /## 入场情境[\s\S]*旧车站候车室/u)
+  assert.match(compiled.text, /## 当前场地状态[\s\S]*位置：桥边/u)
+  assert.match(compiled.text, /与当前场地状态冲突时，以当前场地状态为准/u)
   assert.match(compiled.text, /阿梨私密：她认得旧徽章/u)
   assert.match(compiled.text, /角色设定集 · 人物篇 · 第 1 段/u)
   assert.match(compiled.text, /阿梨曾在旧站见过徽章/u)
