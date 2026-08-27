@@ -243,12 +243,14 @@ test('runs logged story stages while keeping each character request privately sc
               action: '先观察徽章刻痕。',
               speechIntent: '提醒对方先确认眼前事实再下结论。',
               voiceEvidence: [evidence, 'character:invented:example-dialogue'],
+              insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
             })
             : JSON.stringify({
               observation: '注意到阿梨正在观察徽章。',
               action: '“先别问车票。”',
               speechIntent: '回避车票话题。',
               voiceEvidence: [evidence],
+              insights: [],
             })
         } else if (system.includes('剧情导演 Worker')) {
           directorBody = body
@@ -364,7 +366,7 @@ test('runs logged story stages while keeping each character request privately sc
 
   const result = await runStoryTurnPipeline(input)
 
-  assert.equal(calls, 13)
+  assert.equal(calls, 12)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(characterBodies.length, 2)
@@ -390,6 +392,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
   assert.match(characterSystems[0]!, /若开口只是为了让场面热闹/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
+  assert.match(characterSystems[0]!, /insights 只记录本轮新获得且未公开/u)
   assert.match(directorBody, /说话意图：提醒对方先确认眼前事实再下结论/u)
   assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
   assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)
@@ -397,15 +400,12 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
   assert.match(characterBodies[1]!, /character:character-00000000-0000-4000-8000-000000000002:example-dialogue/u)
   assert.doesNotMatch(characterBodies[1]!, /阿梨知道徽章|下一幕会停电|第三幕打开/u)
-  assert.equal(sectionSystems.length, 3)
+  assert.equal(sectionSystems.length, 2)
   assert.match(sectionSystems[0]!, /叙事正文、环境、行动与对白/u)
   assert.match(sectionSystems[0]!, /同一事件换句话重复/u)
   assert.match(sectionSystems[0]!, /可执行世界严格只读/u)
-  assert.match(sectionSystems[1]!, /聚焦人物“阿梨”/u)
-  assert.match(sectionSystems[1]!, /"insights"/u)
-  assert.match(sectionSystems[1]!, /knowledge\|intention\|decision/u)
-  assert.match(sectionSystems[2]!, /时间线、前情或档案/u)
-  assert.match(sectionSystems[2]!, /非空内容，不能返回 <omit-section \/>/u)
+  assert.match(sectionSystems[1]!, /时间线、前情或档案/u)
+  assert.match(sectionSystems[1]!, /非空内容，不能返回 <omit-section \/>/u)
   assert.match(sectionBodies[0]!, /获准对白：阿梨｜“先看徽章，别忙着猜。”/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /<voice_evidence>|先把眼前的事说清楚/u)
   assert.match(voiceBody, new RegExp(`speech:${sectionId}:1`, 'u'))
@@ -443,6 +443,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceRetryBody, /rejected_draft/u)
   assert.match(voiceRetryBody, /谁都能说的胜利台词/u)
   assert.match(sectionBodies[0]!, /对白收束：1\/2 句通过声音校准/u)
+  assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
   assert.ok(editorBody.indexOf('## 正文') < editorBody.indexOf('## 阿梨视角'))
   assert.ok(editorBody.indexOf('## 阿梨视角') < editorBody.indexOf('## 公开档案'))
   assert.match(editorBody, /## 阿梨视角[\s\S]*自己的旧站记忆/u)
@@ -461,8 +462,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 13)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 13)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 12)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 12)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
@@ -471,7 +472,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-') || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 13)
+  assert.equal(calls, 12)
 })
 
 test('stops malformed research output and falls back to exact local evidence', async () => {

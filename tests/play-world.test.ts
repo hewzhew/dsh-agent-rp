@@ -442,7 +442,7 @@ test('keeps the exact world outcome in visible history and drops the next actor 
           : system.includes('剧情研究 Worker')
             ? JSON.stringify({ findings: [], followUps: [] })
             : system.includes('指定人物认知')
-              ? JSON.stringify({ observation: '看见刚发生的结果。', action: '', speechIntent: '', voiceEvidence: [] })
+              ? JSON.stringify({ observation: '看见刚发生的结果。', action: '', speechIntent: '', voiceEvidence: [], insights: [] })
               : system.includes('剧情导演 Worker')
                 ? JSON.stringify({ sections: [
                   { sectionId: proseId, beats: ['表现刚发生的掷骰结果。'], speech: [] },
@@ -499,7 +499,7 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
   assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'section' ? [event.data.subjectId] : []), [characterId])
+    && event.data.stage === 'section' ? [event.data.subjectId] : []), [])
   session.append('assistant/message', {
     turn: 2,
     step: 1,
