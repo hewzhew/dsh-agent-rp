@@ -478,6 +478,13 @@ test('keeps the exact world outcome in visible history and drops the next actor 
     signal: new AbortController().signal,
   })
 
+  const researchDispatch = JSON.stringify(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'research' ? [event.data.dispatch] : []).at(0))
+  assert.match(researchDispatch, /story:current-world-state/u)
+  assert.match(researchDispatch, /当前第 2 回合，轮到 雾雨魔理沙/u)
+  assert.match(researchDispatch, /story:current-world-outcome/u)
+  assert.match(researchDispatch, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
+  assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
