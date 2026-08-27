@@ -25,6 +25,7 @@ import {
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
 import {
   STORY_WORKSPACES_PATH,
+  type StoryCitation,
   type StoryCharacter,
   type StoryEdge,
   type StoryEdgeKind,
@@ -39,7 +40,9 @@ import {
   type StoryWorkspaceSnapshot,
   type StoryWorkspaceSummary,
 } from '../story-workspace-protocol.ts'
+import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
+import { createClientOpaqueUuid } from './client-opaque-id.ts'
 import storyStudioCss from './story-workspace-editor.css?raw'
 
 interface StoryWorkspaceEditorProps {
@@ -63,6 +66,7 @@ type StudioSelection =
   | { readonly kind: 'character'; readonly id: string }
   | { readonly kind: 'event'; readonly id: string }
   | { readonly kind: 'source'; readonly id: string }
+  | { readonly kind: 'citation'; readonly id: string }
   | { readonly kind: 'output'; readonly id: string }
 
 interface StoryCanvasNodeData extends Record<string, unknown> {
@@ -95,7 +99,6 @@ const edgeKindLabels: Readonly<Record<StoryEdgeKind, string>> = {
   causes: '导致',
   contains: '属于',
   foreshadows: '埋设 → 回收',
-  supports: '依据',
 }
 
 const outputKindLabels: Readonly<Record<StoryOutputKind, string>> = {
@@ -171,6 +174,7 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
       events: workspace.events,
       outputs: workspace.outputs,
       sources: workspace.sources,
+      citations: workspace.citations,
     }),
   })
   if (value.workspace === undefined) throw new Error('故事工作室保存响应无效')
@@ -230,9 +234,23 @@ function edgeWithoutSourceEvent(edge: StoryEdge): StoryEdge {
   return rest
 }
 
+function citationWithoutTarget(citation: StoryCitation): StoryCitation {
+  const { target: _target, ...rest } = citation
+  return rest
+}
+
+function citationSourceLabel(workspace: StoryWorkspaceSnapshot, citation: StoryCitation): string {
+  const source = workspace.sources.find(candidate => candidate.id === citation.sourceId)
+  return [source?.name ?? '未知资料', citation.locator].filter(Boolean).join(' · ')
+}
+
 function compileCharacterPreview(workspace: StoryWorkspaceSnapshot, character: StoryCharacter): string {
   const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(character.id))
-    .map(fact => `- ${fact.status === 'uncertain' ? '[不确定] ' : ''}${fact.text}`).join('\n')
+    .map(fact => {
+      const citations = workspace.citations.filter(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id)
+      return [`- ${fact.status === 'uncertain' ? '[不确定] ' : ''}${fact.text}`,
+        ...citations.map(citation => `  - 依据：${citationSourceLabel(workspace, citation)} — ${citation.quote}`)].join('\n')
+    }).join('\n')
   return [
     `# 人物：${character.name}`,
     '## Persona',
@@ -384,7 +402,7 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
   }
   const addFact = (): void => {
     update(current => ({ ...current, facts: [...current.facts, {
-      id: `fact-${crypto.randomUUID()}`,
+      id: `fact-${createClientOpaqueUuid()}`,
       text: '新事实',
       status: 'asserted',
       audience: 'director',
@@ -425,7 +443,12 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
       </div>
       <small>{fact.source.kind === 'manual' ? '来源：玩家记录' : `来源：事件证据「${fact.source.evidence}」`}</small>
       <button className="story-studio-button story-studio-danger" style={{ marginTop: 7 }} type="button"
-        onClick={() => { update(current => ({ ...current, facts: current.facts.filter(item => item.id !== fact.id) })) }}>删除事实</button>
+        onClick={() => { update(current => ({
+          ...current,
+          facts: current.facts.filter(item => item.id !== fact.id),
+          citations: current.citations.map(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id
+            ? citationWithoutTarget(citation) : citation),
+        })) }}>删除事实</button>
     </div>)}
     <hr className="story-studio-divider" />
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除人物</button>
@@ -483,6 +506,89 @@ function SourceInspector({ source, update, onDelete }: {
       onChange={value => { patch(current => ({ ...current, content: value })) }} />
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除资料</button>
   </>
+}
+
+function CitationInspector({ workspace, citation, update, onDelete }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly citation: StoryCitation
+  readonly update: UpdateWorkspace
+  readonly onDelete: () => void
+}) {
+  const patch = (transform: (value: StoryCitation) => StoryCitation): void => {
+    update(current => ({ ...current, citations: current.citations.map(item => item.id === citation.id ? transform(item) : item) }))
+  }
+  const source = workspace.sources.find(candidate => candidate.id === citation.sourceId)
+  const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
+  const changeTargetKind = (kind: '' | 'node' | 'fact'): void => {
+    if (kind === '') patch(citationWithoutTarget)
+    else if (kind === 'node') {
+      const node = canonicalNodes[0]
+      if (node !== undefined) patch(current => ({ ...current, target: { kind: 'node', nodeId: node.id } }))
+    } else {
+      const fact = workspace.facts[0]
+      if (fact !== undefined) patch(current => ({ ...current, target: { kind: 'fact', factId: fact.id } }))
+    }
+  }
+  return <>
+    <h2>资料引用</h2><div className="story-studio-inspector-subtitle">{citationSourceLabel(workspace, citation)}</div>
+    <Field label="来源资料"><select className="story-studio-input" value={citation.sourceId}
+      onChange={event => { patch(current => ({ ...current, sourceId: event.target.value })) }}>
+      {workspace.sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+    </select></Field>
+    <TextField label="原文位置" rows={1} value={citation.locator} onChange={value => { patch(current => ({ ...current, locator: value })) }} />
+    <TextField label="引用原文快照" rows={8} value={citation.quote} onChange={value => { patch(current => ({ ...current, quote: value })) }} />
+    <div className="story-citation-state" data-current={source?.content.includes(citation.quote) ?? false}>
+      {source?.content.includes(citation.quote) === true ? '仍可在当前原文中定位' : '原文已变化；引用快照仍被保留'}
+    </div>
+    <TextField label="引用说明" rows={4} value={citation.note} onChange={value => { patch(current => ({ ...current, note: value })) }} />
+    <Field label="支持的故事对象"><select className="story-studio-input" value={citation.target?.kind ?? ''}
+      onChange={event => { changeTargetKind(event.target.value as '' | 'node' | 'fact') }}>
+      <option value="">暂未关联</option>
+      <option value="node" disabled={canonicalNodes.length === 0}>剧情节点</option>
+      <option value="fact" disabled={workspace.facts.length === 0}>人物事实</option>
+    </select></Field>
+    {citation.target?.kind === 'node' && <Field label="剧情节点"><select className="story-studio-input" value={citation.target.nodeId}
+      onChange={event => { patch(current => ({ ...current, target: { kind: 'node', nodeId: event.target.value } })) }}>
+      {canonicalNodes.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}
+    </select></Field>}
+    {citation.target?.kind === 'fact' && <Field label="人物事实"><select className="story-studio-input" value={citation.target.factId}
+      onChange={event => { patch(current => ({ ...current, target: { kind: 'fact', factId: event.target.value } })) }}>
+      {workspace.facts.map(fact => <option key={fact.id} value={fact.id}>{fact.text.slice(0, 70)}</option>)}
+    </select></Field>}
+    <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除引用</button>
+  </>
+}
+
+function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectCitation, onAddCitation }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly source: StorySource
+  readonly selectedCitationId: string | undefined
+  readonly onBack: () => void
+  readonly onSelectCitation: (id: string) => void
+  readonly onAddCitation: (passage: StorySourcePassage) => void
+}) {
+  const passages = splitStorySourcePassages(source)
+  const citations = workspace.citations.filter(citation => citation.sourceId === source.id)
+  return <div className="story-source-reader">
+    <div className="story-studio-view-heading"><div><button className="story-source-back" type="button" onClick={onBack}>← 资料库</button>
+      <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div></div>
+    {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
+      {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
+        key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
+        <span>{citation.locator}</span><small>{citation.target === undefined ? '未关联' : citation.target.kind === 'node' ? '剧情节点' : '人物事实'}</small>
+      </button>)}
+    </div></div>}
+    <div className="story-source-passages">{passages.map(passage => {
+      const passageCitations = citations.filter(citation => citation.locator === passage.locator && citation.quote === passage.text)
+      return <div className="story-source-passage" key={`${source.id}:${String(passage.ordinal)}`}>
+        <div className="story-source-passage-heading"><span>{passage.locator}</span><button className="story-source-cite-button" type="button"
+          onClick={() => { onAddCitation(passage) }}>引用此段</button></div>
+        <p>{passage.text}</p>
+        {passageCitations.length > 0 && <div className="story-source-passage-actions">{passageCitations.map(citation => <button className="story-citation-link" key={citation.id}
+          type="button" onClick={() => { onSelectCitation(citation.id) }}>查看引用</button>)}</div>}
+      </div>
+    })}{passages.length === 0 && <div className="story-studio-empty"><span>在右侧加入原文或研究内容，阅读器会按标题和自然段整理。</span></div>}</div>
+  </div>
 }
 
 function OutputInspector({ workspace, output, update, onDelete }: {
@@ -558,7 +664,7 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
     })), [perspectiveId, selection, visibleNodeIds, workspace.graph.edges])
 
   const addNode = (kind: StoryNodeKind): void => {
-    const id = `node-${crypto.randomUUID()}`
+    const id = `node-${createClientOpaqueUuid()}`
     const count = workspace.graph.nodes.length
     const node: StoryNode = {
       id,
@@ -579,7 +685,7 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
     if (connection.source === null || connection.target === null || connection.source === connection.target) return
     const endpoints = workspace.graph.nodes.filter(node => node.id === connection.source || node.id === connection.target)
     const edge: StoryEdge = {
-      id: `edge-${crypto.randomUUID()}`,
+      id: `edge-${createClientOpaqueUuid()}`,
       kind: 'precedes',
       source: connection.source,
       target: connection.target,
@@ -694,6 +800,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   const [workspace, setWorkspace] = useState<StoryWorkspaceSnapshot>()
   const [view, setView] = useState<StudioView>('map')
   const [selection, setSelection] = useState<StudioSelection>()
+  const [readerSourceId, setReaderSourceId] = useState<string>()
   const [perspectiveId, setPerspectiveId] = useState<string>()
   const [previewId, setPreviewId] = useState<string>()
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -710,6 +817,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     setWorkspace(next)
     setDirty(false)
     setSelection(undefined)
+    setReaderSourceId(undefined)
     setView('map')
     setPerspectiveId(undefined)
     setPreviewId(undefined)
@@ -721,6 +829,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     if (id === undefined) {
       setWorkspace(undefined)
       setSelection(undefined)
+      setReaderSourceId(undefined)
       return
     }
     await load(id)
@@ -734,6 +843,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       setItems(next)
       setWorkspace(selected)
       setSelection(undefined)
+      setReaderSourceId(undefined)
     }).catch(reason => {
       if (active) setError(errorMessage(reason))
     }).finally(() => {
@@ -751,15 +861,18 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   }
   const select = (next: StudioSelection): void => {
     setSelection(next)
+    if (next.kind === 'source') setReaderSourceId(next.id)
+    else if (next.kind !== 'citation') setReaderSourceId(undefined)
     if (next.kind === 'node' || next.kind === 'edge') setView('map')
     else if (next.kind === 'event') setView('timeline')
     else if (next.kind === 'character') setView('characters')
-    else if (next.kind === 'source') setView('sources')
+    else if (next.kind === 'source' || next.kind === 'citation') setView('sources')
     else setView('outputs')
   }
   const navigate = (next: StudioView): void => {
     setView(next)
     setSelection(undefined)
+    setReaderSourceId(undefined)
   }
   const changeProject = (id: string): void => {
     if (workspace?.id === id) return
@@ -777,6 +890,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       setWorkspace(created)
       setDirty(false)
       setSelection(undefined)
+      setReaderSourceId(undefined)
       setView('map')
       setNotice('新故事已经准备好')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -819,21 +933,32 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
 
   const addCharacter = (): void => {
     if (workspace === undefined) return
-    const id = `character-${crypto.randomUUID()}`
+    const id = `character-${createClientOpaqueUuid()}`
     update(current => ({ ...current, characters: [...current.characters, { id, name: `人物 ${current.characters.length + 1}`, persona: '' }] }))
     select({ kind: 'character', id })
   }
   const addSource = (): void => {
     if (workspace === undefined) return
-    const id = `source-${crypto.randomUUID()}`
+    const id = `source-${createClientOpaqueUuid()}`
     update(current => ({ ...current, sources: [...current.sources, {
       id, name: `资料 ${current.sources.length + 1}`, kind: 'original', enabled: true, content: '',
     }] }))
     select({ kind: 'source', id })
   }
+  const addCitation = (source: StorySource, passage: StorySourcePassage): void => {
+    const id = `citation-${createClientOpaqueUuid()}`
+    update(current => ({ ...current, citations: [...current.citations, {
+      id,
+      sourceId: source.id,
+      locator: passage.locator,
+      quote: passage.text,
+      note: '',
+    }] }))
+    setSelection({ kind: 'citation', id })
+  }
   const addOutput = (): void => {
     if (workspace === undefined) return
-    const id = `output-${crypto.randomUUID()}`
+    const id = `output-${createClientOpaqueUuid()}`
     update(current => ({ ...current, outputs: [...current.outputs, {
       id, name: `正文 ${current.outputs.length + 1}`, kind: 'prose', enabled: true, instructions: '',
     }] }))
@@ -847,7 +972,13 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       const graph = current.graph.activeNodeId === id
         ? { nodes, edges }
         : { ...current.graph, nodes, edges }
-      return { ...current, graph, events: current.events.map(event => event.nodeId === id ? eventWithoutNode(event) : event) }
+      return {
+        ...current,
+        graph,
+        events: current.events.map(event => event.nodeId === id ? eventWithoutNode(event) : event),
+        citations: current.citations.map(citation => citation.target?.kind === 'node' && citation.target.nodeId === id
+          ? citationWithoutTarget(citation) : citation),
+      }
     })
     setSelection(undefined)
   }
@@ -856,30 +987,42 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     setSelection(undefined)
   }
   const deleteCharacter = (id: string): void => {
-    update(current => ({
-      ...current,
-      characters: current.characters.filter(character => character.id !== id),
-      graph: { ...current.graph, nodes: current.graph.nodes.map(node => ({ ...node, participantIds: node.participantIds.filter(candidate => candidate !== id) })) },
-      facts: current.facts.map(fact => ({ ...fact, knownBy: fact.knownBy.filter(candidate => candidate !== id) }))
-        .filter(fact => fact.knownBy.length > 0),
-      events: current.events.map(event => ({ ...event, participantIds: event.participantIds.filter(candidate => candidate !== id) })),
-      outputs: current.outputs.map(output => output.characterId === id ? selectWithoutCharacter(output) : output),
-    }))
+    update(current => {
+      const facts = current.facts.map(fact => ({ ...fact, knownBy: fact.knownBy.filter(candidate => candidate !== id) }))
+        .filter(fact => fact.knownBy.length > 0)
+      const factIds = new Set(facts.map(fact => fact.id))
+      return {
+        ...current,
+        characters: current.characters.filter(character => character.id !== id),
+        graph: { ...current.graph, nodes: current.graph.nodes.map(node => ({ ...node, participantIds: node.participantIds.filter(candidate => candidate !== id) })) },
+        facts,
+        citations: current.citations.map(citation => citation.target?.kind === 'fact' && !factIds.has(citation.target.factId)
+          ? citationWithoutTarget(citation) : citation),
+        events: current.events.map(event => ({ ...event, participantIds: event.participantIds.filter(candidate => candidate !== id) })),
+        outputs: current.outputs.map(output => output.characterId === id ? selectWithoutCharacter(output) : output),
+      }
+    })
     setPerspectiveId(current => current === id ? undefined : current)
     setPreviewId(current => current === id ? undefined : current)
     setSelection(undefined)
   }
   const deleteEvent = (id: string): void => {
-    update(current => ({
-      ...current,
-      events: current.events.filter(event => event.id !== id),
-      facts: current.facts.filter(fact => fact.source.kind !== 'event' || fact.source.eventId !== id),
-      graph: {
-        ...current.graph,
-        nodes: current.graph.nodes.map(node => node.sourceEventId === id ? nodeWithoutSourceEvent(node) : node),
-        edges: current.graph.edges.map(edge => edge.sourceEventId === id ? edgeWithoutSourceEvent(edge) : edge),
-      },
-    }))
+    update(current => {
+      const facts = current.facts.filter(fact => fact.source.kind !== 'event' || fact.source.eventId !== id)
+      const factIds = new Set(facts.map(fact => fact.id))
+      return {
+        ...current,
+        events: current.events.filter(event => event.id !== id),
+        facts,
+        citations: current.citations.map(citation => citation.target?.kind === 'fact' && !factIds.has(citation.target.factId)
+          ? citationWithoutTarget(citation) : citation),
+        graph: {
+          ...current.graph,
+          nodes: current.graph.nodes.map(node => node.sourceEventId === id ? nodeWithoutSourceEvent(node) : node),
+          edges: current.graph.edges.map(edge => edge.sourceEventId === id ? edgeWithoutSourceEvent(edge) : edge),
+        },
+      }
+    })
     setSelection(undefined)
   }
   const reorderOutputs = (sourceId: string, targetId: string): void => {
@@ -906,6 +1049,10 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   const selectedCharacter = selection?.kind === 'character' ? workspace?.characters.find(character => character.id === selection.id) : undefined
   const selectedEvent = selection?.kind === 'event' ? workspace?.events.find(event => event.id === selection.id) : undefined
   const selectedSource = selection?.kind === 'source' ? workspace?.sources.find(source => source.id === selection.id) : undefined
+  const selectedCitation = selection?.kind === 'citation' ? workspace?.citations.find(citation => citation.id === selection.id) : undefined
+  const readerSource = selectedSource ?? (selectedCitation === undefined
+    ? workspace?.sources.find(source => source.id === readerSourceId)
+    : workspace?.sources.find(source => source.id === selectedCitation.sourceId))
   const selectedOutput = selection?.kind === 'output' ? workspace?.outputs.find(output => output.id === selection.id) : undefined
 
   const inspector = workspace === undefined ? <EmptyInspector />
@@ -916,8 +1063,17 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
           onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
           : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update} onDelete={() => { deleteEvent(selectedEvent.id) }} />
             : selectedSource !== undefined ? <SourceInspector source={selectedSource} update={update} onDelete={() => {
-              update(current => ({ ...current, sources: current.sources.filter(source => source.id !== selectedSource.id) })); setSelection(undefined)
+              update(current => ({
+                ...current,
+                sources: current.sources.filter(source => source.id !== selectedSource.id),
+                citations: current.citations.filter(citation => citation.sourceId !== selectedSource.id),
+              })); setSelection(undefined); setReaderSourceId(undefined)
             }} />
+              : selectedCitation !== undefined ? <CitationInspector workspace={workspace} citation={selectedCitation} update={update}
+                onDelete={() => {
+                  update(current => ({ ...current, citations: current.citations.filter(citation => citation.id !== selectedCitation.id) }))
+                  setSelection({ kind: 'source', id: selectedCitation.sourceId })
+                }} />
               : selectedOutput !== undefined ? <OutputInspector workspace={workspace} output={selectedOutput} update={update} onDelete={() => {
                 update(current => ({ ...current, outputs: current.outputs.filter(output => output.id !== selectedOutput.id) })); setSelection(undefined)
               }} />
@@ -952,13 +1108,20 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       })}{workspace.characters.length === 0 && <div className="story-studio-empty"><span>添加第一个人物，为其建立独立 Persona 与认知来源。</span></div>}</div>
     </div>
   } else if (view === 'sources') {
-    main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>保存可检索的原文、研究结论和网络查询范围。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
-      <div className="story-studio-card-list">{workspace.sources.map(source => <article className="story-studio-card" data-selected={selection?.kind === 'source' && selection.id === source.id}
-        key={source.id} onClick={() => { setSelection({ kind: 'source', id: source.id }) }}>
-        <h3>{source.name}</h3><p>{source.content.slice(0, 220) || '尚未添加内容'}</p>
-        <div className="story-studio-card-meta"><span>{sourceKindLabels[source.kind]}</span><span>{source.enabled ? '参与研究' : '暂不使用'}</span></div>
-      </article>)}{workspace.sources.length === 0 && <div className="story-studio-empty"><span>添加原著章节、参考材料，或限定网络查询范围。</span></div>}</div>
-    </div>
+    main = readerSource === undefined
+      ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
+        <div className="story-studio-card-list">{workspace.sources.map(source => {
+          const passages = splitStorySourcePassages(source)
+          const citationCount = workspace.citations.filter(citation => citation.sourceId === source.id).length
+          return <article className="story-studio-card" key={source.id} onClick={() => { select({ kind: 'source', id: source.id }) }}>
+            <h3>{source.name}</h3><p>{passages[0]?.text.slice(0, 220) || '尚未添加内容'}</p>
+            <div className="story-studio-card-meta"><span>{sourceKindLabels[source.kind]}</span><span>{passages.length} 段</span><span>{citationCount} 条引用</span><span>{source.enabled ? '参与研究' : '暂不使用'}</span></div>
+          </article>
+        })}{workspace.sources.length === 0 && <div className="story-studio-empty"><span>添加原著章节、参考材料，或限定网络查询范围。</span></div>}</div>
+      </div>
+      : <SourceReader workspace={workspace} source={readerSource} selectedCitationId={selectedCitation?.id}
+        onBack={() => { setSelection(undefined); setReaderSourceId(undefined) }} onSelectCitation={id => { setSelection({ kind: 'citation', id }) }}
+        onAddCitation={passage => { addCitation(readerSource, passage) }} />
   } else {
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>输出布局</h1><p>拖动卡片或使用上下按钮，决定生成和展示顺序。</p></div><button className="story-studio-button" type="button" onClick={addOutput}>＋ 添加分区</button></div>
       <div className="story-studio-card-list">{workspace.outputs.map((output, index) => <article draggable className="story-studio-card story-output-card"

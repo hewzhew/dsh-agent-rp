@@ -19,7 +19,7 @@ export type StoryNodeLifecycle = 'canonical' | 'suggested'
 export type StoryNodeStatus = 'planned' | 'active' | 'completed' | 'dropped'
 
 /** Typed relationship between story-map nodes. */
-export type StoryEdgeKind = 'precedes' | 'causes' | 'contains' | 'foreshadows' | 'supports'
+export type StoryEdgeKind = 'precedes' | 'causes' | 'contains' | 'foreshadows'
 
 /** Progress state carried only by foreshadowing relationships. */
 export type StoryForeshadowStatus = 'unplanted' | 'planted' | 'triggered' | 'resolved' | 'dropped'
@@ -135,6 +135,21 @@ export interface StorySource {
   readonly content: string
 }
 
+/** Story object supported by one exact source excerpt. */
+export type StoryCitationTarget =
+  | { readonly kind: 'node'; readonly nodeId: string }
+  | { readonly kind: 'fact'; readonly factId: string }
+
+/** Durable source excerpt whose quote remains evidence if the source later changes. */
+export interface StoryCitation {
+  readonly id: string
+  readonly sourceId: string
+  readonly locator: string
+  readonly quote: string
+  readonly note: string
+  readonly target?: StoryCitationTarget
+}
+
 /** Coherent revision returned by local storage and HTTP reads. */
 export interface StoryWorkspaceSnapshot {
   readonly format: 1
@@ -150,6 +165,7 @@ export interface StoryWorkspaceSnapshot {
   readonly events: readonly StoryEvent[]
   readonly outputs: readonly StoryOutput[]
   readonly sources: readonly StorySource[]
+  readonly citations: readonly StoryCitation[]
 }
 
 /** Lightweight workspace list item. */
@@ -180,6 +196,7 @@ export interface StoryWorkspaceSaveRequest {
   readonly events: readonly StoryEvent[]
   readonly outputs: readonly StoryOutput[]
   readonly sources: readonly StorySource[]
+  readonly citations: readonly StoryCitation[]
 }
 
 /** One completed visible turn materialized into events, facts, and suggestions. */

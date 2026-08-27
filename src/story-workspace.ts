@@ -14,6 +14,7 @@ import { dirname, join, resolve } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {
   StoryAudience,
+  StoryCitation,
   StoryCharacter,
   StoryEdge,
   StoryEdgeKind,
@@ -47,12 +48,14 @@ const EVENT_ID_PATTERN = new RegExp(`^event-${UUID_SUFFIX}$`, 'u')
 const OUTPUT_ID_PATTERN = new RegExp(`^output-${UUID_SUFFIX}$`, 'u')
 const LEGACY_SECTION_ID_PATTERN = new RegExp(`^section-${UUID_SUFFIX}$`, 'u')
 const SOURCE_ID_PATTERN = new RegExp(`^source-${UUID_SUFFIX}$`, 'u')
+const CITATION_ID_PATTERN = new RegExp(`^citation-${UUID_SUFFIX}$`, 'u')
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 const MAX_WORKSPACE_BYTES = 16 * 1024 * 1024
+const MAX_CITATION_BYTES = 32 * 1024
 const NODE_KINDS = new Set<StoryNodeKind>(['arc', 'beat', 'secret'])
 const NODE_LIFECYCLES = new Set<StoryNodeLifecycle>(['canonical', 'suggested'])
 const NODE_STATUSES = new Set<StoryNodeStatus>(['planned', 'active', 'completed', 'dropped'])
-const EDGE_KINDS = new Set<StoryEdgeKind>(['precedes', 'causes', 'contains', 'foreshadows', 'supports'])
+const EDGE_KINDS = new Set<StoryEdgeKind>(['precedes', 'causes', 'contains', 'foreshadows'])
 const FORESHADOW_STATUSES = new Set<StoryForeshadowStatus>(['unplanted', 'planted', 'triggered', 'resolved', 'dropped'])
 const AUDIENCES = new Set<StoryAudience>(['director', 'public'])
 const FACT_STATUSES = new Set<StoryFactStatus>(['asserted', 'uncertain', 'refuted'])
@@ -83,6 +86,7 @@ interface StoredStoryWorkspace {
   readonly events: readonly StoryEvent[]
   readonly outputs: readonly StoredStoryOutput[]
   readonly sources: readonly StoredStorySource[]
+  readonly citations: readonly StoryCitation[]
 }
 
 interface LegacyManifest {
@@ -370,12 +374,56 @@ function normalizeSource(value: unknown): StorySource {
   }
 }
 
+function citationText(value: unknown, subject: string, required: boolean): string {
+  const text = cleanDocument(value, subject).trim()
+  if (required && text === '') throw new Error(`${subject}不能为空`)
+  if (Buffer.byteLength(text, 'utf8') > MAX_CITATION_BYTES) {
+    throw new Error(`${subject}不能超过 ${String(MAX_CITATION_BYTES)} 字节`)
+  }
+  return text
+}
+
+function normalizeCitation(
+  value: unknown,
+  sourceIds: ReadonlySet<string>,
+  nodeIds: ReadonlySet<string>,
+  factIds: ReadonlySet<string>,
+): StoryCitation {
+  if (!isRecord(value)) throw new Error('资料引用不是对象')
+  assertId(value.id, CITATION_ID_PATTERN, '资料引用')
+  assertId(value.sourceId, SOURCE_ID_PATTERN, '资料引用来源')
+  if (!sourceIds.has(value.sourceId)) throw new Error('资料引用指向未知资料')
+  let target: StoryCitation['target']
+  if (value.target !== undefined) {
+    if (!isRecord(value.target)) throw new Error('资料引用目标无效')
+    if (value.target.kind === 'node') {
+      assertId(value.target.nodeId, NODE_ID_PATTERN, '资料引用剧情节点')
+      if (!nodeIds.has(value.target.nodeId)) throw new Error('资料引用指向未知剧情节点')
+      target = { kind: 'node', nodeId: value.target.nodeId }
+    } else if (value.target.kind === 'fact') {
+      assertId(value.target.factId, FACT_ID_PATTERN, '资料引用人物事实')
+      if (!factIds.has(value.target.factId)) throw new Error('资料引用指向未知人物事实')
+      target = { kind: 'fact', factId: value.target.factId }
+    } else {
+      throw new Error('资料引用目标分类无效')
+    }
+  }
+  return {
+    id: value.id,
+    sourceId: value.sourceId,
+    locator: cleanLabel(value.locator, '资料引用位置'),
+    quote: citationText(value.quote, '资料引用原文', true),
+    note: citationText(value.note, '资料引用说明', false),
+    ...(target === undefined ? {} : { target }),
+  }
+}
+
 function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   if (!isRecord(value) || value.format !== 1 || !isRecord(value.graph)
     || !Array.isArray(value.characters) || !Array.isArray(value.graph.nodes)
     || !Array.isArray(value.graph.edges) || !Array.isArray(value.facts)
     || !Array.isArray(value.events) || !Array.isArray(value.outputs)
-    || !Array.isArray(value.sources)) {
+    || !Array.isArray(value.sources) || !Array.isArray(value.citations)) {
     throw new Error('故事工作室字段无效')
   }
   assertId(value.id, WORKSPACE_ID_PATTERN, '故事工作室')
@@ -393,10 +441,14 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   const eventIds = new Set(events.map(event => event.id))
   const facts = value.facts.map(fact => normalizeFact(fact, characterIds, eventIds))
   assertUnique(facts.map(fact => fact.id), '人物事实')
+  const factIds = new Set(facts.map(fact => fact.id))
   const outputs = value.outputs.map(output => normalizeOutput(output, characterIds))
   assertUnique(outputs.map(output => output.id), '输出分区')
   const sources = value.sources.map(normalizeSource)
   assertUnique(sources.map(source => source.id), '故事资料')
+  const sourceIds = new Set(sources.map(source => source.id))
+  const citations = value.citations.map(citation => normalizeCitation(citation, sourceIds, nodeIds, factIds))
+  assertUnique(citations.map(citation => citation.id), '资料引用')
   const activeNodeId = value.graph.activeNodeId
   if (activeNodeId !== undefined) {
     assertId(activeNodeId, NODE_ID_PATTERN, '当前剧情节点')
@@ -422,6 +474,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     .concat(events.flatMap(event => [event.summary, event.evidence]))
     .concat(outputs.map(output => output.instructions))
     .concat(sources.map(source => source.content))
+    .concat(citations.flatMap(citation => [citation.quote, citation.note]))
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
@@ -438,6 +491,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     events,
     outputs,
     sources,
+    citations,
   }
 }
 
@@ -495,6 +549,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
     events: snapshot.events,
     outputs: snapshot.outputs.map(({ instructions: _instructions, ...output }) => output),
     sources: snapshot.sources.map(({ content: _content, ...source }) => source),
+    citations: snapshot.citations,
   }
 }
 
@@ -524,7 +579,14 @@ function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
     assertId(item.id, SOURCE_ID_PATTERN, '故事资料')
     return { ...item, content: readMarkdown(join(root, 'sources', `${item.id}.md`)) }
   })
-  return normalizeWorkspace({ ...value, graph: { ...value.graph, nodes }, characters, outputs, sources })
+  return normalizeWorkspace({
+    ...value,
+    graph: { ...value.graph, nodes },
+    characters,
+    outputs,
+    sources,
+    citations: Array.isArray(value.citations) ? value.citations : [],
+  })
 }
 
 function parseLegacyManifest(value: unknown): LegacyManifest {
@@ -620,6 +682,11 @@ export function createStorySourceId(): string {
   return `source-${randomUUID()}`
 }
 
+/** Create an opaque source-citation id. */
+export function createStoryCitationId(): string {
+  return `citation-${randomUUID()}`
+}
+
 /** Return current-scene characters in workspace order. */
 export function storyParticipantCharacters(workspace: StoryWorkspaceSnapshot): readonly StoryCharacter[] {
   const active = workspace.graph.nodes.find(node => node.id === workspace.graph.activeNodeId)
@@ -633,14 +700,24 @@ export function storyPublicHistory(workspace: StoryWorkspaceSnapshot): string {
   return workspace.events.map(event => `## ${event.title}\n${event.summary}`).join('\n\n')
 }
 
+function renderStoryCitation(workspace: StoryWorkspaceSnapshot, citation: StoryCitation): string {
+  const source = workspace.sources.find(candidate => candidate.id === citation.sourceId)
+  const location = [source?.name ?? citation.sourceId, citation.locator].filter(Boolean).join(' · ')
+  return `- ${location}: ${citation.quote}${citation.note === '' ? '' : `（${citation.note}）`}`
+}
+
 /** Compile canonical story objects and relationships for the director. */
 export function storyDirectorMap(workspace: StoryWorkspaceSnapshot): string {
   const nodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
   const nodeIds = new Set(nodes.map(node => node.id))
-  const nodeText = nodes.map(node => [
-    `## [${node.kind}] ${node.title} (${node.status})`,
-    node.content,
-  ].filter(Boolean).join('\n')).join('\n\n')
+  const nodeText = nodes.map(node => {
+    const citations = workspace.citations.filter(citation => citation.target?.kind === 'node' && citation.target.nodeId === node.id)
+    return [
+      `## [${node.kind}] ${node.title} (${node.status})`,
+      node.content,
+      citations.length === 0 ? '' : `资料依据：\n${citations.map(citation => renderStoryCitation(workspace, citation)).join('\n')}`,
+    ].filter(Boolean).join('\n')
+  }).join('\n\n')
   const edgeText = workspace.graph.edges
     .filter(edge => edge.lifecycle === 'canonical' && nodeIds.has(edge.source) && nodeIds.has(edge.target))
     .map(edge => {
@@ -708,6 +785,7 @@ export class StoryWorkspaceStore {
       events: [],
       outputs: [],
       sources: [],
+      citations: [],
     })
     this.writeSnapshot(snapshot)
     return snapshot
@@ -814,6 +892,7 @@ export class StoryWorkspaceStore {
       events: [...current.events, event],
       outputs: current.outputs,
       sources: current.sources,
+      citations: current.citations,
     })
   }
 
@@ -992,6 +1071,7 @@ export class StoryWorkspaceStore {
       events,
       outputs,
       sources,
+      citations: [],
     })
     this.writeSnapshot(migrated)
     for (const path of ['manifest.json', 'outline.md', 'foreshadowing.md', 'proposals.md', 'history.md']) {
@@ -1016,7 +1096,8 @@ export function compileStoryCharacterContext(
   const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(characterId))
   const privateKnowledge = facts.map(fact => {
     const prefix = fact.status === 'uncertain' ? '[不确定] ' : ''
-    return `- ${prefix}${fact.text}`
+    const citations = workspace.citations.filter(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id)
+    return [`- ${prefix}${fact.text}`, ...citations.map(citation => `  ${renderStoryCitation(workspace, citation)}`)].join('\n')
   }).join('\n')
   const playerInput = cleanDocument(scene.playerInput, '本轮玩家输入')
   const text = [

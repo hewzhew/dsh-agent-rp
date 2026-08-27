@@ -5,9 +5,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { searchStoryWorkspaceSources } from '../src/story-research.ts'
+import { splitStorySourcePassages } from '../src/story-source.ts'
 import {
   compileStoryCharacterContext,
   createStoryCharacterId,
+  createStoryCitationId,
   createStoryEdgeId,
   createStoryEventId,
   createStoryFactId,
@@ -32,6 +34,7 @@ function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
     events: snapshot.events,
     outputs: snapshot.outputs,
     sources: snapshot.sources,
+    citations: snapshot.citations,
   }
 }
 
@@ -45,6 +48,8 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   const outputId = createStoryOutputId()
   const sourceId = createStorySourceId()
   const factId = createStoryFactId()
+  const nodeCitationId = createStoryCitationId()
+  const factCitationId = createStoryCitationId()
 
   assert.deepEqual(created.pipeline, { maxParallel: 4 })
   const saved = store.save({
@@ -93,6 +98,24 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
       enabled: true,
       content: '原著中的车站终年落雪。',
     }],
+    citations: [
+      {
+        id: nodeCitationId,
+        sourceId,
+        locator: '第一章 · 第 2 段',
+        quote: '原著中的车站终年落雪。',
+        note: '支持雪夜场景。',
+        target: { kind: 'node', nodeId },
+      },
+      {
+        id: factCitationId,
+        sourceId,
+        locator: '附录 · 第 1 段',
+        quote: '车票背面印有站名。',
+        note: '',
+        target: { kind: 'fact', factId },
+      },
+    ],
   })
 
   assert.equal(saved.revision, 1)
@@ -101,11 +124,40 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
     workerModel: { provider: 'fast', model: 'story' },
   })
   assert.equal(saved.outputs[0]?.characterId, characterId)
+  assert.equal(saved.citations[0]?.target?.kind, 'node')
+  assert.deepEqual(saved.citations[1], {
+    id: factCitationId,
+    sourceId,
+    locator: '附录 · 第 1 段',
+    quote: '车票背面印有站名。',
+    note: '',
+    target: { kind: 'fact', factId },
+  })
   assert.deepEqual(new StoryWorkspaceStore({ root }).get(saved.id), saved)
   assert.equal(readFileSync(join(root, saved.id, 'nodes', `${nodeId}.md`), 'utf8'), '先在车站重逢。')
   assert.equal(readFileSync(join(root, saved.id, 'characters', characterId, 'persona.md'), 'utf8'), '怕冷，谨慎。')
   assert.equal(readFileSync(join(root, saved.id, 'outputs', `${outputId}.md`), 'utf8'), '夜班车尚未到站。')
   assert.equal(readFileSync(join(root, saved.id, 'sources', `${sourceId}.md`), 'utf8'), '原著中的车站终年落雪。')
+  assert.match(storyDirectorMap(saved), /原著摘录 · 第一章 · 第 2 段: 原著中的车站终年落雪/u)
+  assert.doesNotMatch(storyDirectorMap(saved), /车票背面印有站名/u)
+  assert.throws(() => store.save({
+    ...editable(saved),
+    citations: [{ id: createStoryCitationId(), sourceId: createStorySourceId(), locator: '第 1 段', quote: '未知资料。', note: '' }],
+  }), /资料引用指向未知资料/u)
+  assert.throws(() => store.save({
+    ...editable(saved),
+    citations: [{
+      id: createStoryCitationId(), sourceId, locator: '第 1 段', quote: '未知节点。', note: '',
+      target: { kind: 'node', nodeId: createStoryNodeId() },
+    }],
+  }), /资料引用指向未知剧情节点/u)
+  assert.throws(() => store.save({
+    ...editable(saved),
+    citations: [{
+      id: createStoryCitationId(), sourceId, locator: '第 1 段', quote: '未知事实。', note: '',
+      target: { kind: 'fact', factId: createStoryFactId() },
+    }],
+  }), /资料引用指向未知人物事实/u)
   assert.throws(() => store.save({ ...editable(saved), revision: 0, name: '过期编辑' }), /当前 revision 为 1/u)
 })
 
@@ -173,6 +225,9 @@ test('compiles one character context from fact visibility without director or an
   const bobId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
   const eventId = createStoryEventId()
+  const aliceFactId = createStoryFactId()
+  const bobFactId = createStoryFactId()
+  const sourceId = createStorySourceId()
   const workspace = store.save({
     ...editable(created),
     graph: {
@@ -206,7 +261,7 @@ test('compiles one character context from fact visibility without director or an
     }],
     facts: [
       {
-        id: createStoryFactId(),
+        id: aliceFactId,
         text: '阿梨私密：她认得旧徽章。',
         status: 'asserted',
         audience: 'director',
@@ -214,12 +269,37 @@ test('compiles one character context from fact visibility without director or an
         source: { kind: 'manual' },
       },
       {
-        id: createStoryFactId(),
+        id: bobFactId,
         text: '柏舟私密：他藏起了地图。',
         status: 'asserted',
         audience: 'director',
         knownBy: [bobId],
         source: { kind: 'event', eventId, evidence: '柏舟把地图折进袖口。' },
+      },
+    ],
+    sources: [{
+      id: sourceId,
+      name: '角色设定集',
+      kind: 'original',
+      enabled: true,
+      content: '阿梨曾在旧站见过徽章。\n\n柏舟独自拿走地图。',
+    }],
+    citations: [
+      {
+        id: createStoryCitationId(),
+        sourceId,
+        locator: '人物篇 · 第 1 段',
+        quote: '阿梨曾在旧站见过徽章。',
+        note: '',
+        target: { kind: 'fact', factId: aliceFactId },
+      },
+      {
+        id: createStoryCitationId(),
+        sourceId,
+        locator: '人物篇 · 第 2 段',
+        quote: '柏舟独自拿走地图。',
+        note: '',
+        target: { kind: 'fact', factId: bobFactId },
       },
     ],
   })
@@ -229,8 +309,11 @@ test('compiles one character context from fact visibility without director or an
   })
 
   assert.match(compiled.text, /阿梨私密：她认得旧徽章/u)
+  assert.match(compiled.text, /角色设定集 · 人物篇 · 第 1 段/u)
+  assert.match(compiled.text, /阿梨曾在旧站见过徽章/u)
   assert.doesNotMatch(compiled.text, /所有人都看见雨停了/u)
   assert.doesNotMatch(compiled.text, /柏舟私密/u)
+  assert.doesNotMatch(compiled.text, /柏舟独自拿走地图/u)
   assert.doesNotMatch(compiled.text, /桥会断/u)
 })
 
@@ -376,6 +459,21 @@ test('opaque ids prevent workspace and child paths from escaping the configured 
   assert.equal(existsSync(join(root, '..', 'outside')), false)
 })
 
+test('projects Markdown headings and paragraphs into stable source passages', () => {
+  const passages = splitStorySourcePassages({
+    id: createStorySourceId(),
+    name: '第一卷',
+    kind: 'original',
+    enabled: true,
+    content: '# 第一章\n\n钟楼在午夜停摆。\n\n阿梨把旧车票藏进怀表。',
+  })
+
+  assert.deepEqual(passages.map(passage => ({ locator: passage.locator, text: passage.text })), [
+    { locator: '第一章 · 第 1 段', text: '钟楼在午夜停摆。' },
+    { locator: '第一章 · 第 2 段', text: '阿梨把旧车票藏进怀表。' },
+  ])
+})
+
 test('retrieves the most relevant bounded original excerpts before model research', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-search-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -390,20 +488,21 @@ test('retrieves the most relevant bounded original excerpts before model researc
         name: '第一卷',
         kind: 'original',
         enabled: true,
-        content: '春日的集市很热闹。\n\n旧钟楼在午夜敲了十二下。',
+        content: '# 集市\n\n春日的集市很热闹。\n\n旧钟楼在午夜敲了十二下。',
       },
       {
         id: createStorySourceId(),
         name: '第二卷',
         kind: 'original',
         enabled: true,
-        content: '雪原尽头的车站没有售票员。\n\n阿梨把旧车票藏进怀表。',
+        content: '# 第三章\n\n雪原尽头的车站没有售票员。\n\n阿梨把旧车票藏进怀表。',
       },
     ],
   })
 
-  const result = searchStoryWorkspaceSources(workspace, '阿梨手里的怀表和车票', 80)
+  const result = searchStoryWorkspaceSources(workspace, '阿梨手里的怀表和车票', 120)
   assert.match(result, /第二卷/u)
+  assert.match(result, /第三章 · 第 2 段/u)
   assert.match(result, /旧车票藏进怀表/u)
-  assert.equal(result.length <= 80, true)
+  assert.equal(result.length <= 120, true)
 })

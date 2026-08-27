@@ -124,6 +124,7 @@ function workspace(): StoryWorkspaceSnapshot {
       { id: historySectionId, name: '公开档案', kind: 'history', enabled: true, instructions: '使用简短时间线。' },
     ],
     sources: [{ id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' }],
+    citations: [],
   }
 }
 
@@ -282,6 +283,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     events: [],
     outputs: [],
     sources: [],
+    citations: [],
   })
   const session = Session.create(SessionId('story-continuity'))
   session.append('request/header', {
