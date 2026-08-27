@@ -408,12 +408,17 @@ test('keeps the exact world outcome while preserving only private-section charac
   const created = store.create({ format: 2, name: '权威世界结算' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
+  const sanaeId = createStoryCharacterId()
   const proseId = createStoryOutputId()
   const characterId = createStoryOutputId()
   const historyId = createStoryOutputId()
   const configured = store.save({
     ...editable(created),
-    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    characters: [
+      character(reimuId, '博丽灵梦'),
+      character(marisaId, '雾雨魔理沙'),
+      character(sanaeId, '东风谷早苗'),
+    ],
     outputs: [
       { id: proseId, name: '对局正文', kind: 'prose', enabled: true, instructions: '只写本轮。' },
       { id: characterId, name: '灵梦视角', kind: 'character', enabled: true, characterId: reimuId, instructions: '只写持久内容。' },
@@ -496,7 +501,10 @@ test('keeps the exact world outcome while preserving only private-section charac
     workspace: installed,
     turn: 2,
     step: 1,
-    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '请让当前人物继续，并让魔理沙留意结果。' }],
+    })],
     signal: new AbortController().signal,
   })
 
@@ -511,10 +519,13 @@ test('keeps the exact world outcome while preserving only private-section charac
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
   const marisaRequest = characterRequests.find(request => request.subjectId === marisaId)
+  const sanaeRequest = characterRequests.find(request => request.subjectId === sanaeId)
   assert.match(JSON.stringify(reimuRequest?.dispatch), /thisCharacterRole=actor/u)
   assert.match(JSON.stringify(marisaRequest?.dispatch), /thisCharacterRole=observer/u)
   assert.match(JSON.stringify(marisaRequest?.dispatch), /只能由 actor 采用对应要求/u)
-  assert.match(JSON.stringify(marisaRequest?.dispatch), /玩家本轮没有点名此人物/u)
+  assert.match(JSON.stringify(marisaRequest?.dispatch), /让魔理沙留意结果/u)
+  assert.match(JSON.stringify(sanaeRequest?.dispatch), /thisCharacterRole=observer/u)
+  assert.match(JSON.stringify(sanaeRequest?.dispatch), /玩家本轮没有点名此人物/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
   assert.equal(result.hostOnlyWorldDraft, undefined)
   assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
@@ -558,6 +569,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [2, 3])
   assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
     { location: '', condition: '', objective: '继续当前棋局', notes: '' },
+    { location: '', condition: '', objective: '', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
   ])
   const saved = store.get(installed.id)

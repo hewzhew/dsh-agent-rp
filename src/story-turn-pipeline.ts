@@ -1596,8 +1596,21 @@ function playerInputForCharacter(
 ): string {
   if (worldActionCharacterId === undefined
     || character.id === worldActionCharacterId
-    || playerInput.includes(character.name)) return playerInput
+    || characterReferenceNames(character.name).some(name => playerInput.includes(name))) return playerInput
   return '玩家本轮没有点名此人物，且本轮规则动作由另一人物执行。只依据已经结算的事件判断此人物的自主反应；不要采用玩家对“当前人物”“该人物”或本轮行动者的要求。'
+}
+
+function characterReferenceNames(name: string): readonly string[] {
+  const trimmed = name.trim()
+  const references = new Set([trimmed])
+  const parts = trimmed.split(/[\s·・]+/u).filter(part => [...part].length >= 2)
+  if (parts.length > 1) {
+    for (const part of parts) references.add(part)
+  } else if (/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(trimmed)) {
+    const characters = [...trimmed]
+    if (characters.length >= 3) references.add(characters.slice(-Math.ceil(characters.length / 2)).join(''))
+  }
+  return [...references]
 }
 
 function renderWorldOutcome(workspace: StoryWorkspaceSnapshot, sequences: readonly number[]): string {
