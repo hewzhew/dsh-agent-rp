@@ -76,6 +76,8 @@ export interface StoryTurnBriefRecord {
   readonly directorBrief: string
   readonly finalDraft: string
   readonly modelContext: string
+  /** The final draft contains only Host-authored world prose and history. */
+  readonly hostOnlyWorldDraft?: true
 }
 
 /** Exact editable story-document update committed after the visible reply. */
@@ -86,7 +88,8 @@ export interface StoryTurnMaterializedRecord {
   readonly workspaceRevision: number
   readonly turn: number
   readonly step: number
-  readonly continuityResultEventSeq: number
+  /** Present when a continuity Worker, rather than deterministic world materialization, produced the update. */
+  readonly continuityResultEventSeq?: number
   readonly eventSummary: string
   readonly changes: StoryChangeSet
 }
@@ -1073,6 +1076,22 @@ function renderSectionDrafts(drafts: readonly StorySectionDraft[]): string {
   return drafts.map(draft => `## ${draft.name}\n\n${draft.text}`).join('\n\n')
 }
 
+function renderHostOnlyWorldDraft(
+  outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  worldNarrative: string,
+  worldOutcome: string,
+): string | undefined {
+  if (worldNarrative === '' || worldOutcome === '') return undefined
+  const firstProse = outputs.find(output => output.enabled && output.kind === 'prose')
+  if (firstProse === undefined) return undefined
+  const drafts: StorySectionDraft[] = [
+    { id: firstProse.id, name: firstProse.name, kind: firstProse.kind, text: worldNarrative },
+    ...outputs.filter(output => output.enabled && output.kind === 'history')
+      .map(output => ({ id: output.id, name: output.name, kind: output.kind, text: worldOutcome })),
+  ]
+  return renderSectionDrafts(drafts).trim()
+}
+
 function historySectionFallback(workspace: StoryWorkspaceSnapshot): string {
   const continuity = storyPublicHistory(workspace)
   const worldEvents = workspace.world?.events.slice(-8)
@@ -1423,7 +1442,10 @@ function ensureMarkdownSectionPrefix(document: string, heading: string, prefix: 
   const lines = document.trim().split('\n')
   const title = `## ${heading}`
   const start = lines.findIndex(line => line.trim() === title)
-  if (start < 0) return [document.trim(), title, '', prefix].filter(Boolean).join('\n\n')
+  if (start < 0) {
+    const content = [prefix, document.replace(prefix, '').trim()].filter(Boolean).join('\n\n')
+    return [title, '', content].join('\n').trim()
+  }
   const next = lines.findIndex((line, index) => index > start && /^##\s+/u.test(line.trim()))
   const end = next < 0 ? lines.length : next
   const content = lines.slice(start + 1, end).join('\n').trim()
@@ -1443,11 +1465,14 @@ function enforceWorldSections(
   worldOutcome: string,
   worldNarrative: string,
 ): string {
-  let document = worldOutcome === '' ? draft : outputs.filter(output => output.enabled && output.kind === 'history')
-    .reduce((current, output) => replaceMarkdownSection(current, output.name, worldOutcome), draft)
+  let document = draft
   if (worldNarrative !== '') {
     const prose = outputs.find(output => output.enabled && output.kind === 'prose')
     document = ensureMarkdownSectionPrefix(document, prose?.name ?? '正文', worldNarrative)
+  }
+  if (worldOutcome !== '') {
+    document = outputs.filter(output => output.enabled && output.kind === 'history')
+      .reduce((current, output) => replaceMarkdownSection(current, output.name, worldOutcome), document)
   }
   return document
 }
@@ -1993,6 +2018,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     worldOutcome,
     worldNarrative,
   )
+  const hostOnlyWorldDraft = finalDraft === renderHostOnlyWorldDraft(enabledSections, worldNarrative, worldOutcome)
   const context = modelContext(finalDraft)
   const record: StoryTurnBriefRecord = {
     format: 0,
@@ -2006,6 +2032,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorBrief,
     finalDraft,
     modelContext: context,
+    ...(hostOnlyWorldDraft ? { hostOnlyWorldDraft: true as const } : {}),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-brief', record)
   await input.ctx.sessions.flush(input.agent.session)
@@ -2044,42 +2071,51 @@ export async function materializeStoryTurn(input: {
     messages: [],
     signal: input.signal,
   }
-  const resultEventSeqs: number[] = []
-  const continuity = await runStage(stageInput, 'continuity', generateOptions(
-    stageInput,
-    [
-      '你是剧情连续性记录 Worker。正文已经完成；不要续写、改写或评价正文。',
-      'history 只概括正文中已经发生、可供导演维持连续性的事件，不记录创作过程。',
-      'changes.characters 只更新正文已经明确改变的人物当前状态；characterId 必须来自 participants，可按需给出 location、condition、objective、notes，未变化的字段不要输出。人物的稳定身份与性格不能通过这里改写。',
-      'current_world_outcome 与 world_state 由可执行世界拥有。不得把当前行动人、骰点、棋子位置、结束回合或下一项合法规则动作抄写或推断成 changes.characters；这些变化只由世界模块保存。',
-      'changes.facts 只记录当前场景参与人物在正文中明确亲历或可感知的事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。',
-      'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
-      '节点 kind 只能是 arc、beat、secret，必须同时给出折叠 summary、content、participantIds 和 knowledge。knowledge.mode 只能是 inherit、none、participants、characters；只有 characters 可以列出 characterIds。关系 kind 只能是 precedes、causes、foreshadows，只有 foreshadows 可以携带 foreshadowStatus。所有人物 id 必须来自 participants。',
-      '只返回 JSON，例如：{"history":"...","changes":{"characters":[{"characterId":"character-id","location":"车站月台","objective":"查清徽章来历"}],"facts":[{"text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"participants","characterIds":[]}}],"edges":[{"kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
-    ].join('\n'),
-    [
-      '<participants>', participants.map(character => `${character.id}\t${character.name}\t${JSON.stringify(character.state)}`).join('\n'), '</participants>',
-      '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.parentId ?? '-'}\t${node.title}`).join('\n'), '</canonical_nodes>',
-      '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
-      '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
-      '<world_state>', compileStoryDirectorWorldContext(workspace), '</world_state>',
-      '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
-      '<visible_reply>', visibleReply, '</visible_reply>',
-    ].join('\n'),
-    4_096,
-    0,
-  ), resultEventSeqs)
   let update: ContinuityUpdate
-  try {
-    update = parseContinuityUpdate(
-      continuity.text ?? '',
-      new Set(participants.map(character => character.id)),
-      new Set(canonicalNodes.map(node => node.id)),
-    )
-  } catch {
+  let continuityResultEventSeq: number | undefined
+  if (briefEvent.data.hostOnlyWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
     update = {
-      history: visibleReply,
+      history: worldOutcome,
       changes: { characters: [], facts: [], nodes: [], edges: [] },
+    }
+  } else {
+    const resultEventSeqs: number[] = []
+    const continuity = await runStage(stageInput, 'continuity', generateOptions(
+      stageInput,
+      [
+        '你是剧情连续性记录 Worker。正文已经完成；不要续写、改写或评价正文。',
+        'history 只概括正文中已经发生、可供导演维持连续性的事件，不记录创作过程。',
+        'changes.characters 只更新正文已经明确改变的人物当前状态；characterId 必须来自 participants，可按需给出 location、condition、objective、notes，未变化的字段不要输出。人物的稳定身份与性格不能通过这里改写。',
+        'current_world_outcome 与 world_state 由可执行世界拥有。不得把当前行动人、骰点、棋子位置、结束回合或下一项合法规则动作抄写或推断成 changes.characters；这些变化只由世界模块保存。',
+        'changes.facts 只记录当前场景参与人物在正文中明确亲历或可感知的事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。',
+        'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
+        '节点 kind 只能是 arc、beat、secret，必须同时给出折叠 summary、content、participantIds 和 knowledge。knowledge.mode 只能是 inherit、none、participants、characters；只有 characters 可以列出 characterIds。关系 kind 只能是 precedes、causes、foreshadows，只有 foreshadows 可以携带 foreshadowStatus。所有人物 id 必须来自 participants。',
+        '只返回 JSON，例如：{"history":"...","changes":{"characters":[{"characterId":"character-id","location":"车站月台","objective":"查清徽章来历"}],"facts":[{"text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"participants","characterIds":[]}}],"edges":[{"kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
+      ].join('\n'),
+      [
+        '<participants>', participants.map(character => `${character.id}\t${character.name}\t${JSON.stringify(character.state)}`).join('\n'), '</participants>',
+        '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.parentId ?? '-'}\t${node.title}`).join('\n'), '</canonical_nodes>',
+        '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
+        '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
+        '<world_state>', compileStoryDirectorWorldContext(workspace), '</world_state>',
+        '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
+        '<visible_reply>', visibleReply, '</visible_reply>',
+      ].join('\n'),
+      4_096,
+      0,
+    ), resultEventSeqs)
+    continuityResultEventSeq = continuity.resultEventSeq
+    try {
+      update = parseContinuityUpdate(
+        continuity.text ?? '',
+        new Set(participants.map(character => character.id)),
+        new Set(canonicalNodes.map(node => node.id)),
+      )
+    } catch {
+      update = {
+        history: visibleReply,
+        changes: { characters: [], facts: [], nodes: [], edges: [] },
+      }
     }
   }
   if (worldOutcome !== '') {
@@ -2111,7 +2147,7 @@ export async function materializeStoryTurn(input: {
     workspaceRevision: materialized.revision,
     turn: input.turn,
     step: briefEvent.data.step,
-    continuityResultEventSeq: continuity.resultEventSeq,
+    ...(continuityResultEventSeq === undefined ? {} : { continuityResultEventSeq }),
     eventSummary: update.history,
     changes: update.changes,
   }

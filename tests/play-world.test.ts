@@ -461,7 +461,7 @@ test('keeps the exact world outcome in visible history and drops the next actor 
                   ? '正文故意遗漏刚发生的掷骰结果。'
                   : system.includes('分区的 character Worker')
                     ? JSON.stringify({ insights: [{ kind: 'intention', text: '魔理沙准备在下一回合掷骰。' }] })
-                    : '## 对局正文\n\n魔理沙准备掷骰。\n\n## 公开回合记录\n\n错误记录。'
+                    : '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。'
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
           yield { type: 'text-delta', index: 0, text }
@@ -491,7 +491,10 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   assert.match(researchDispatch, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
+  assert.equal(result.hostOnlyWorldDraft, true)
   assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.equal(result.finalDraft.match(/博丽灵梦没有可移动的飞机，本回合结束。/gu)?.length, 1)
+  assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
   assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
@@ -515,6 +518,10 @@ test('keeps the exact world outcome in visible history and drops the next actor 
     signal: new AbortController().signal,
   })
   assert.deepEqual(materialized?.changes.characters, [])
+  assert.deepEqual(materialized?.changes.facts, [])
+  assert.deepEqual(materialized?.changes.nodes, [])
+  assert.deepEqual(materialized?.changes.edges, [])
+  assert.equal(materialized?.continuityResultEventSeq, undefined)
   assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
   assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [2, 3])
@@ -522,4 +529,6 @@ test('keeps the exact world outcome in visible history and drops the next actor 
     { location: '', condition: '', objective: '', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
   ])
+  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'continuity'), false)
 })
