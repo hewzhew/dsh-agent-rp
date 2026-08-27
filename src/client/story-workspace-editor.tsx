@@ -68,6 +68,7 @@ import storyStudioCss from './story-workspace-editor.css?raw'
 
 interface StoryWorkspaceEditorProps {
   readonly accent: string
+  readonly initialWorkspaceId?: string
   readonly sessionId?: string
   readonly launchSourceSessionId?: string
   readonly onStartSession?: (sourceSessionId: string, workspaceId: string) => Promise<void>
@@ -1398,7 +1399,7 @@ function PlayWorldView({ workspace, modules, busy, dirty, canStartSession, onSta
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
-export function StoryWorkspaceEditor({ accent, sessionId, launchSourceSessionId, onStartSession, onClose }: StoryWorkspaceEditorProps) {
+export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, launchSourceSessionId, onStartSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
   const [worldModules, setWorldModules] = useState<readonly PlayWorldModuleDescriptor[]>([])
   const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
@@ -1443,7 +1444,10 @@ export function StoryWorkspaceEditor({ accent, sessionId, launchSourceSessionId,
     let active = true
     setLoading(true)
     void Promise.all([listWorkspaces(), listPlayWorldModules(), listActorResources()]).then(async ([next, modules, actors]) => {
-      const selected = next[0] === undefined ? undefined : await readWorkspace(next[0].id)
+      const selectedId = initialWorkspaceId !== undefined && next.some(item => item.id === initialWorkspaceId)
+        ? initialWorkspaceId
+        : next[0]?.id
+      const selected = selectedId === undefined ? undefined : await readWorkspace(selectedId)
       if (!active) return
       setItems(next)
       setWorldModules(modules)
@@ -1457,7 +1461,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, launchSourceSessionId,
       if (active) setLoading(false)
     })
     return () => { active = false }
-  }, [])
+  }, [initialWorkspaceId])
 
   const update: UpdateWorkspace = transform => {
     setWorkspace(current => current === undefined ? undefined : transform(current))

@@ -37,6 +37,8 @@ import {
   installStExtensionSurface,
 } from './st-extension-surface.tsx'
 import { StoryWorkspaceEditor } from './story-workspace-editor.tsx'
+import { createStoryWorkspaceNavigation, type StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
+import { installStoryWorkspaceSessionCard } from './story-workspace-session-card.tsx'
 
 interface SidebarDestinationOwnerProps {
   readonly wide: boolean
@@ -2760,6 +2762,7 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
   readonly deletePreset: (id: string) => Promise<void>
   readonly workspaceSettings: WorkspaceSettingsSource
   readonly workspaceList: WorkspaceListSource
+  readonly storyWorkspaceNavigation: StoryWorkspaceNavigation
 }
 
 type SidebarRoleplayDestinationProps = PropsRuntime<'sidebar.destinations'>
@@ -2841,12 +2844,14 @@ function SidebarRoleplayDestination({
   listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo, renamePreset, deletePreset,
   startWorldInfoSession, startStoryWorkspaceSession,
   workspaceSettings, workspaceList,
+  storyWorkspaceNavigation,
 }: SidebarRoleplayDestinationProps) {
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const [launchComposerOpen, setLaunchComposerOpen] = useState(false)
   const [migrationOpen, setMigrationOpen] = useState(false)
   const [resourceCenterOpen, setResourceCenterOpen] = useState(false)
   const [storyWorkspaceOpen, setStoryWorkspaceOpen] = useState(false)
+  const [storyWorkspaceInitialId, setStoryWorkspaceInitialId] = useState<string>()
   const [resourceCenterSection, setResourceCenterSection] = useState<'characters' | 'world-info' | 'regex-packs'>('characters')
   const [worldInfoLaunch, setWorldInfoLaunch] = useState<WorldInfoLibraryUpload>()
   const [launchSessionId, setLaunchSessionId] = useState<SessionId | undefined>(undefined)
@@ -2913,6 +2918,7 @@ function SidebarRoleplayDestination({
   }
   const openStoryWorkspace = (): void => {
     closeWorkbench()
+    setStoryWorkspaceInitialId(undefined)
     setStoryWorkspaceOpen(true)
   }
   const openCurrentSessionTools = (): void => {
@@ -2929,6 +2935,11 @@ function SidebarRoleplayDestination({
     document.addEventListener('keydown', onKeyDown)
     return () => { document.removeEventListener('keydown', onKeyDown) }
   }, [workbenchOpen])
+  useEffect(() => storyWorkspaceNavigation.subscribe(({ workspaceId }) => {
+    setWorkbenchOpen(false)
+    setStoryWorkspaceInitialId(workspaceId)
+    setStoryWorkspaceOpen(true)
+  }), [storyWorkspaceNavigation])
   const widestLeftWithUsableContent = Math.max(0, window.innerWidth - 320)
   const drawerLeft = width <= widestLeftWithUsableContent
     ? width
@@ -3150,6 +3161,7 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
+      {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
       {...(storyWorkspaceLaunchReady && currentSessionId !== undefined ? {
         launchSourceSessionId: String(currentSessionId),
         onStartSession: (sourceSessionId: string, workspaceId: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId),
@@ -3157,7 +3169,7 @@ function SidebarRoleplayDestination({
       {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)
         ? {}
         : { sessionId: String(currentSessionId) })}
-      onClose={() => { setStoryWorkspaceOpen(false) }}
+      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined) }}
     />, document.body)}
     {worldInfoLaunch !== undefined && launchSessionId !== undefined && createPortal(<WorldInfoLaunchDialog
       runtimeDiagnostics={runtimeDiagnostics}
@@ -12610,6 +12622,7 @@ export const inject = ['connection', 'conversationEvents', 'slots', 'sessions', 
 
 /** Register the Agent RP header, composer presentation, and import affordance. */
 export function apply(ctx: ClientContext): void {
+  const storyWorkspaceNavigation = createStoryWorkspaceNavigation()
   const installedStExtensions = new InstalledStExtensionRegistry()
   const installedStExtensionSurface = new InstalledStExtensionSurface()
   const installedStSettingsOwner = installedStExtensionSettingsIdentity()
@@ -12636,6 +12649,7 @@ export function apply(ctx: ClientContext): void {
   ctx.provide(AGENT_RP_ST_EXTENSION_SERVICE, installedStExtensions)
   ctx.effect(() => installStExtensionSurface(window, document, installedStExtensionSurface))
   installRoleplayArtifactTail(ctx)
+  installStoryWorkspaceSessionCard(ctx, storyWorkspaceNavigation)
   const runtimeDiagnostics = new AgentRpRuntimeDiagnosticRegistry()
   ctx.effect(() => installAgentRpRuntimeDiagnostic(window, runtimeDiagnostics))
   ctx.effect(() => installAgentRpBrowserCompatibilityDiagnostic(window, document, runtimeDiagnostics))
@@ -13399,6 +13413,7 @@ export function apply(ctx: ClientContext): void {
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
     startStoryWorkspaceSession: startStoryWorkspaceFromBlankSession,
+    storyWorkspaceNavigation,
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({
     name: 'sidebar.destinations', id: 'agent-rp-workbench', order: 20,
