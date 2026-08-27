@@ -514,6 +514,9 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(researchDispatch, /当前第 2 回合，轮到 雾雨魔理沙/u)
   assert.match(researchDispatch, /story:current-world-outcome/u)
   assert.match(researchDispatch, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
+  assert.match(researchDispatch, /story:world-turn-transition/u)
+  assert.match(researchDispatch, /实际行动人物：博丽灵梦/u)
+  assert.match(researchDispatch, /下一行动者与玩家输入点名的刚完成行动者不同不是冲突/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
   const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])

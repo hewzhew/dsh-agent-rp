@@ -36,6 +36,7 @@ const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
 
 function character(id: string, name: string, description = ''): StoryCharacter {
+  const sourceDuplicate = name === '阿梨' ? '\n阿梨：“没看清就别急着下结论。”' : ''
   return {
     id,
     name,
@@ -43,7 +44,7 @@ function character(id: string, name: string, description = ''): StoryCharacter {
       description,
       personality: `${name}只用短句回应。`,
       scenario: '',
-      exampleDialogue: `${name}：“先把眼前的事说清楚。”\n${name}：“笨蛋”`,
+      exampleDialogue: `${name}：“先把眼前的事说清楚。”\n${name}：“笨蛋”${sourceDuplicate}`,
       systemPrompt: '',
       postHistoryInstructions: '',
     },
@@ -153,7 +154,73 @@ function workspace(): StoryWorkspaceSnapshot {
         name: '终章原著',
         kind: 'original',
         enabled: true,
-        content: '# 终章设定\n\n鸦青印记只在列车终章显现。\n\n# 人物对白\n\n阿梨：“没看清就别急着下结论。”\n\n柏舟：“那就走近一点看。”\n\n# 语气观察\n\n阿梨常用短反问和理直气壮的断言；柏舟习惯立刻指出她推断里的漏洞，两人熟到省略礼貌和背景说明。',
+        content: [
+          '# 终章设定',
+          '鸦青印记只在列车终章显现。',
+          '# 人物对白',
+          '阿梨：“没看清就别急着下结论。”\n\n柏舟：“那就走近一点看。”',
+          '# 语气观察',
+          '阿梨常用短反问和理直气壮的断言；柏舟习惯立刻指出她推断里的漏洞，两人熟到省略礼貌和背景说明。',
+          '# 码头旧话',
+          '阿梨：“船已经走远了。”',
+          '# 厨房旧话',
+          '阿梨：“汤放凉再喝。”',
+          '# 森林旧话',
+          '阿梨：“这条路没有脚印。”',
+          '# 仓库旧话',
+          '阿梨：“门锁不是今天换的。”',
+          '# 塔楼旧话',
+          '阿梨：“钟声少响了一次。”',
+          '# 花园旧话',
+          '阿梨：“花期还没有到。”',
+          '# 书库旧话',
+          '阿梨：“那本书不在这一层。”',
+          '# 判断前提',
+          [
+            '原文：',
+            '柏舟：“船はもう遠くへ行った。”',
+            '阿梨：“潮が引くまで待つ。”',
+            '柏舟：“スープはまだ熱い。”',
+            '阿梨：“冷めてから飲めばいい。”',
+            '柏舟：“森の道に足跡がない。”',
+            '阿梨：“別の道を探す。”',
+            '柏舟：“倉庫の鍵は古いままだ。”',
+            '阿梨：“今は扉を開けない。”',
+            '柏舟：“鐘は一度しか鳴らなかった。”',
+            '阿梨：“次の鐘を待つ。”',
+            '柏舟：“雨はまだ止んでいない。”',
+            '阿梨：“窓を閉めておく。”',
+            '柏舟：“地図の端が破れている。”',
+            '阿梨：“残った線だけを見る。”',
+            '柏舟：“本は机の下に落ちていた。”',
+            '阿梨：“棚に戻しておく。”',
+            '柏舟：“庭の花はまだ咲いていない。”',
+            '阿梨：“季節が来るまで待つ。”',
+            '柏舟：“刻印はもう滲んで見えない。”',
+            '阿梨：“見えてから結論を出せばいい。”',
+            '参考译文：',
+            '柏舟：“船已经走远了。”',
+            '阿梨：“等退潮再说。”',
+            '柏舟：“汤还很烫。”',
+            '阿梨：“放凉再喝就好。”',
+            '柏舟：“森林的路上没有脚印。”',
+            '阿梨：“去找另一条路。”',
+            '柏舟：“仓库的锁还是旧的。”',
+            '阿梨：“现在先不开门。”',
+            '柏舟：“钟只响过一次。”',
+            '阿梨：“等下一声钟。”',
+            '柏舟：“雨还没有停。”',
+            '阿梨：“先把窗关好。”',
+            '柏舟：“地图边缘破了。”',
+            '阿梨：“只看剩下的线。”',
+            '柏舟：“书掉到了桌子底下。”',
+            '阿梨：“把它放回书架。”',
+            '柏舟：“院里的花还没有开。”',
+            '阿梨：“等到花期再说。”',
+            '柏舟：“刻痕已经糊得看不清了。”',
+            '阿梨：“看清以后再作结论。”',
+          ].join('\n'),
+        ].join('\n\n'),
       },
     ],
     citations: [],
@@ -165,7 +232,14 @@ test('runs logged story stages while keeping each character request privately sc
   const session = Session.create(SessionId('story-turn-pipeline'))
   session.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+    header: {
+      config: {
+        provider: 'worker-fixture',
+        model: 'worker-model',
+        reasoningEffort: 'high' as never,
+        maxTokens: 32_768,
+      },
+    },
   })
   const characterBodies: string[] = []
   const characterSystems: string[] = []
@@ -173,6 +247,7 @@ test('runs logged story stages while keeping each character request privately sc
   const sectionBodies: string[] = []
   const researchBodies: string[] = []
   let directorBody = ''
+  let directorSystem = ''
   let voiceBody = ''
   let voiceSystem = ''
   let secondVoiceBody = ''
@@ -189,6 +264,8 @@ test('runs logged story stages while keeping each character request privately sc
   let active = 0
   let maxActive = 0
   const routes: string[] = []
+  const reasoningEfforts: Array<string | undefined> = []
+  const maxTokenBudgets: number[] = []
   const fake = {
     get(name: string) {
       if (name !== 'web') return undefined
@@ -207,6 +284,8 @@ test('runs logged story stages while keeping each character request privately sc
       stream(options: {
         readonly provider: string
         readonly model: string
+        readonly reasoningEffort?: string
+        readonly maxTokens?: number
         readonly system?: string
         readonly messages: readonly unknown[]
       }) {
@@ -214,6 +293,8 @@ test('runs logged story stages while keeping each character request privately sc
         active += 1
         maxActive = Math.max(maxActive, active)
         routes.push(`${options.provider}/${options.model}`)
+        reasoningEfforts.push(options.reasoningEffort)
+        maxTokenBudgets.push(options.maxTokens ?? 0)
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages)
         let text: string
@@ -258,12 +339,13 @@ test('runs logged story stages while keeping each character request privately sc
             : JSON.stringify({
               observation: '注意到阿梨正在观察徽章。',
               action: '',
-              speechIntent: '回避车票话题。',
+              speechIntent: '纠正阿梨“已经看清”的前提。',
               voiceEvidence: [evidence],
               insights: [],
             })
         } else if (system.includes('剧情导演 Worker')) {
           directorBody = body
+          directorSystem = system
           text = JSON.stringify({
             sections: [
               {
@@ -273,12 +355,9 @@ test('runs logged story stages while keeping each character request privately sc
                   {
                     characterId: aliceId,
                   },
-                  {
-                    characterId: bobId,
-                  },
                 ],
               },
-              { sectionId: characterSectionId, characterId: aliceId },
+              { sectionId: characterSectionId, characterId: '阿梨' },
               { sectionId: historySectionId, beats: ['记录已经发生的公开事实。'] },
             ],
           })
@@ -296,8 +375,7 @@ test('runs logged story stages while keeping each character request privately sc
             voiceReviewSystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:1`, dialogue: '' },
-                { reference: `${sectionId}:2`, dialogue: '' },
+                { reference: `${sectionId}:1`, dialogue: '你连徽章都没看清，谈什么结论。' },
               ],
             })
           } else {
@@ -315,7 +393,7 @@ test('runs logged story stages while keeping each character request privately sc
             text = JSON.stringify({
               lines: [
                 { reference: `${sectionId}:1`, move: 'command', dialogue: '先看徽章，别忙着猜。' },
-                { reference: `${sectionId}:2`, move: 'correct', dialogue: '' },
+                { reference: `${sectionId}:1`, move: 'correct', dialogue: '没看清的话，结论就先放着。' },
               ],
             })
           } else if (body.includes(`人物：柏舟（${bobId}）`)) {
@@ -332,7 +410,8 @@ test('runs logged story stages while keeping each character request privately sc
             text = JSON.stringify({
               lines: [
                 { reference: `${sectionId}:1`, move: 'command', dialogue: '谁都能说的胜利台词。' },
-                { reference: `${sectionId}:2`, move: 'correct', dialogue: '“谁都能说的胜利台词二。”' },
+                { reference: `${sectionId}:1`, move: 'question', dialogue: '你连徽章都没看清，谈什么结论。' },
+                { reference: `${sectionId}:1`, move: 'challenge', dialogue: '别说得像你已经看清了。' },
               ],
             })
           }
@@ -352,7 +431,7 @@ test('runs logged story stages while keeping each character request privately sc
             sections: [
               {
                 sectionId,
-                text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“编辑器新增的台词。”',
+                text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n柏舟说：“编辑器新增的台词。”',
               },
               { sectionId: characterSectionId, text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
               { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
@@ -398,6 +477,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(calls, 14)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
+  assert.equal(reasoningEfforts.every(effort => effort === 'high'), true)
+  assert.equal(maxTokenBudgets.every(budget => budget >= 16_384), true)
   assert.equal(characterBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
   assert.match(webQuery, /旧车站徽章 原著设定/u)
@@ -406,6 +487,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(characterBodies.join('\n'), /这不是玩家要求/u)
   assert.doesNotMatch(directorBody, /这不是玩家要求/u)
   assert.match(researchBodies[0]!, /story:public-history/u)
+  assert.match(researchBodies[0]!, /story:player-input/u)
+  assert.match(researchBodies[0]!, /玩家举起徽章/u)
   assert.doesNotMatch(researchBodies.join('\n'), /story:recent-transcript|近期公开会话/u)
   assert.doesNotMatch(researchBodies[0]!, /鸦青印记只在列车终章显现/u)
   assert.match(researchBodies[1]!, /徽章属于旧车站/u)
@@ -445,41 +528,63 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceBody, /先把眼前的事说清楚/u)
   assert.match(voiceBody, /熟到省略礼貌和背景说明/u)
   assert.match(voiceBody, /<voice_exchange>[\s\S]*\[目标人物\]\[示例\] 阿梨｜先把眼前的事说清楚。/u)
-  assert.match(voiceBody, /<voice_exchange>[\s\S]*\[对话上下文\]\[示例\] 柏舟｜那就走近一点看。/u)
+  assert.match(voiceBody, /\[对话上下文\]\[原文\] 柏舟｜刻印はもう滲んで見えない。/u)
+  assert.match(voiceBody, /\[目标人物\]\[原文\] 阿梨｜見えてから結論を出せばいい。/u)
+  assert.match(voiceBody, /\[对话上下文\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
+  assert.match(voiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
+  assert.doesNotMatch(voiceBody, /\[对话上下文\]\[原文\] 柏舟｜船はもう遠くへ行った。/u)
   assert.match(voiceBody, /<voice_notes>[\s\S]*阿梨常用短反问/u)
+  assert.equal(voiceBody.match(/阿梨｜没看清就别急着下结论。/gu)?.length, 1)
+  const voiceEvidenceBody = voiceBody.slice(
+    voiceBody.indexOf('<voice_evidence>'),
+    voiceBody.indexOf('</voice_evidence>'),
+  )
+  assert.ok((voiceEvidenceBody.match(/\[(?:目标人物|对话上下文)\]/gu)?.length ?? 0) <= 36)
+  assert.ok(voiceEvidenceBody.length < 7_000)
   const firstSpeechPlan = voiceBody.slice(
     voiceBody.indexOf(`## [speech:${sectionId}:1]`),
     voiceBody.indexOf(`## [speech:${sectionId}:2]`),
   )
+  assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:2/u)
+  assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:12/u)
   assert.match(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
   assert.doesNotMatch(voiceBody, /柏舟藏起了车票/u)
   assert.match(secondVoiceBody, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
+  assert.match(secondVoiceBody, /\[目标人物\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
+  assert.match(secondVoiceBody, /\[对话上下文\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
+  assert.doesNotMatch(secondVoiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.doesNotMatch(secondVoiceBody, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(secondVoiceBody, /阿梨知道徽章/u)
   assert.match(secondVoiceBody, /<prior_approved_dialogue>[\s\S]*先看徽章，别忙着猜/u)
   assert.match(secondVoiceSystem, /不得读取或推断导演故事图、其他人物档案和私有知识/u)
   assert.match(voiceSystem, /不得照抄、拼接、近似复述/u)
-  assert.match(voiceSystem, /prior_approved_dialogue 非空，必须直接接住其中最后一句/u)
+  assert.match(voiceSystem, /prior_approved_dialogue 非空，候选必须直接接住其中最后一句/u)
   assert.match(voiceSystem, /move 说明句子怎样作用于对方/u)
   assert.match(voiceSystem, /\[目标人物\].*此人物自己的原句/u)
   assert.match(voiceSystem, /\[对话上下文\].*不能模仿对方/u)
   assert.match(voiceSystem, /普通问句、纠正句或胜负套话/u)
   assert.match(voiceReviewBody, /谁都能说的胜利台词/u)
+  assert.match(voiceReviewBody, /候选 2/u)
   assert.match(voiceReviewBody, /先把眼前的事说清楚/u)
   assert.match(voiceReviewSystem, /匿名替换检验/u)
   assert.match(voiceReviewSystem, /意图复述检验/u)
   assert.match(voiceReviewSystem, /你怎么还没/u)
+  assert.match(voiceReviewSystem, /你是连……都/u)
+  assert.match(voiceReviewSystem, /你连……都……，谈什么/u)
+  assert.match(voiceReviewSystem, /朴素短句可以批准/u)
   assert.match(voiceReviewSystem, /\[目标人物\].*此人物自己的原句/u)
   assert.match(voiceReviewSystem, /\[对话上下文\].*不能拿来模仿/u)
   assert.match(voiceReviewSystem, /素材归属检验/u)
   assert.match(voiceReviewSystem, /任意竞争者、朋友或对手/u)
   assert.match(voiceReviewSystem, /仅复述公开世界事实/u)
   assert.match(voiceReviewSystem, /绝不参与创作/u)
-  assert.match(voiceReviewSystem, /只能逐字返回 draft_dialogue/u)
+  assert.match(voiceReviewSystem, /只能逐字返回 draft_candidates/u)
+  assert.match(voiceReviewSystem, /多个候选合格时只选/u)
   assert.match(voiceReviewSystem, /审校不拥有也不返回说话动作/u)
   assert.match(voiceRetrySystem, /唯一一次退回重写/u)
-  assert.match(voiceRetryBody, /rejected_draft/u)
+  assert.match(voiceRetrySystem, /凭空制造比喻/u)
+  assert.match(voiceRetryBody, /rejected_candidates/u)
   assert.ok(voiceRetryBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
   assert.match(voiceRetryBody, /谁都能说的胜利台词/u)
   assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
@@ -493,10 +598,11 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
   assert.doesNotMatch(editorBody, /<voice_evidence>/u)
-  assert.match(editorSystem, /不得新增、恢复、拆分或重写任何对白/u)
+  assert.match(editorSystem, /不得新增、恢复、拆分、重写或删除任何获准对白/u)
   assert.match(editorSystem, /history 的简洁事实记录.*不能因此删除/u)
   assert.match(directorBody, /## 结论所引用的原始证据/u)
   assert.match(directorBody, /终章原著/u)
+  assert.match(directorSystem, /Host 会把导演遗漏的有效决定补回默认正文分区/u)
   assert.match(result.finalDraft, /阿梨看向徽章/u)
   assert.match(result.finalDraft, /先看徽章，别忙着猜/u)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
@@ -529,7 +635,14 @@ test('stops malformed research output and falls back to exact local evidence', a
   const session = Session.create(SessionId('story-research-fallback'))
   session.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+    header: {
+      config: {
+        provider: 'fixture',
+        model: 'fixture',
+        reasoningEffort: 'high' as never,
+        maxTokens: 8_192,
+      },
+    },
   })
   const base = workspace()
   const inputWorkspace: StoryWorkspaceSnapshot = {
@@ -550,11 +663,17 @@ test('stops malformed research output and falls back to exact local evidence', a
   }
   let researchCalls = 0
   let directorBody = ''
+  const reasoningEfforts: Array<string | undefined> = []
   const fake = {
     get() { throw new Error('不应尝试网络查询') },
     sessions: { flush: async () => true },
     llm: {
-      stream(options: { readonly system?: string; readonly messages: readonly unknown[] }) {
+      stream(options: {
+        readonly reasoningEffort?: string
+        readonly system?: string
+        readonly messages: readonly unknown[]
+      }) {
+        reasoningEfforts.push(options.reasoningEffort)
         const system = options.system ?? ''
         let text = '最终正文'
         if (system.includes('剧情研究 Worker')) {
@@ -586,6 +705,7 @@ test('stops malformed research output and falls back to exact local evidence', a
   })
 
   assert.equal(researchCalls, 1)
+  assert.equal(reasoningEfforts.every(effort => effort === undefined), true)
   assert.match(directorBody, /\[local:source-[0-9a-f-]+:1\].*鸦青印记只在列车终章显现/u)
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-web-search-request'), false)
 })
@@ -803,6 +923,7 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.equal(result?.changes.nodes.length, 2)
   assert.equal(result?.changes.edges.length, 2)
   const saved = store.get(workspace.id)
+  assert.equal(saved.events[0]?.title, '会话回合 1')
   assert.match(saved.events[0]?.summary ?? '', /灵梦与魔理沙都看见雨停/u)
   assert.match(saved.events[0]?.evidence ?? '', /魔理沙决定继续当前棋局/u)
   assert.equal(saved.characters.find(character => character.id === marisaId)?.state.location, '雨后的车站')
