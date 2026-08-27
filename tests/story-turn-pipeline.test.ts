@@ -31,7 +31,7 @@ const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
 
 function workspace(): StoryWorkspaceSnapshot {
   return {
-    format: 1,
+    format: 2,
     id: 'story-00000000-0000-4000-8000-000000000001',
     name: '隔离流水线',
     revision: 3,
@@ -45,34 +45,42 @@ function workspace(): StoryWorkspaceSnapshot {
           id: arcId,
           kind: 'arc',
           title: '第一幕',
+          summary: '雨后车站所在的第一幕。',
           status: 'active',
           lifecycle: 'canonical',
           audience: 'director',
           position: { x: 0, y: 0 },
           content: '导演知道下一幕会停电。',
           participantIds: [],
+          knowledge: { mode: 'none', characterIds: [] },
         },
         {
           id: activeNodeId,
           kind: 'beat',
+          parentId: arcId,
           title: '雨后的车站',
+          summary: '玩家在雨后的车站举起徽章。',
           status: 'active',
           lifecycle: 'canonical',
           audience: 'public',
           position: { x: 320, y: 0 },
           content: '玩家在车站举起徽章。',
           participantIds: [aliceId, bobId],
+          knowledge: { mode: 'participants', characterIds: [] },
         },
         {
           id: secretId,
           kind: 'secret',
+          parentId: arcId,
           title: '怀表',
+          summary: '尚未向人物公开的怀表伏笔。',
           status: 'planned',
           lifecycle: 'canonical',
           audience: 'director',
           position: { x: 320, y: 220 },
           content: '怀表将在第三幕打开。',
           participantIds: [],
+          knowledge: { mode: 'none', characterIds: [] },
         },
       ],
       edges: [
@@ -97,6 +105,7 @@ function workspace(): StoryWorkspaceSnapshot {
         text: '阿梨知道徽章的主人。',
         status: 'asserted',
         audience: 'director',
+        knowledgeMode: 'override',
         knownBy: [aliceId],
         source: { kind: 'manual' },
       },
@@ -105,6 +114,7 @@ function workspace(): StoryWorkspaceSnapshot {
         text: '柏舟藏起了车票。',
         status: 'asserted',
         audience: 'director',
+        knowledgeMode: 'override',
         knownBy: [bobId],
         source: { kind: 'manual' },
       },
@@ -358,11 +368,11 @@ test('materializes continuity from the actually visible reply instead of the pre
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-continuity-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: '实际正文沉淀' })
+  const created = store.create({ format: 2, name: '实际正文沉淀' })
   const characterId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
   const workspace = store.save({
-    format: 1,
+    format: 2,
     id: created.id,
     revision: 0,
     name: '实际正文沉淀',
@@ -373,12 +383,14 @@ test('materializes continuity from the actually visible reply instead of the pre
         id: nodeId,
         kind: 'beat',
         title: '车站重逢',
+        summary: '两人在车站重逢。',
         status: 'active',
         lifecycle: 'canonical',
         audience: 'public',
         position: { x: 0, y: 0 },
         content: '在车站重逢。',
         participantIds: [characterId],
+        knowledge: { mode: 'participants', characterIds: [] },
       }],
       edges: [],
     },

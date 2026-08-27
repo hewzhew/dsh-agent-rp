@@ -23,7 +23,7 @@ import {
 
 function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   return {
-    format: 1,
+    format: 2,
     id: snapshot.id,
     revision: snapshot.revision,
     name: snapshot.name,
@@ -43,7 +43,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-workspace-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: ' 长夜 ' })
+  const created = store.create({ format: 2, name: ' 长夜 ' })
   const characterId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
   const outputId = createStoryOutputId()
@@ -54,7 +54,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
 
   assert.deepEqual(created.pipeline, { maxParallel: 4, researchMaxPasses: 2 })
   const saved = store.save({
-    format: 1,
+    format: 2,
     id: created.id,
     revision: created.revision,
     name: '长夜',
@@ -65,12 +65,14 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
         id: nodeId,
         kind: 'beat',
         title: '雪夜重逢',
+        summary: '在雪夜车站重逢。',
         status: 'active',
         lifecycle: 'canonical',
         audience: 'public',
         position: { x: 240, y: 80 },
         content: '先在车站重逢。',
         participantIds: [characterId],
+        knowledge: { mode: 'participants', characterIds: [] },
       }],
       edges: [],
     },
@@ -80,6 +82,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
       text: '她知道车票背面的字。',
       status: 'asserted',
       audience: 'director',
+      knowledgeMode: 'override',
       knownBy: [characterId],
       source: { kind: 'manual' },
     }],
@@ -202,7 +205,7 @@ test('migrates one format 0 workspace into the typed story model and removes obs
 
   const migrated = new StoryWorkspaceStore({ root }).get(workspaceId)
 
-  assert.equal(migrated.format, 1)
+  assert.equal(migrated.format, 2)
   assert.equal(migrated.revision, 5)
   assert.deepEqual(migrated.pipeline, { maxParallel: 2, researchMaxPasses: 2 })
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'arc')?.content, '第一幕在车站重逢。')
@@ -224,17 +227,138 @@ test('migrates one format 0 workspace into the typed story model and removes obs
   assert.doesNotMatch(JSON.stringify(migrated), /agent-rp:story-turn/u)
 })
 
-test('compiles one character context from fact visibility without director or another character knowledge', (context) => {
+test('migrates format 1 clusters and fact visibility into format 2 inheritance', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-format-1-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const workspaceId = 'story-00000000-0000-4000-8000-000000000021'
+  const characterId = 'character-00000000-0000-4000-8000-000000000021'
+  const arcId = 'node-00000000-0000-4000-8000-000000000021'
+  const sceneId = 'node-00000000-0000-4000-8000-000000000022'
+  const eventId = 'event-00000000-0000-4000-8000-000000000021'
+  const workspaceRoot = join(root, workspaceId)
+  mkdirSync(join(workspaceRoot, 'nodes'), { recursive: true })
+  mkdirSync(join(workspaceRoot, 'characters', characterId), { recursive: true })
+  writeFileSync(join(workspaceRoot, 'nodes', `${arcId}.md`), '第一幕总览。')
+  writeFileSync(join(workspaceRoot, 'nodes', `${sceneId}.md`), '阿梨在雨后的车站举起徽章。')
+  writeFileSync(join(workspaceRoot, 'characters', characterId, 'persona.md'), '阿梨谨慎。')
+  writeFileSync(join(workspaceRoot, 'story.json'), `${JSON.stringify({
+    format: 1,
+    id: workspaceId,
+    name: '旧类型故事',
+    revision: 3,
+    createdAt: 10,
+    updatedAt: 20,
+    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
+    graph: {
+      activeNodeId: sceneId,
+      nodes: [
+        {
+          id: arcId,
+          kind: 'arc',
+          title: '第一幕',
+          status: 'active',
+          lifecycle: 'canonical',
+          audience: 'director',
+          position: { x: 0, y: 0 },
+          participantIds: [],
+        },
+        {
+          id: sceneId,
+          kind: 'beat',
+          title: '雨后车站',
+          status: 'active',
+          lifecycle: 'canonical',
+          audience: 'public',
+          position: { x: 320, y: 0 },
+          participantIds: [characterId],
+        },
+      ],
+      edges: [{
+        id: 'edge-00000000-0000-4000-8000-000000000021',
+        kind: 'contains',
+        source: arcId,
+        target: sceneId,
+        label: '',
+        lifecycle: 'canonical',
+        audience: 'director',
+      }],
+    },
+    characters: [{ id: characterId, name: '阿梨' }],
+    facts: [{
+      id: 'fact-00000000-0000-4000-8000-000000000021',
+      text: '阿梨看见徽章。',
+      status: 'asserted',
+      audience: 'director',
+      knownBy: [characterId],
+      source: { kind: 'event', eventId, evidence: '她亲眼看见。' },
+    }],
+    events: [{
+      id: eventId,
+      key: 'old-turn',
+      turn: 1,
+      title: '举起徽章',
+      summary: '阿梨举起徽章。',
+      evidence: '阿梨举起徽章。',
+      participantIds: [characterId],
+      nodeId: sceneId,
+    }],
+    outputs: [],
+    sources: [],
+    citations: [],
+    researchInbox: [],
+  }, null, 2)}\n`)
+
+  const migrated = new StoryWorkspaceStore({ root }).get(workspaceId)
+
+  assert.equal(migrated.format, 2)
+  assert.equal(migrated.graph.nodes.find(node => node.id === sceneId)?.parentId, arcId)
+  assert.deepEqual(migrated.graph.nodes.find(node => node.id === sceneId)?.knowledge, { mode: 'participants', characterIds: [] })
+  assert.equal(migrated.graph.nodes.find(node => node.id === arcId)?.summary, '第一幕总览。')
+  assert.equal(migrated.facts[0]?.nodeId, sceneId)
+  assert.equal(migrated.facts[0]?.knowledgeMode, 'override')
+  assert.equal((JSON.parse(readFileSync(join(workspaceRoot, 'story.json'), 'utf8')) as { format?: unknown }).format, 2)
+})
+
+test('rejects cyclic story-cluster hierarchy', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-cycle-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '层级循环' })
+  const firstId = createStoryNodeId()
+  const secondId = createStoryNodeId()
+  const node = (id: string, parentId: string, title: string) => ({
+    id,
+    parentId,
+    kind: 'beat' as const,
+    title,
+    summary: title,
+    status: 'planned' as const,
+    lifecycle: 'canonical' as const,
+    audience: 'director' as const,
+    position: { x: 0, y: 0 },
+    content: title,
+    participantIds: [],
+    knowledge: { mode: 'inherit' as const, characterIds: [] },
+  })
+
+  assert.throws(() => store.save({
+    ...editable(created),
+    graph: { nodes: [node(firstId, secondId, '甲'), node(secondId, firstId, '乙')], edges: [] },
+  }), /故事节点层级不能形成循环/u)
+})
+
+test('compiles inherited scene knowledge while preserving private fact overrides', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-character-context-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: '认知隔离' })
+  const created = store.create({ format: 2, name: '认知隔离' })
   const aliceId = createStoryCharacterId()
   const bobId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
   const eventId = createStoryEventId()
   const aliceFactId = createStoryFactId()
   const bobFactId = createStoryFactId()
+  const sharedFactId = createStoryFactId()
   const sourceId = createStorySourceId()
   const workspace = store.save({
     ...editable(created),
@@ -244,12 +368,14 @@ test('compiles one character context from fact visibility without director or an
         id: nodeId,
         kind: 'beat',
         title: '桥边',
+        summary: '阿梨与柏舟一起站在桥边。',
         status: 'active',
         lifecycle: 'canonical',
         audience: 'public',
         position: { x: 0, y: 0 },
         content: '导演秘密：下一幕桥会断。',
         participantIds: [aliceId, bobId],
+        knowledge: { mode: 'participants', characterIds: [] },
       }],
       edges: [],
     },
@@ -269,10 +395,21 @@ test('compiles one character context from fact visibility without director or an
     }],
     facts: [
       {
+        id: sharedFactId,
+        nodeId,
+        text: '桥边的雨已经停了。',
+        status: 'asserted',
+        audience: 'public',
+        knowledgeMode: 'inherit',
+        knownBy: [],
+        source: { kind: 'manual' },
+      },
+      {
         id: aliceFactId,
         text: '阿梨私密：她认得旧徽章。',
         status: 'asserted',
         audience: 'director',
+        knowledgeMode: 'override',
         knownBy: [aliceId],
         source: { kind: 'manual' },
       },
@@ -281,6 +418,7 @@ test('compiles one character context from fact visibility without director or an
         text: '柏舟私密：他藏起了地图。',
         status: 'asserted',
         audience: 'director',
+        knowledgeMode: 'override',
         knownBy: [bobId],
         source: { kind: 'event', eventId, evidence: '柏舟把地图折进袖口。' },
       },
@@ -315,7 +453,11 @@ test('compiles one character context from fact visibility without director or an
   const compiled = compileStoryCharacterContext(workspace, aliceId, {
     playerInput: '玩家问阿梨是否见过这枚徽章。',
   })
+  const bobCompiled = compileStoryCharacterContext(workspace, bobId, {
+    playerInput: '玩家问柏舟雨停了吗。',
+  })
 
+  assert.match(compiled.text, /桥边的雨已经停了/u)
   assert.match(compiled.text, /阿梨私密：她认得旧徽章/u)
   assert.match(compiled.text, /角色设定集 · 人物篇 · 第 1 段/u)
   assert.match(compiled.text, /阿梨曾在旧站见过徽章/u)
@@ -323,13 +465,16 @@ test('compiles one character context from fact visibility without director or an
   assert.doesNotMatch(compiled.text, /柏舟私密/u)
   assert.doesNotMatch(compiled.text, /柏舟独自拿走地图/u)
   assert.doesNotMatch(compiled.text, /桥会断/u)
+  assert.match(bobCompiled.text, /桥边的雨已经停了/u)
+  assert.match(bobCompiled.text, /柏舟私密：他藏起了地图/u)
+  assert.doesNotMatch(bobCompiled.text, /阿梨私密/u)
 })
 
 test('keeps suggested graph objects out of formal director and current-scene inputs', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-candidate-graph-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: '候选隔离' })
+  const created = store.create({ format: 2, name: '候选隔离' })
   const activeNodeId = createStoryNodeId()
   const suggestedNodeId = createStoryNodeId()
   const workspace = store.save({
@@ -341,23 +486,27 @@ test('keeps suggested graph objects out of formal director and current-scene inp
           id: activeNodeId,
           kind: 'beat',
           title: '正式场景',
+          summary: '已经接受的场景。',
           status: 'active',
           lifecycle: 'canonical',
           audience: 'public',
           position: { x: 0, y: 0 },
           content: '已经接受的剧情。',
           participantIds: [],
+          knowledge: { mode: 'none', characterIds: [] },
         },
         {
           id: suggestedNodeId,
           kind: 'secret',
           title: '尚未接受的秘密',
+          summary: '尚待接受的秘密建议。',
           status: 'planned',
           lifecycle: 'suggested',
           audience: 'director',
           position: { x: 300, y: 0 },
           content: '不应进入导演输入。',
           participantIds: [],
+          knowledge: { mode: 'none', characterIds: [] },
         },
       ],
       edges: [{
@@ -385,7 +534,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-materialization-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: '回合沉淀' })
+  const created = store.create({ format: 2, name: '回合沉淀' })
   const aliceId = createStoryCharacterId()
   const bobId = createStoryCharacterId()
   const activeNodeId = createStoryNodeId()
@@ -397,12 +546,14 @@ test('materializes one visible turn into an event, observed facts, and a suggest
         id: activeNodeId,
         kind: 'beat',
         title: '门廊',
+        summary: '阿梨与柏舟在门廊。',
         status: 'active',
         lifecycle: 'canonical',
         audience: 'public',
         position: { x: 100, y: 40 },
         content: '保持原剧情节点。',
         participantIds: [aliceId, bobId],
+        knowledge: { mode: 'participants', characterIds: [] },
       }],
       edges: [],
     },
@@ -415,6 +566,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
       text: '阿梨认得徽章。',
       status: 'asserted',
       audience: 'director',
+      knowledgeMode: 'override',
       knownBy: [aliceId],
       source: { kind: 'manual' },
     }],
@@ -571,7 +723,7 @@ test('retrieves the most relevant bounded original excerpts before model researc
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-search-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 1, name: '原著检索' })
+  const created = store.create({ format: 2, name: '原著检索' })
   const workspace = store.save({
     ...editable(created),
     pipeline: { maxParallel: 2, researchMaxPasses: 2 },

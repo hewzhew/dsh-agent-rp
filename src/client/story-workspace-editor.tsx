@@ -75,7 +75,26 @@ interface StoryCanvasNodeData extends Record<string, unknown> {
   readonly lifecycle: StoryNode['lifecycle']
   readonly status: StoryNode['status']
   readonly title: string
+  readonly summary: string
   readonly people: string
+  readonly knowledge: string
+  readonly expanded: boolean
+  readonly children: readonly {
+    readonly id: string
+    readonly kind: StoryNodeKind
+    readonly title: string
+    readonly summary: string
+    readonly depth: number
+    readonly detailCount: number
+  }[]
+  readonly details: readonly {
+    readonly id: string
+    readonly text: string
+    readonly knownBy: string
+    readonly location: string
+  }[]
+  readonly onToggle: () => void
+  readonly onSelectNode: (id: string) => void
 }
 
 type StoryCanvasNode = Node<StoryCanvasNodeData, 'story'>
@@ -84,7 +103,7 @@ type UpdateWorkspace = (transform: (current: StoryWorkspaceSnapshot) => StoryWor
 
 const nodeKindLabels: Readonly<Record<StoryNodeKind, string>> = {
   arc: '篇章',
-  beat: '剧情',
+  beat: '场景',
   secret: '秘密',
 }
 
@@ -117,6 +136,25 @@ const sourceKindLabels: Readonly<Record<StorySourceKind, string>> = {
 
 function canBecomeActiveNode(node: StoryNode): boolean {
   return node.kind === 'beat' && node.lifecycle === 'canonical' && node.status !== 'dropped'
+}
+
+function nodeKnownBy(workspace: StoryWorkspaceSnapshot, nodeId: string): readonly string[] {
+  const nodeById = new Map(workspace.graph.nodes.map(node => [node.id, node]))
+  const resolveNode = (id: string): readonly string[] => {
+    const node = nodeById.get(id)
+    if (node === undefined) return []
+    if (node.knowledge.mode === 'none') return []
+    if (node.knowledge.mode === 'participants') return node.participantIds
+    if (node.knowledge.mode === 'characters') return node.knowledge.characterIds
+    return node.parentId === undefined ? [] : resolveNode(node.parentId)
+  }
+  return [...new Set(resolveNode(nodeId))]
+}
+
+function factKnownBy(workspace: StoryWorkspaceSnapshot, fact: StoryFact): readonly string[] {
+  return fact.knowledgeMode === 'override'
+    ? fact.knownBy
+    : fact.nodeId === undefined ? [] : nodeKnownBy(workspace, fact.nodeId)
 }
 
 function errorMessage(reason: unknown): string {
@@ -153,7 +191,7 @@ async function createWorkspace(name: string): Promise<StoryWorkspaceSnapshot> {
   const value = await storyRequest('', {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ format: 1, name }),
+    body: JSON.stringify({ format: 2, name }),
   })
   if (value.workspace === undefined) throw new Error('故事工作室创建响应无效')
   return value.workspace
@@ -164,7 +202,7 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
     method: 'PUT',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify({
-      format: 1,
+      format: 2,
       id: workspace.id,
       revision: workspace.revision,
       name: workspace.name,
@@ -195,7 +233,27 @@ function StoryCanvasNodeCard({ data, selected }: NodeProps<StoryCanvasNode>) {
       <span>{data.lifecycle === 'suggested' ? 'AI 建议' : nodeStatusLabels[data.status]}</span>
     </div>
     <div className="story-canvas-node-title">{data.title}</div>
+    <div className="story-canvas-node-summary">{data.summary || '尚未填写折叠摘要'}</div>
     {data.people !== '' && <div className="story-canvas-node-people">{data.people}</div>}
+    <div className="story-canvas-node-foot">
+      <span>{data.children.length} 个子项 · {data.details.length} 条信息</span>
+      <button className="nodrag story-canvas-node-toggle" type="button" onClick={event => { event.stopPropagation(); data.onToggle() }}>
+        {data.expanded ? '收起' : '展开'}
+      </button>
+    </div>
+    {data.expanded && <div className="nodrag story-canvas-node-contents">
+      {data.children.map(child => <button className="story-canvas-child" type="button" key={child.id}
+        style={{ '--story-child-depth': child.depth } as CSSProperties}
+        onClick={event => { event.stopPropagation(); data.onSelectNode(child.id) }}>
+        <span><b>{nodeKindLabels[child.kind]}</b>{child.title}</span>
+        <small>{child.summary || '尚未填写摘要'}{child.detailCount === 0 ? '' : ` · ${String(child.detailCount)} 条信息`}</small>
+      </button>)}
+      {data.details.map(detail => <div className="story-canvas-detail" key={detail.id}>
+        <span>{detail.text}</span><small>{detail.location}{detail.location === '' ? '' : ' · '}{detail.knownBy}</small>
+      </div>)}
+      {data.children.length + data.details.length === 0 && <small className="story-canvas-empty">故事簇内部还没有细节。</small>}
+    </div>}
+    <div className="story-canvas-node-knowledge">{data.knowledge}</div>
     <Handle className="story-canvas-handle" type="source" position={Position.Right} />
   </div>
 }
@@ -231,6 +289,11 @@ function nodeWithoutSourceEvent(node: StoryNode): StoryNode {
   return rest
 }
 
+function nodeWithoutParent(node: StoryNode): StoryNode {
+  const { parentId: _parentId, ...rest } = node
+  return rest
+}
+
 function edgeWithoutSourceEvent(edge: StoryEdge): StoryEdge {
   const { sourceEventId: _sourceEventId, ...rest } = edge
   return rest
@@ -247,7 +310,7 @@ function citationSourceLabel(workspace: StoryWorkspaceSnapshot, citation: StoryC
 }
 
 function compileCharacterPreview(workspace: StoryWorkspaceSnapshot, character: StoryCharacter): string {
-  const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(character.id))
+  const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && factKnownBy(workspace, fact).includes(character.id))
     .map(fact => {
       const citations = workspace.citations.filter(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id)
       return [`- ${fact.status === 'uncertain' ? '[不确定] ' : ''}${fact.text}`,
@@ -291,6 +354,28 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
       ? [...new Set([...value.participantIds, id])]
       : value.participantIds.filter(candidate => candidate !== id) }))
   }
+  const toggleKnowledgeCharacter = (id: string, checked: boolean): void => {
+    patch(value => ({ ...value, knowledge: {
+      mode: 'characters',
+      characterIds: checked
+        ? [...new Set([...value.knowledge.characterIds, id])]
+        : value.knowledge.characterIds.filter(candidate => candidate !== id),
+    } }))
+  }
+  const descendants = new Set<string>([node.id])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const candidate of workspace.graph.nodes) {
+      if (candidate.parentId !== undefined && descendants.has(candidate.parentId) && !descendants.has(candidate.id)) {
+        descendants.add(candidate.id)
+        changed = true
+      }
+    }
+  }
+  const parentCandidates = workspace.graph.nodes.filter(candidate => !descendants.has(candidate.id)
+    && candidate.lifecycle === 'canonical' && candidate.status !== 'dropped'
+    && (candidate.kind === 'arc' || candidate.kind === 'beat'))
   return <>
     <h2>{node.title}</h2>
     <div className="story-studio-inspector-subtitle">{nodeKindLabels[node.kind]} · {node.lifecycle === 'suggested' ? '候选变更' : '正式故事数据'}</div>
@@ -300,6 +385,7 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
       <button className="story-studio-button" type="button" onClick={onDelete}>拒绝</button>
     </div>}
     <TextField label="标题" rows={1} value={node.title} onChange={value => { patch(current => ({ ...current, title: value })) }} />
+    <TextField label="折叠摘要" rows={3} value={node.summary} onChange={value => { patch(current => ({ ...current, summary: value })) }} />
     <div className="story-studio-field-row">
       <Field label="类型"><select className="story-studio-input" value={node.kind}
         onChange={event => { patch(current => ({ ...current, kind: event.target.value as StoryNodeKind })) }}>
@@ -310,10 +396,30 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
         <option value="planned">计划</option><option value="active">进行中</option><option value="completed">已完成</option><option value="dropped">已放弃</option>
       </select></Field>
     </div>
+    <Field label="归属故事簇"><select className="story-studio-input" value={node.parentId ?? ''}
+      onChange={event => { patch(current => event.target.value === ''
+        ? nodeWithoutParent(current)
+        : { ...current, parentId: event.target.value }) }}>
+      <option value="">顶层</option>{parentCandidates.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}
+    </select></Field>
     <Field label="可见范围"><select className="story-studio-input" value={node.audience}
       onChange={event => { patch(current => ({ ...current, audience: event.target.value as StoryNode['audience'] })) }}>
       <option value="director">导演</option><option value="public">公开</option>
     </select></Field>
+    <Field label="内部信息默认由谁知道"><select className="story-studio-input" value={node.knowledge.mode}
+      onChange={event => { patch(current => ({ ...current, knowledge: {
+        mode: event.target.value as StoryNode['knowledge']['mode'],
+        characterIds: [],
+      } })) }}>
+      <option value="inherit">继承上级故事簇</option><option value="none">默认无人知道</option>
+      <option value="participants">场景参与人物</option><option value="characters">指定人物</option>
+    </select></Field>
+    {node.knowledge.mode === 'characters' && <div className="story-studio-field"><span>默认知情人物</span><div className="story-studio-checks">
+      {workspace.characters.map(character => <label className="story-studio-check" key={character.id}>
+        <input type="checkbox" checked={node.knowledge.characterIds.includes(character.id)}
+          onChange={event => { toggleKnowledgeCharacter(character.id, event.target.checked) }} />{character.name}
+      </label>)}
+    </div></div>}
     <TextField label="详细内容" rows={8} value={node.content} onChange={value => { patch(current => ({ ...current, content: value })) }} />
     <div className="story-studio-field"><span>场景参与人物</span><div className="story-studio-checks">
       {workspace.characters.length === 0 && <small>尚未创建人物</small>}
@@ -399,7 +505,7 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
   readonly setPreviewId: (id: string | undefined) => void
   readonly onDelete: () => void
 }) {
-  const facts = workspace.facts.filter(fact => fact.knownBy.includes(character.id))
+  const facts = workspace.facts.filter(fact => factKnownBy(workspace, fact).includes(character.id))
   const patchCharacter = (transform: (value: StoryCharacter) => StoryCharacter): void => {
     update(current => ({ ...current, characters: current.characters.map(item => item.id === character.id ? transform(item) : item) }))
   }
@@ -444,9 +550,11 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
     if (characterId === undefined) return
     update(current => ({ ...current, facts: [...current.facts, {
       id: `fact-${createClientOpaqueUuid()}`,
+      ...(current.graph.activeNodeId === undefined ? {} : { nodeId: current.graph.activeNodeId }),
       text: '新事实',
       status: 'asserted',
       audience: 'director',
+      knowledgeMode: 'override',
       knownBy: [characterId],
       source: { kind: 'manual' },
     }] }))
@@ -465,7 +573,7 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
       <div className="story-studio-toolbar"><button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button>
         <button className="story-studio-button story-studio-button-primary" disabled={workspace.characters.length === 0} type="button" onClick={addFact}>＋ 添加事实</button></div></div>
     <div className="story-character-strip">{workspace.characters.map(character => {
-      const factCount = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(character.id)).length
+      const factCount = workspace.facts.filter(fact => fact.status !== 'refuted' && factKnownBy(workspace, fact).includes(character.id)).length
       return <button className="story-character-card" data-selected={selectedCharacterId === character.id} key={character.id} type="button"
         onClick={() => { selectCharacter(character.id) }}><span>{character.name}</span><small>{factCount} 条当前认知 · 查看 Persona 与 Worker 输入</small></button>
     })}{workspace.characters.length === 0 && <div className="story-studio-empty"><span>先添加人物，再为每个人建立独立认知。</span></div>}</div>
@@ -479,25 +587,35 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
         {workspace.facts.map(fact => {
           const sourceEventId = fact.source.kind === 'event' ? fact.source.eventId : undefined
           const sourceEvent = sourceEventId === undefined ? undefined : workspace.events.find(event => event.id === sourceEventId)
-          return <article className="story-knowledge-row" data-highlighted={selectedCharacterId !== undefined && fact.knownBy.includes(selectedCharacterId)}
+          const effectiveKnownBy = factKnownBy(workspace, fact)
+          const parentNode = fact.nodeId === undefined ? undefined : workspace.graph.nodes.find(node => node.id === fact.nodeId)
+          return <article className="story-knowledge-row" data-highlighted={selectedCharacterId !== undefined && effectiveKnownBy.includes(selectedCharacterId)}
             key={fact.id} style={{ gridTemplateColumns: knowledgeColumns }}>
             <div className="story-knowledge-fact-copy"><textarea className="story-studio-input" rows={2} value={fact.text}
               aria-label="人物事实" onChange={event => { patchFact(fact.id, current => ({ ...current, text: event.target.value })) }} />
               {sourceEvent === undefined
-                ? <small>玩家记录</small>
+                ? <small>{parentNode === undefined ? '未归入故事簇' : `归入：${parentNode.title}`}</small>
                 : <button className="story-citation-link" type="button" onClick={() => { selectEvent(sourceEvent.id) }}>
                   第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗
                 </button>}
             </div>
             {workspace.characters.map(character => <label className="story-knowledge-person" data-selected={selectedCharacterId === character.id} key={character.id}>
               <span className="story-knowledge-person-name">{character.name}</span>
-              <input aria-label={`${character.name}知道：${fact.text.slice(0, 48)}`} type="checkbox" checked={fact.knownBy.includes(character.id)}
-                onChange={event => { patchFact(fact.id, current => ({
-                  ...current,
-                  knownBy: event.target.checked ? [...new Set([...current.knownBy, character.id])] : current.knownBy.filter(id => id !== character.id),
-                })) }} />
+              <input aria-label={`${character.name}知道：${fact.text.slice(0, 48)}`} type="checkbox" checked={effectiveKnownBy.includes(character.id)}
+                onChange={event => { patchFact(fact.id, current => {
+                  const base = current.knowledgeMode === 'inherit' ? effectiveKnownBy : current.knownBy
+                  return {
+                    ...current,
+                    knowledgeMode: 'override',
+                    knownBy: event.target.checked ? [...new Set([...base, character.id])] : base.filter(id => id !== character.id),
+                  }
+                }) }} />
             </label>)}
-            <div className="story-knowledge-state"><select className="story-studio-input" aria-label="事实状态" value={fact.status}
+            <div className="story-knowledge-state">{fact.nodeId !== undefined && <button className="story-studio-icon-button" type="button"
+              aria-label={`切换认知继承：${fact.text.slice(0, 48)}`} title={fact.knowledgeMode === 'inherit' ? '正在继承故事簇' : '改为继承故事簇'}
+              onClick={() => { patchFact(fact.id, current => ({ ...current, knowledgeMode: current.knowledgeMode === 'inherit' ? 'override' : 'inherit' })) }}>
+              {fact.knowledgeMode === 'inherit' ? '↳' : '◇'}
+            </button>}<select className="story-studio-input" aria-label="事实状态" value={fact.status}
               onChange={event => { patchFact(fact.id, current => ({ ...current, status: event.target.value as StoryFact['status'] })) }}>
               <option value="asserted">确认</option><option value="uncertain">不确定</option><option value="refuted">已否定</option>
             </select><button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除事实：${fact.text.slice(0, 48)}`}
@@ -701,37 +819,144 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
   readonly setSelection: (selection: StudioSelection | undefined) => void
   readonly clearPerspective: () => void
 }) {
-  const visibleNodes = perspectiveId === undefined
-    ? workspace.graph.nodes
-    : workspace.graph.nodes.filter(node => node.audience === 'public')
-  const visibleNodeIds = new Set(visibleNodes.map(node => node.id))
-  const nodes = useMemo((): readonly StoryCanvasNode[] => visibleNodes.map(node => ({
-    id: node.id,
-    type: 'story',
-    position: node.position,
-    selected: selection?.kind === 'node' && selection.id === node.id,
-    data: {
-      kind: node.kind,
-      lifecycle: node.lifecycle,
-      status: node.status,
-      title: node.title,
-      people: node.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name ?? '').filter(Boolean).join(' · '),
-    },
-  })), [selection, visibleNodes, workspace.characters])
-  const edges = useMemo((): readonly StoryCanvasEdge[] => workspace.graph.edges
-    .filter(edge => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
-      && (perspectiveId === undefined || edge.audience === 'public'))
-    .map(edge => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      label: edge.label === '' ? edgeKindLabels[edge.kind] : `${edgeKindLabels[edge.kind]} · ${edge.label}`,
-      data: { kind: edge.kind },
-      animated: edge.lifecycle === 'suggested',
-      selected: selection?.kind === 'edge' && selection.id === edge.id,
-      markerEnd: { type: MarkerType.ArrowClosed },
-      ...(edge.lifecycle === 'suggested' ? { style: { strokeDasharray: '5 4' } } : {}),
-    })), [perspectiveId, selection, visibleNodeIds, workspace.graph.edges])
+  const [dragPositions, setDragPositions] = useState<ReadonlyMap<string, StoryNode['position']>>(new Map())
+  const [expandedNodeIds, setExpandedNodeIds] = useState<ReadonlySet<string>>(new Set())
+  const nodeById = useMemo(() => new Map(workspace.graph.nodes.map(node => [node.id, node])), [workspace.graph.nodes])
+  const rootId = (id: string): string => {
+    let current = nodeById.get(id)
+    const visited = new Set<string>()
+    while (current?.parentId !== undefined && !visited.has(current.id)) {
+      visited.add(current.id)
+      current = nodeById.get(current.parentId)
+    }
+    return current?.id ?? id
+  }
+  const perspectiveKnownNodeIds = useMemo(() => new Set(workspace.graph.nodes
+    .filter(node => perspectiveId === undefined || nodeKnownBy(workspace, node.id).includes(perspectiveId))
+    .map(node => node.id)), [perspectiveId, workspace])
+  const visibleFacts = useMemo(() => workspace.facts.filter(fact => perspectiveId === undefined
+    || factKnownBy(workspace, fact).includes(perspectiveId)), [perspectiveId, workspace])
+  const perspectiveVisibleIds = useMemo(() => {
+    if (perspectiveId === undefined) return new Set(workspace.graph.nodes.map(node => node.id))
+    const visible = new Set<string>()
+    const revealAncestors = (id: string): void => {
+      let current = nodeById.get(id)
+      while (current !== undefined && !visible.has(current.id)) {
+        visible.add(current.id)
+        current = current.parentId === undefined ? undefined : nodeById.get(current.parentId)
+      }
+    }
+    for (const node of workspace.graph.nodes) {
+      if (nodeKnownBy(workspace, node.id).includes(perspectiveId)) revealAncestors(node.id)
+    }
+    for (const fact of workspace.facts) {
+      if (fact.nodeId !== undefined && factKnownBy(workspace, fact).includes(perspectiveId)) revealAncestors(fact.nodeId)
+    }
+    return visible
+  }, [nodeById, perspectiveId, workspace])
+  const visibleNodes = useMemo(() => workspace.graph.nodes.filter(node => node.parentId === undefined
+    && perspectiveVisibleIds.has(node.id)), [perspectiveVisibleIds, workspace.graph.nodes])
+  const visibleNodeIds = useMemo(() => new Set(visibleNodes.map(node => node.id)), [visibleNodes])
+  const nodes = useMemo((): readonly StoryCanvasNode[] => visibleNodes.map(node => {
+    const rootKnown = perspectiveId === undefined || perspectiveKnownNodeIds.has(node.id)
+    const children = workspace.graph.nodes.flatMap(child => {
+      if (child.id === node.id || rootId(child.id) !== node.id || !perspectiveKnownNodeIds.has(child.id)) return []
+      let depth = 0
+      let current: StoryNode | undefined = child
+      const visited = new Set<string>()
+      while (current?.parentId !== undefined && !visited.has(current.id)) {
+        visited.add(current.id)
+        depth += 1
+        current = nodeById.get(current.parentId)
+      }
+      return [{
+        id: child.id,
+        kind: child.kind,
+        title: child.title,
+        summary: child.summary,
+        depth,
+        detailCount: visibleFacts.filter(fact => fact.nodeId === child.id).length,
+      }]
+    })
+    const details = visibleFacts.filter(fact => fact.nodeId !== undefined && rootId(fact.nodeId) === node.id).map(fact => {
+      const names = factKnownBy(workspace, fact).map(id => workspace.characters.find(character => character.id === id)?.name)
+        .filter((name): name is string => name !== undefined)
+      const owner = fact.nodeId === undefined ? undefined : nodeById.get(fact.nodeId)
+      return {
+        id: fact.id,
+        text: fact.text,
+        location: owner === undefined || owner.id === node.id || !perspectiveKnownNodeIds.has(owner.id) ? '' : owner.title,
+        knownBy: fact.knowledgeMode === 'inherit'
+          ? `继承 · ${names.join(' · ') || '无人'}`
+          : names.join(' · ') || '仅导演',
+      }
+    })
+    return {
+      id: node.id,
+      type: 'story',
+      position: dragPositions.get(node.id) ?? node.position,
+      selected: selection?.kind === 'node' && rootId(selection.id) === node.id,
+      data: {
+        kind: node.kind,
+        lifecycle: node.lifecycle,
+        status: node.status,
+        title: rootKnown ? node.title : '未公开的上级故事簇',
+        summary: rootKnown ? node.summary : '展开后仅显示此人物已经知道的场景与信息。',
+        people: rootKnown
+          ? node.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name ?? '').filter(Boolean).join(' · ')
+          : '',
+        knowledge: perspectiveId === undefined
+          ? (() => {
+              const names = nodeKnownBy(workspace, node.id).map(id => workspace.characters.find(character => character.id === id)?.name)
+                .filter((name): name is string => name !== undefined)
+              return names.length === 0 ? '默认不向人物暴露' : `默认知情：${names.join(' · ')}`
+            })()
+          : rootKnown ? '此人物知道这个故事簇' : '仅作为可知信息的层级入口',
+        expanded: expandedNodeIds.has(node.id),
+        children,
+        details,
+        onToggle: () => { setExpandedNodeIds(current => {
+          const next = new Set(current)
+          if (next.has(node.id)) next.delete(node.id)
+          else next.add(node.id)
+          return next
+        }) },
+        onSelectNode: id => { setSelection({ kind: 'node', id }) },
+      },
+    }
+  }), [dragPositions, expandedNodeIds, nodeById, perspectiveId, perspectiveKnownNodeIds, selection, visibleFacts, visibleNodes, workspace])
+  const edges = useMemo((): readonly StoryCanvasEdge[] => {
+    const groups = new Map<string, StoryEdge[]>()
+    for (const edge of workspace.graph.edges) {
+      if (perspectiveId !== undefined && edge.audience !== 'public') continue
+      if (perspectiveId !== undefined && (!perspectiveKnownNodeIds.has(edge.source) || !perspectiveKnownNodeIds.has(edge.target))) continue
+      const source = rootId(edge.source)
+      const target = rootId(edge.target)
+      if (source === target || !visibleNodeIds.has(source) || !visibleNodeIds.has(target)) continue
+      const key = `${source}\u0000${target}`
+      groups.set(key, [...(groups.get(key) ?? []), edge])
+    }
+    return [...groups.entries()].map(([key, related]) => {
+      const [source = '', target = ''] = key.split('\u0000')
+      const first = related[0]
+      if (first === undefined) throw new Error('故事关系投影为空')
+      const labels = [...new Set(related.map(edge => edge.label === ''
+        ? edgeKindLabels[edge.kind]
+        : `${edgeKindLabels[edge.kind]} · ${edge.label}`))]
+      const suggested = related.some(edge => edge.lifecycle === 'suggested')
+      return {
+        id: first.id,
+        source,
+        target,
+        label: labels.length === 1 ? labels[0] : `${String(labels.length)} 条关系`,
+        data: { kind: first.kind },
+        animated: suggested,
+        selected: selection?.kind === 'edge' && related.some(edge => edge.id === selection.id),
+        markerEnd: { type: MarkerType.ArrowClosed },
+        ...(suggested ? { style: { strokeDasharray: '5 4' } } : {}),
+      }
+    })
+  }, [nodeById, perspectiveId, perspectiveKnownNodeIds, selection, visibleNodeIds, workspace.graph.edges])
 
   const addNode = (kind: StoryNodeKind): void => {
     const id = `node-${createClientOpaqueUuid()}`
@@ -739,13 +964,15 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
     const node: StoryNode = {
       id,
       kind,
-      title: kind === 'arc' ? '新篇章' : kind === 'secret' ? '新秘密' : '新剧情节点',
+      title: kind === 'arc' ? '新篇章' : kind === 'secret' ? '新秘密' : '新场景',
+      summary: '',
       status: 'planned',
       lifecycle: 'canonical',
       audience: kind === 'beat' ? 'public' : 'director',
       position: { x: 120 + (count % 3) * 260, y: 120 + Math.floor(count / 3) * 190 },
       content: '',
       participantIds: [],
+      knowledge: { mode: kind === 'beat' ? 'participants' : 'none', characterIds: [] },
     }
     clearPerspective()
     update(current => ({ ...current, graph: { ...current.graph, nodes: [...current.graph.nodes, node] } }))
@@ -771,13 +998,26 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
     if (selected?.type === 'select') setSelection({ kind: 'node', id: selected.id })
     const positions = new Map(changes.flatMap(change => change.type === 'position' && change.position !== undefined
       ? [[change.id, change.position] as const] : []))
-    if (positions.size > 0) update(current => ({ ...current, graph: {
-      ...current.graph,
-      nodes: current.graph.nodes.map(node => {
-        const position = positions.get(node.id)
-        return position === undefined ? node : { ...node, position }
-      }),
-    } }))
+    if (positions.size > 0) setDragPositions(current => {
+      const next = new Map(current)
+      for (const [id, position] of positions) next.set(id, position)
+      return next
+    })
+  }
+  const finishNodeDrag = (id: string, position: StoryNode['position']): void => {
+    const stored = workspace.graph.nodes.find(node => node.id === id)?.position
+    if (stored !== undefined && (stored.x !== position.x || stored.y !== position.y)) {
+      update(current => ({ ...current, graph: {
+        ...current.graph,
+        nodes: current.graph.nodes.map(node => node.id === id ? { ...node, position } : node),
+      } }))
+    }
+    setDragPositions(current => {
+      if (!current.has(id)) return current
+      const next = new Map(current)
+      next.delete(id)
+      return next
+    })
   }
   const edgeChanges = (changes: readonly EdgeChange<StoryCanvasEdge>[]): void => {
     const selected = changes.findLast(change => change.type === 'select' && change.selected)
@@ -789,7 +1029,7 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
   return <div className="story-studio-canvas">
     <div className="story-map-toolbar">
       <button className="story-studio-button" type="button" onClick={() => { addNode('arc') }}>＋ 篇章</button>
-      <button className="story-studio-button" type="button" onClick={() => { addNode('beat') }}>＋ 剧情</button>
+      <button className="story-studio-button" type="button" onClick={() => { addNode('beat') }}>＋ 场景</button>
       <button className="story-studio-button" type="button" onClick={() => { addNode('secret') }}>＋ 秘密</button>
       {suggestedNodeCount + suggestedEdgeCount > 0 && <span style={{ color: 'var(--studio-muted)', fontSize: 10, padding: '0 5px' }}>
         {suggestedNodeCount} 个候选节点 · {suggestedEdgeCount} 条候选关系
@@ -800,6 +1040,7 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
       edges={[...edges]}
       nodeTypes={nodeTypes}
       onNodesChange={nodeChanges}
+      onNodeDragStop={(_event, node) => { finishNodeDrag(node.id, node.position) }}
       onEdgesChange={edgeChanges}
       onConnect={connect}
       onPaneClick={() => { setSelection(undefined) }}
@@ -843,7 +1084,7 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
       {workspace.characters.map(character => <button key={character.id} className="story-studio-nav-item"
         data-active={selection?.kind === 'character' && selection.id === character.id} type="button" onClick={() => { select({ kind: 'character', id: character.id }) }}>
         <span className="story-studio-nav-icon">◉</span><span>{character.name}</span>
-        <span className="story-studio-nav-count">{workspace.facts.filter(fact => fact.knownBy.includes(character.id)).length}</span>
+        <span className="story-studio-nav-count">{workspace.facts.filter(fact => factKnownBy(workspace, fact).includes(character.id)).length}</span>
       </button>)}
       {workspace.characters.length === 0 && <p style={{ color: 'var(--studio-muted)', fontSize: 10, margin: '7px 9px' }}>添加人物后可维护独立认知。</p>}
     </div>
@@ -1070,17 +1311,31 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
 
   const deleteNode = (id: string): void => {
     update(current => {
-      const nodes = current.graph.nodes.filter(node => node.id !== id)
-      const edges = current.graph.edges.filter(edge => edge.source !== id && edge.target !== id)
-      const graph = current.graph.activeNodeId === id
+      const removedIds = new Set<string>([id])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const node of current.graph.nodes) {
+          if (node.parentId !== undefined && removedIds.has(node.parentId) && !removedIds.has(node.id)) {
+            removedIds.add(node.id)
+            changed = true
+          }
+        }
+      }
+      const nodes = current.graph.nodes.filter(node => !removedIds.has(node.id))
+      const edges = current.graph.edges.filter(edge => !removedIds.has(edge.source) && !removedIds.has(edge.target))
+      const facts = current.facts.filter(fact => fact.nodeId === undefined || !removedIds.has(fact.nodeId))
+      const factIds = new Set(facts.map(fact => fact.id))
+      const graph = current.graph.activeNodeId !== undefined && removedIds.has(current.graph.activeNodeId)
         ? { nodes, edges }
         : { ...current.graph, nodes, edges }
       return {
         ...current,
         graph,
-        events: current.events.map(event => event.nodeId === id ? eventWithoutNode(event) : event),
-        citations: current.citations.map(citation => citation.target?.kind === 'node' && citation.target.nodeId === id
-          ? citationWithoutTarget(citation) : citation),
+        facts,
+        events: current.events.map(event => event.nodeId !== undefined && removedIds.has(event.nodeId) ? eventWithoutNode(event) : event),
+        citations: current.citations.map(citation => citation.target?.kind === 'node' && removedIds.has(citation.target.nodeId)
+          || citation.target?.kind === 'fact' && !factIds.has(citation.target.factId) ? citationWithoutTarget(citation) : citation),
       }
     })
     setSelection(undefined)
@@ -1092,12 +1347,16 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   const deleteCharacter = (id: string): void => {
     update(current => {
       const facts = current.facts.map(fact => ({ ...fact, knownBy: fact.knownBy.filter(candidate => candidate !== id) }))
-        .filter(fact => fact.knownBy.length > 0)
+        .filter(fact => fact.knowledgeMode === 'inherit' || fact.knownBy.length > 0)
       const factIds = new Set(facts.map(fact => fact.id))
       return {
         ...current,
         characters: current.characters.filter(character => character.id !== id),
-        graph: { ...current.graph, nodes: current.graph.nodes.map(node => ({ ...node, participantIds: node.participantIds.filter(candidate => candidate !== id) })) },
+        graph: { ...current.graph, nodes: current.graph.nodes.map(node => ({
+          ...node,
+          participantIds: node.participantIds.filter(candidate => candidate !== id),
+          knowledge: { ...node.knowledge, characterIds: node.knowledge.characterIds.filter(candidate => candidate !== id) },
+        })) },
         facts,
         citations: current.citations.map(citation => citation.target?.kind === 'fact' && !factIds.has(citation.target.factId)
           ? citationWithoutTarget(citation) : citation),

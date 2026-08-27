@@ -19,7 +19,7 @@ test('selects and clears a story workspace when private command args are not rec
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-selection-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const workspace = store.create({ format: 1, name: '会话故事' })
+  const workspace = store.create({ format: 2, name: '会话故事' })
   const session = Session.create(SessionId('story-workspace-selection'))
   const agent = { session } as Agent
   const selectInput = JSON.stringify({ format: 0, workspaceId: workspace.id })

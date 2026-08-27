@@ -204,9 +204,24 @@
 .story-canvas-node[data-kind='beat'] { border-top: 3px solid var(--story-accent); }
 .story-canvas-node[data-kind='secret'] { border-top: 3px solid #d89b55; }
 .story-canvas-node-title { font-size: 12px; font-weight: 700; line-height: 1.35; margin-top: 7px; }
+.story-canvas-node-summary { color: var(--studio-muted); display: -webkit-box; font-size: 10px; line-height: 1.5; margin-top: 5px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .story-canvas-node-meta { align-items: center; color: var(--studio-muted); display: flex; font-size: 9px; gap: 6px; }
 .story-canvas-node-badge { background: color-mix(in srgb, currentColor 9%, transparent); border-radius: 999px; padding: 2px 6px; }
 .story-canvas-node-people { color: var(--studio-muted); font-size: 10px; margin-top: 8px; }
+.story-canvas-node-foot { align-items: center; border-top: 1px solid var(--studio-border); color: var(--studio-muted); display: flex; font-size: 9px; justify-content: space-between; margin-top: 9px; padding-top: 7px; }
+.story-canvas-node-toggle { background: transparent; border: 0; color: var(--story-accent); cursor: pointer; font-size: 9px; padding: 2px 0 2px 7px; }
+.story-canvas-node-contents { border-top: 1px solid var(--studio-border); display: grid; gap: 5px; margin-top: 7px; padding-top: 7px; }
+.story-canvas-child,
+.story-canvas-detail { background: color-mix(in srgb, var(--studio-bg) 65%, transparent); border: 1px solid var(--studio-border); border-radius: 7px; color: inherit; display: grid; gap: 3px; padding: 7px; text-align: left; }
+.story-canvas-child { cursor: pointer; font: inherit; margin-left: calc((var(--story-child-depth, 1) - 1) * 8px); }
+.story-canvas-child:hover { border-color: color-mix(in srgb, var(--story-accent) 55%, var(--studio-border)); }
+.story-canvas-child span { display: flex; font-size: 9px; gap: 5px; }
+.story-canvas-child b { color: var(--studio-muted); font-size: 8px; font-weight: 600; }
+.story-canvas-child small,
+.story-canvas-detail small,
+.story-canvas-empty { color: var(--studio-muted); font-size: 8px; line-height: 1.4; }
+.story-canvas-detail span { display: -webkit-box; font-size: 9px; line-height: 1.45; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.story-canvas-node-knowledge { color: var(--studio-muted); font-size: 8px; margin-top: 7px; }
 .story-canvas-handle { background: var(--story-accent); border-color: var(--studio-bg); height: 8px; width: 8px; }
 
 .story-studio-card-list { display: grid; gap: 10px; margin: 0 auto; max-width: 900px; }

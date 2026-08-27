@@ -22,6 +22,7 @@ import type {
   StoryFact,
   StoryFactStatus,
   StoryForeshadowStatus,
+  StoryKnowledgePolicy,
   StoryNode,
   StoryNodeKind,
   StoryNodeLifecycle,
@@ -62,6 +63,7 @@ const EDGE_KINDS = new Set<StoryEdgeKind>(['precedes', 'causes', 'contains', 'fo
 const FORESHADOW_STATUSES = new Set<StoryForeshadowStatus>(['unplanted', 'planted', 'triggered', 'resolved', 'dropped'])
 const AUDIENCES = new Set<StoryAudience>(['director', 'public'])
 const FACT_STATUSES = new Set<StoryFactStatus>(['asserted', 'uncertain', 'refuted'])
+const KNOWLEDGE_MODES = new Set<StoryKnowledgePolicy['mode']>(['inherit', 'none', 'participants', 'characters'])
 const OUTPUT_KINDS = new Set<StoryOutputKind>(['prose', 'character', 'history'])
 const SOURCE_KINDS = new Set<StorySourceKind>(['original', 'reference', 'research', 'web'])
 const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4, researchMaxPasses: 2 }
@@ -72,7 +74,7 @@ interface StoredStoryOutput extends Omit<StoryOutput, 'instructions'> {}
 interface StoredStorySource extends Omit<StorySource, 'content'> {}
 
 interface StoredStoryWorkspace {
-  readonly format: 1
+  readonly format: 2
   readonly id: string
   readonly name: string
   readonly revision: number
@@ -227,6 +229,18 @@ function normalizeCharacter(value: unknown): StoryCharacter {
   }
 }
 
+function normalizeKnowledgePolicy(value: unknown, characterIds: ReadonlySet<string>): StoryKnowledgePolicy {
+  if (!isRecord(value) || !KNOWLEDGE_MODES.has(value.mode as StoryKnowledgePolicy['mode'])) {
+    throw new Error('故事节点认知策略无效')
+  }
+  const ids = stringArray(value.characterIds, '故事节点认知人物')
+  for (const id of ids) {
+    if (!characterIds.has(id)) throw new Error(`故事节点认知策略引用未知人物 ${JSON.stringify(id)}`)
+  }
+  if (value.mode !== 'characters' && ids.length > 0) throw new Error('只有指定人物认知策略可以列出人物')
+  return { mode: value.mode as StoryKnowledgePolicy['mode'], characterIds: ids }
+}
+
 function normalizeNode(value: unknown, characterIds: ReadonlySet<string>): StoryNode {
   if (!isRecord(value) || !isRecord(value.position)) throw new Error('故事节点字段无效')
   assertId(value.id, NODE_ID_PATTERN, '故事节点')
@@ -240,11 +254,14 @@ function normalizeNode(value: unknown, characterIds: ReadonlySet<string>): Story
   for (const id of participantIds) {
     if (!characterIds.has(id)) throw new Error(`故事节点引用未知人物 ${JSON.stringify(id)}`)
   }
+  if (value.parentId !== undefined) assertId(value.parentId, NODE_ID_PATTERN, '故事节点父级')
   if (value.sourceEventId !== undefined) assertId(value.sourceEventId, EVENT_ID_PATTERN, '故事节点来源事件')
   return {
     id: value.id,
     kind: value.kind as StoryNodeKind,
+    ...(value.parentId === undefined ? {} : { parentId: value.parentId }),
     title: cleanName(value.title, '故事节点'),
+    summary: cleanDocument(value.summary, '故事节点摘要'),
     status: value.status as StoryNodeStatus,
     lifecycle: value.lifecycle as StoryNodeLifecycle,
     audience: value.audience as StoryAudience,
@@ -254,6 +271,7 @@ function normalizeNode(value: unknown, characterIds: ReadonlySet<string>): Story
     },
     content: cleanDocument(value.content, '故事节点内容'),
     participantIds,
+    knowledge: normalizeKnowledgePolicy(value.knowledge, characterIds),
     ...(value.sourceEventId === undefined ? {} : { sourceEventId: value.sourceEventId }),
   }
 }
@@ -315,7 +333,12 @@ function normalizeEvent(value: unknown, characterIds: ReadonlySet<string>, nodeI
   }
 }
 
-function normalizeFact(value: unknown, characterIds: ReadonlySet<string>, eventIds: ReadonlySet<string>): StoryFact {
+function normalizeFact(
+  value: unknown,
+  characterIds: ReadonlySet<string>,
+  eventIds: ReadonlySet<string>,
+  nodeIds: ReadonlySet<string>,
+): StoryFact {
   if (!isRecord(value) || !isRecord(value.source)) throw new Error('人物事实字段无效')
   assertId(value.id, FACT_ID_PATTERN, '人物事实')
   if (!FACT_STATUSES.has(value.status as StoryFactStatus) || !AUDIENCES.has(value.audience as StoryAudience)) {
@@ -339,11 +362,19 @@ function normalizeFact(value: unknown, characterIds: ReadonlySet<string>, eventI
         })()
       : undefined
   if (source === undefined) throw new Error('人物事实来源无效')
+  if (value.knowledgeMode !== 'inherit' && value.knowledgeMode !== 'override') throw new Error('人物事实认知模式无效')
+  if (value.nodeId !== undefined) {
+    assertId(value.nodeId, NODE_ID_PATTERN, '人物事实所属节点')
+    if (!nodeIds.has(value.nodeId)) throw new Error('人物事实引用未知故事节点')
+  }
+  if (value.knowledgeMode === 'inherit' && value.nodeId === undefined) throw new Error('继承认知的人物事实必须属于故事节点')
   return {
     id: value.id,
+    ...(value.nodeId === undefined ? {} : { nodeId: value.nodeId }),
     text: cleanDocument(value.text, '人物事实'),
     status: value.status as StoryFactStatus,
     audience: value.audience as StoryAudience,
+    knowledgeMode: value.knowledgeMode,
     knownBy,
     source,
   }
@@ -482,7 +513,7 @@ function normalizeCitation(
 }
 
 function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
-  if (!isRecord(value) || value.format !== 1 || !isRecord(value.graph)
+  if (!isRecord(value) || value.format !== 2 || !isRecord(value.graph)
     || !Array.isArray(value.characters) || !Array.isArray(value.graph.nodes)
     || !Array.isArray(value.graph.edges) || !Array.isArray(value.facts)
     || !Array.isArray(value.events) || !Array.isArray(value.outputs)
@@ -497,13 +528,25 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   const nodes = value.graph.nodes.map(node => normalizeNode(node, characterIds))
   assertUnique(nodes.map(node => node.id), '故事节点')
   const nodeIds = new Set(nodes.map(node => node.id))
+  const nodeById = new Map(nodes.map(node => [node.id, node]))
+  for (const node of nodes) {
+    if (node.parentId === undefined) continue
+    if (!nodeIds.has(node.parentId) || node.parentId === node.id) throw new Error('故事节点父级无效')
+    const visited = new Set<string>([node.id])
+    let parentId: string | undefined = node.parentId
+    while (parentId !== undefined) {
+      if (visited.has(parentId)) throw new Error('故事节点层级不能形成循环')
+      visited.add(parentId)
+      parentId = nodeById.get(parentId)?.parentId
+    }
+  }
   const edges = value.graph.edges.map(edge => normalizeEdge(edge, nodeIds))
   assertUnique(edges.map(edge => edge.id), '故事关系')
   const events = value.events.map(event => normalizeEvent(event, characterIds, nodeIds))
   assertUnique(events.map(event => event.id), '故事事件')
   assertUnique(events.map(event => event.key), '故事事件幂等键')
   const eventIds = new Set(events.map(event => event.id))
-  const facts = value.facts.map(fact => normalizeFact(fact, characterIds, eventIds))
+  const facts = value.facts.map(fact => normalizeFact(fact, characterIds, eventIds, nodeIds))
   assertUnique(facts.map(fact => fact.id), '人物事实')
   const factIds = new Set(facts.map(fact => fact.id))
   const outputs = value.outputs.map(output => normalizeOutput(output, characterIds))
@@ -537,7 +580,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
       throw new Error('故事关系引用未知来源事件')
     }
   }
-  const documents = nodes.map(node => node.content)
+  const documents = nodes.flatMap(node => [node.summary, node.content])
     .concat(characters.map(character => character.persona))
     .concat(facts.flatMap(fact => [fact.text, fact.source.kind === 'event' ? fact.source.evidence : '']))
     .concat(events.flatMap(event => [event.summary, event.evidence]))
@@ -548,7 +591,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
-    format: 1,
+    format: 2,
     id: value.id,
     name: cleanName(value.name, '故事工作室'),
     revision: safeInteger(value.revision, '故事工作室 revision'),
@@ -598,7 +641,7 @@ function withoutLegacyTurnMarkers(value: string): string {
 
 function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
   return {
-    format: 1,
+    format: 2,
     id: snapshot.id,
     name: snapshot.name,
     revision: snapshot.revision,
@@ -621,7 +664,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
 }
 
 function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
-  if (!isRecord(value) || value.format !== 1 || !isRecord(value.graph)
+  if (!isRecord(value) || value.format !== 2 || !isRecord(value.graph)
     || !Array.isArray(value.graph.nodes) || !Array.isArray(value.characters)
     || !Array.isArray(value.outputs) || !Array.isArray(value.sources)) {
     throw new Error('故事工作室索引字段无效')
@@ -650,6 +693,75 @@ function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
     ...value,
     graph: { ...value.graph, nodes },
     characters,
+    outputs,
+    sources,
+    citations: Array.isArray(value.citations) ? value.citations : [],
+    researchInbox: Array.isArray(value.researchInbox) ? value.researchInbox : [],
+  })
+}
+
+function migrateTypedFormat1(root: string, value: unknown): StoryWorkspaceSnapshot {
+  if (!isRecord(value) || value.format !== 1 || !isRecord(value.graph)
+    || !Array.isArray(value.graph.nodes) || !Array.isArray(value.characters)
+    || !Array.isArray(value.facts) || !Array.isArray(value.events)
+    || !Array.isArray(value.outputs) || !Array.isArray(value.sources)) {
+    throw new Error('旧类型化故事工作室索引字段无效')
+  }
+  const events = value.events
+  const eventNodeIds = new Map(events.flatMap(event => isRecord(event)
+    && typeof event.id === 'string' && typeof event.nodeId === 'string'
+    ? [[event.id, event.nodeId] as const]
+    : []))
+  const parentByNode = new Map(Array.isArray(value.graph.edges) ? value.graph.edges.flatMap(edge => isRecord(edge)
+    && edge.kind === 'contains' && typeof edge.source === 'string' && typeof edge.target === 'string'
+    ? [[edge.target, edge.source] as const]
+    : []) : [])
+  const nodes = value.graph.nodes.map(item => {
+    if (!isRecord(item)) throw new Error('旧类型化故事节点索引无效')
+    assertId(item.id, NODE_ID_PATTERN, '故事节点')
+    const content = readMarkdown(join(root, 'nodes', `${item.id}.md`))
+    const participants = Array.isArray(item.participantIds) ? item.participantIds : []
+    return {
+      ...item,
+      ...(parentByNode.get(item.id) === undefined ? {} : { parentId: parentByNode.get(item.id) }),
+      summary: content.trim().split('\n').find(line => line.trim() !== '')?.slice(0, 280) ?? String(item.title ?? ''),
+      knowledge: item.kind === 'beat'
+        ? { mode: 'participants', characterIds: [] }
+        : { mode: 'none', characterIds: [] },
+      content,
+      participantIds: participants,
+    }
+  })
+  const characters = value.characters.map(item => {
+    if (!isRecord(item)) throw new Error('人物索引无效')
+    assertId(item.id, CHARACTER_ID_PATTERN, '人物')
+    return { ...item, persona: readMarkdown(join(root, 'characters', item.id, 'persona.md')) }
+  })
+  const facts = value.facts.map(item => {
+    if (!isRecord(item)) throw new Error('旧类型化人物事实索引无效')
+    const sourceEventId = isRecord(item.source) && item.source.kind === 'event' && typeof item.source.eventId === 'string'
+      ? item.source.eventId
+      : undefined
+    const nodeId = sourceEventId === undefined ? undefined : eventNodeIds.get(sourceEventId)
+    return { ...item, knowledgeMode: 'override', ...(nodeId === undefined ? {} : { nodeId }) }
+  })
+  const outputs = value.outputs.map(item => {
+    if (!isRecord(item)) throw new Error('输出分区索引无效')
+    assertId(item.id, OUTPUT_ID_PATTERN, '输出分区')
+    return { ...item, instructions: readMarkdown(join(root, 'outputs', `${item.id}.md`)) }
+  })
+  const sources = value.sources.map(item => {
+    if (!isRecord(item)) throw new Error('故事资料索引无效')
+    assertId(item.id, SOURCE_ID_PATTERN, '故事资料')
+    return { ...item, content: readMarkdown(join(root, 'sources', `${item.id}.md`)) }
+  })
+  return normalizeWorkspace({
+    ...value,
+    format: 2,
+    graph: { ...value.graph, nodes },
+    characters,
+    facts,
+    events,
     outputs,
     sources,
     citations: Array.isArray(value.citations) ? value.citations : [],
@@ -768,6 +880,27 @@ export function storyParticipantCharacters(workspace: StoryWorkspaceSnapshot): r
   return workspace.characters.filter(character => participants.has(character.id))
 }
 
+/** Resolve the characters who inherit one story cluster's information. */
+export function storyNodeKnownBy(workspace: StoryWorkspaceSnapshot, nodeId: string): readonly string[] {
+  const nodeById = new Map(workspace.graph.nodes.map(node => [node.id, node]))
+  const resolveNode = (id: string): readonly string[] => {
+    const node = nodeById.get(id)
+    if (node === undefined) return []
+    if (node.knowledge.mode === 'none') return []
+    if (node.knowledge.mode === 'participants') return node.participantIds
+    if (node.knowledge.mode === 'characters') return node.knowledge.characterIds
+    return node.parentId === undefined ? [] : resolveNode(node.parentId)
+  }
+  return [...new Set(resolveNode(nodeId))]
+}
+
+/** Resolve one detail's effective character knowledge after cluster inheritance. */
+export function storyFactKnownBy(workspace: StoryWorkspaceSnapshot, fact: StoryFact): readonly string[] {
+  return fact.knowledgeMode === 'override'
+    ? fact.knownBy
+    : fact.nodeId === undefined ? [] : storyNodeKnownBy(workspace, fact.nodeId)
+}
+
 /** Compile completed events into the public continuity input. */
 export function storyPublicHistory(workspace: StoryWorkspaceSnapshot): string {
   return workspace.events.map(event => `## ${event.title}\n${event.summary}`).join('\n\n')
@@ -842,10 +975,10 @@ export class StoryWorkspaceStore {
 
   /** Create one empty typed story workspace. */
   create(request: StoryWorkspaceCreateRequest): StoryWorkspaceSnapshot {
-    if (request.format !== 1) throw new Error('故事工作室创建请求版本无效')
+    if (request.format !== 2) throw new Error('故事工作室创建请求版本无效')
     const now = Date.now()
     const snapshot = normalizeWorkspace({
-      format: 1,
+      format: 2,
       id: `story-${randomUUID()}`,
       name: request.name,
       revision: 0,
@@ -872,7 +1005,13 @@ export class StoryWorkspaceStore {
     const storyPath = join(root, 'story.json')
     if (!existsSync(storyPath)) return this.migrateLegacy(id)
     try {
-      return hydrateStored(root, JSON.parse(readFileSync(storyPath, 'utf8')) as unknown)
+      const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as unknown
+      if (isRecord(stored) && stored.format === 1) {
+        const migrated = migrateTypedFormat1(root, stored)
+        this.writeSnapshot(migrated)
+        return migrated
+      }
+      return hydrateStored(root, stored)
     } catch (error: unknown) {
       throw new Error(`无法读取故事工作室 ${JSON.stringify(id)}`, { cause: error })
     }
@@ -880,7 +1019,7 @@ export class StoryWorkspaceStore {
 
   /** Replace all editable fields when the caller still owns the observed revision. */
   save(request: StoryWorkspaceSaveRequest): StoryWorkspaceSnapshot {
-    if (request.format !== 1) throw new Error('故事工作室保存请求版本无效')
+    if (request.format !== 2) throw new Error('故事工作室保存请求版本无效')
     const current = this.get(request.id)
     if (!Number.isSafeInteger(request.revision) || request.revision < 0 || request.revision !== current.revision) {
       throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
@@ -921,9 +1060,11 @@ export class StoryWorkspaceStore {
       if (!characterIds.has(observation.characterId)) throw new Error('人物观察包含未知人物')
       return {
         id: createStoryFactId(),
+        ...(activeNode === undefined ? {} : { nodeId: activeNode.id }),
         text: cleanDocument(observation.text, '人物观察'),
         status: 'asserted' as const,
         audience: 'public' as const,
+        knowledgeMode: 'override' as const,
         knownBy: [observation.characterId],
         source: { kind: 'event' as const, eventId, evidence: event.evidence },
       }
@@ -939,7 +1080,9 @@ export class StoryWorkspaceStore {
       return {
         id: nodeId,
         kind: suggestion.kind,
+        ...(activeNode?.parentId === undefined ? {} : { parentId: activeNode.parentId }),
         title: suggestion.title,
+        summary: suggestion.content.trim().split('\n').find(line => line.trim() !== '')?.slice(0, 280) ?? suggestion.title,
         status: 'planned',
         lifecycle: 'suggested',
         audience: 'director',
@@ -949,6 +1092,7 @@ export class StoryWorkspaceStore {
         },
         content: suggestion.content,
         participantIds: [...new Set(suggestion.participantIds)],
+        knowledge: { mode: 'none', characterIds: [] },
         sourceEventId: eventId,
       }
     })
@@ -994,7 +1138,7 @@ export class StoryWorkspaceStore {
       researchInbox.push(item)
     }
     return this.save({
-      format: 1,
+      format: 2,
       id: current.id,
       revision: current.revision,
       name: current.name,
@@ -1092,45 +1236,56 @@ export class StoryWorkspaceStore {
         id: arcId,
         kind: 'arc' as const,
         title: '故事大纲',
+        summary: outline.trim().split('\n').find(line => line.trim() !== '')?.slice(0, 280) ?? '故事大纲',
         status: 'active' as const,
         lifecycle: 'canonical' as const,
         audience: 'director' as const,
         position: { x: 0, y: 0 },
         content: outline,
         participantIds: [],
+        knowledge: { mode: 'none' as const, characterIds: [] },
       }]),
       {
         id: activeId,
         kind: 'beat',
+        ...(outline.trim() === '' ? {} : { parentId: arcId }),
         title: '当前场景',
+        summary: '当前正在推进的场景',
         status: 'active',
         lifecycle: 'canonical',
         audience: 'public',
         position: { x: 360, y: 0 },
         content: '',
         participantIds,
+        knowledge: { mode: 'participants', characterIds: [] },
       },
       ...(foreshadowing.trim() === '' ? [] : [{
         id: secretId,
         kind: 'secret' as const,
+        ...(outline.trim() === '' ? {} : { parentId: arcId }),
         title: '未整理伏笔',
+        summary: foreshadowing.trim().split('\n').find(line => line.trim() !== '')?.slice(0, 280) ?? '未整理伏笔',
         status: 'planned' as const,
         lifecycle: 'canonical' as const,
         audience: 'director' as const,
         position: { x: 360, y: 240 },
         content: foreshadowing,
         participantIds: [],
+        knowledge: { mode: 'none' as const, characterIds: [] },
       }]),
       ...(proposals.trim() === '' ? [] : [{
         id: createStoryNodeId(),
         kind: 'beat' as const,
+        ...(outline.trim() === '' ? {} : { parentId: arcId }),
         title: '迁移的待审建议',
+        summary: proposals.trim().split('\n').find(line => line.trim() !== '')?.slice(0, 280) ?? '迁移的待审建议',
         status: 'planned' as const,
         lifecycle: 'suggested' as const,
         audience: 'director' as const,
         position: { x: 720, y: 0 },
         content: proposals,
         participantIds,
+        knowledge: { mode: 'none' as const, characterIds: [] },
       }]),
     ]
     const edges: StoryEdge[] = outline.trim() === '' ? [] : [{
@@ -1156,9 +1311,11 @@ export class StoryWorkspaceStore {
       const knowledge = withoutLegacyTurnMarkers(readOptionalMarkdown(join(root, 'characters', character.id, 'knowledge.md')))
       return knowledge.trim() === '' ? [] : [{
         id: createStoryFactId(),
+        nodeId: activeId,
         text: knowledge,
         status: 'asserted' as const,
         audience: 'director' as const,
+        knowledgeMode: 'override' as const,
         knownBy: [character.id],
         source: { kind: 'manual' as const },
       }]
@@ -1176,7 +1333,7 @@ export class StoryWorkspaceStore {
       content: readOptionalMarkdown(join(root, 'sources', `${source.id}.md`)),
     }))
     const migrated = normalizeWorkspace({
-      format: 1,
+      format: 2,
       id: legacy.id,
       name: legacy.name,
       revision: legacy.revision + 1,
@@ -1212,7 +1369,7 @@ export function compileStoryCharacterContext(
 ): StoryCharacterContext {
   const character = workspace.characters.find(candidate => candidate.id === characterId)
   if (character === undefined) throw new Error(`故事工作室中没有人物 ${JSON.stringify(characterId)}`)
-  const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(characterId))
+  const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && storyFactKnownBy(workspace, fact).includes(characterId))
   const privateKnowledge = facts.map(fact => {
     const prefix = fact.status === 'uncertain' ? '[不确定] ' : ''
     const citations = workspace.citations.filter(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id)

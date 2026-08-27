@@ -30,6 +30,15 @@ export type StoryAudience = 'director' | 'public'
 /** Epistemic status of one character-addressable fact. */
 export type StoryFactStatus = 'asserted' | 'uncertain' | 'refuted'
 
+/** Default character-knowledge rule inherited by details inside one story cluster. */
+export type StoryKnowledgeMode = 'inherit' | 'none' | 'participants' | 'characters'
+
+/** Character knowledge granted by one cluster before per-detail overrides. */
+export interface StoryKnowledgePolicy {
+  readonly mode: StoryKnowledgeMode
+  readonly characterIds: readonly string[]
+}
+
 /** Optional model route used only by story-engine auxiliary Workers. */
 export interface StoryWorkerModelRoute {
   readonly provider: string
@@ -55,13 +64,16 @@ export interface StoryNodePosition {
 export interface StoryNode {
   readonly id: string
   readonly kind: StoryNodeKind
+  readonly parentId?: string
   readonly title: string
+  readonly summary: string
   readonly status: StoryNodeStatus
   readonly lifecycle: StoryNodeLifecycle
   readonly audience: StoryAudience
   readonly position: StoryNodePosition
   readonly content: string
   readonly participantIds: readonly string[]
+  readonly knowledge: StoryKnowledgePolicy
   readonly sourceEventId?: string
 }
 
@@ -100,9 +112,12 @@ export type StoryFactSource =
 /** One fact whose knownBy list is the authority for character Worker input. */
 export interface StoryFact {
   readonly id: string
+  readonly nodeId?: string
   readonly text: string
   readonly status: StoryFactStatus
   readonly audience: StoryAudience
+  /** Inherit the parent cluster policy or use `knownBy` as the complete override. */
+  readonly knowledgeMode: 'inherit' | 'override'
   readonly knownBy: readonly string[]
   readonly source: StoryFactSource
 }
@@ -174,7 +189,7 @@ export interface StoryCitation {
 
 /** Coherent revision returned by local storage and HTTP reads. */
 export interface StoryWorkspaceSnapshot {
-  readonly format: 1
+  readonly format: 2
   readonly id: string
   readonly name: string
   readonly revision: number
@@ -202,13 +217,13 @@ export interface StoryWorkspaceSummary {
 
 /** Request to create an empty typed story workspace. */
 export interface StoryWorkspaceCreateRequest {
-  readonly format: 1
+  readonly format: 2
   readonly name: string
 }
 
 /** Whole-workspace edit guarded by the last observed revision. */
 export interface StoryWorkspaceSaveRequest {
-  readonly format: 1
+  readonly format: 2
   readonly id: string
   readonly revision: number
   readonly name: string
