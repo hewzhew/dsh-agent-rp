@@ -10,7 +10,9 @@ import { StoryWorkspaceStore } from './story-workspace.ts'
 export interface SessionStoryWorkspaceSelectionRecord {
   readonly format: 0
   readonly workspaceId?: string
-  readonly sourceEventSeq: number
+  /** Command source for interactive changes; absent only on a launch seed at seq 0. */
+  readonly sourceEventSeq?: number
+  readonly source?: 'launch'
 }
 
 declare module '@deepseek-ai/dsh-session' {
@@ -46,11 +48,22 @@ export function readSessionStoryWorkspaceId(events: readonly SessionEvent[]): st
   let active: string | undefined
   for (const event of events) {
     if (event.type !== 'agent-rp/story-workspace-selection') continue
-    if (event.data.format !== 0 || !Number.isSafeInteger(event.data.sourceEventSeq)
-      || event.data.sourceEventSeq < 0 || event.data.sourceEventSeq >= event.seq) {
+    if (event.data.format !== 0) {
       throw new Error('故事工作区 Session 事件无效')
     }
-    const source = events[event.data.sourceEventSeq]
+    if (event.data.source === 'launch') {
+      if (event.seq !== 0 || event.data.sourceEventSeq !== undefined || event.data.workspaceId === undefined) {
+        throw new Error('游玩场地启动事件无效')
+      }
+      active = event.data.workspaceId
+      continue
+    }
+    const sourceEventSeq = event.data.sourceEventSeq
+    if (!Number.isSafeInteger(sourceEventSeq)
+      || sourceEventSeq! < 0 || sourceEventSeq! >= event.seq) {
+      throw new Error('故事工作区 Session 事件无效')
+    }
+    const source = events[sourceEventSeq!]
     if (source?.type !== 'command/run' || source.data.name !== 'rp-story-workspace'
       || source.data.source.kind !== 'user') {
       throw new Error('故事工作区选择没有对应的用户命令')
@@ -58,6 +71,31 @@ export function readSessionStoryWorkspaceId(events: readonly SessionEvent[]): st
     active = event.data.workspaceId
   }
   return active
+}
+
+/** Create the model-free seed that connects a new Session to one executable play space. */
+export function createStoryWorkspaceSessionSeed(
+  store: StoryWorkspaceStore,
+  workspaceId: string,
+): { readonly title: string; readonly seed: readonly SessionEvent[] } {
+  const workspace = store.get(workspaceId)
+  if (workspace.world === undefined) throw new Error('请先给游玩场地装入一个世界模块')
+  if (workspace.characters.length === 0) throw new Error('游玩场地至少需要一位人物')
+  const time = Date.now()
+  return {
+    title: workspace.name,
+    seed: [
+      {
+        type: 'agent-rp/story-workspace-selection',
+        seq: 0,
+        time,
+        data: { format: 0, workspaceId: workspace.id, source: 'launch' },
+        ignorable: true,
+      },
+      { type: 'turn/start', seq: 1, time, data: { turn: 1 } },
+      { type: 'turn/end', seq: 2, time, data: { turn: 1, reason: { kind: 'completed' } } },
+    ],
+  }
 }
 
 /** Apply or clear one Session-owned story workspace without invoking a model. */

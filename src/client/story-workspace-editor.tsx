@@ -24,6 +24,21 @@ import {
 } from 'react'
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
 import {
+  FLYING_CHESS_WORLD_MODULE_ID,
+  isFlyingChessWorldState,
+  type FlyingChessPiece,
+  type FlyingChessWorldAction,
+  type FlyingChessWorldState,
+} from '../flying-chess-protocol.ts'
+import {
+  PLAY_WORLD_MODULES_PATH,
+  type PlayWorldModuleDescriptor,
+} from '../play-world-protocol.ts'
+import {
+  ROLEPLAY_RESOURCE_CATALOG_PATH,
+  type RoleplayResourceDescriptor,
+} from '../roleplay-resource-catalog-protocol.ts'
+import {
   STORY_WORKSPACES_PATH,
   type StoryCitation,
   type StoryCharacter,
@@ -54,6 +69,8 @@ import storyStudioCss from './story-workspace-editor.css?raw'
 interface StoryWorkspaceEditorProps {
   readonly accent: string
   readonly sessionId?: string
+  readonly launchSourceSessionId?: string
+  readonly onStartSession?: (sourceSessionId: string, workspaceId: string) => Promise<void>
   readonly onClose: () => void
 }
 
@@ -64,7 +81,19 @@ interface StoryWorkspaceResponse {
   readonly error?: string
 }
 
-type StudioView = 'map' | 'timeline' | 'characters' | 'sources' | 'outputs'
+interface PlayWorldModulesResponse {
+  readonly format?: number
+  readonly modules?: readonly PlayWorldModuleDescriptor[]
+  readonly error?: string
+}
+
+interface RoleplayResourcesResponse {
+  readonly format?: number
+  readonly entries?: readonly RoleplayResourceDescriptor[]
+  readonly error?: string
+}
+
+type StudioView = 'world' | 'map' | 'timeline' | 'characters' | 'sources' | 'outputs'
 
 type StudioSelection =
   | { readonly kind: 'node'; readonly id: string }
@@ -172,22 +201,22 @@ async function storyRequest(path = '', init?: RequestInit): Promise<StoryWorkspa
   try {
     value = JSON.parse(text) as StoryWorkspaceResponse
   } catch {
-    throw new Error(`故事工作室响应无法识别（${response.status}）`)
+    throw new Error(`游玩场地响应无法识别（${response.status}）`)
   }
-  if (!response.ok) throw new Error(value.error ?? `故事工作室请求失败（${response.status}）`)
-  if (value.format !== 1) throw new Error('故事工作室响应版本无效')
+  if (!response.ok) throw new Error(value.error ?? `游玩场地请求失败（${response.status}）`)
+  if (value.format !== 1) throw new Error('游玩场地响应版本无效')
   return value
 }
 
 async function listWorkspaces(): Promise<readonly StoryWorkspaceSummary[]> {
   const value = await storyRequest()
-  if (!Array.isArray(value.workspaces)) throw new Error('故事工作室列表响应无效')
+  if (!Array.isArray(value.workspaces)) throw new Error('游玩场地列表响应无效')
   return value.workspaces
 }
 
 async function readWorkspace(id: string): Promise<StoryWorkspaceSnapshot> {
   const value = await storyRequest(`/${encodeURIComponent(id)}`)
-  if (value.workspace === undefined) throw new Error('故事工作室读取响应无效')
+  if (value.workspace === undefined) throw new Error('游玩场地读取响应无效')
   return value.workspace
 }
 
@@ -197,7 +226,7 @@ async function createWorkspace(name: string): Promise<StoryWorkspaceSnapshot> {
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify({ format: 2, name }),
   })
-  if (value.workspace === undefined) throw new Error('故事工作室创建响应无效')
+  if (value.workspace === undefined) throw new Error('游玩场地创建响应无效')
   return value.workspace
 }
 
@@ -221,7 +250,62 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
       researchInbox: workspace.researchInbox,
     }),
   })
-  if (value.workspace === undefined) throw new Error('故事工作室保存响应无效')
+  if (value.workspace === undefined) throw new Error('游玩场地保存响应无效')
+  return value.workspace
+}
+
+async function listPlayWorldModules(): Promise<readonly PlayWorldModuleDescriptor[]> {
+  const response = await fetch(PLAY_WORLD_MODULES_PATH, { headers: { accept: 'application/json' } })
+  const value = await response.json() as PlayWorldModulesResponse
+  if (!response.ok) throw new Error(value.error ?? `世界模块请求失败（${response.status}）`)
+  if (value.format !== 0 || !Array.isArray(value.modules)) throw new Error('世界模块列表响应无效')
+  return value.modules
+}
+
+async function listActorResources(): Promise<readonly RoleplayResourceDescriptor[]> {
+  const response = await fetch(ROLEPLAY_RESOURCE_CATALOG_PATH, { headers: { accept: 'application/json' } })
+  const value = await response.json() as RoleplayResourcesResponse
+  if (!response.ok) throw new Error(value.error ?? `角色资源请求失败（${response.status}）`)
+  if (value.format !== 0 || !Array.isArray(value.entries)) throw new Error('角色资源列表响应无效')
+  return value.entries.filter(entry => entry.kind === 'actor' && entry.availability === 'available')
+}
+
+async function installPlayWorld(workspace: StoryWorkspaceSnapshot, moduleId: string): Promise<StoryWorkspaceSnapshot> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, moduleId }),
+  })
+  if (value.workspace === undefined) throw new Error('世界模块安装响应无效')
+  return value.workspace
+}
+
+async function dispatchPlayWorldAction(workspace: StoryWorkspaceSnapshot, action: FlyingChessWorldAction): Promise<StoryWorkspaceSnapshot> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/actions`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, action }),
+  })
+  if (value.workspace === undefined) throw new Error('世界动作响应无效')
+  return value.workspace
+}
+
+async function bindStoryCharacterActor(
+  workspace: StoryWorkspaceSnapshot,
+  characterId: string,
+  actorId?: string,
+): Promise<StoryWorkspaceSnapshot> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/characters/${encodeURIComponent(characterId)}/actor`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      format: 0,
+      revision: workspace.revision,
+      characterId,
+      ...(actorId === undefined ? {} : { actor: { kind: 'actor' as const, id: actorId } }),
+    }),
+  })
+  if (value.workspace === undefined) throw new Error('人物角色卡绑定响应无效')
   return value.workspace
 }
 
@@ -506,14 +590,18 @@ function EdgeInspector({ workspace, edge, update, onDelete }: {
   </>
 }
 
-function CharacterInspector({ workspace, character, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, onDelete }: {
+function CharacterInspector({ workspace, character, actorResources, busy, dirty, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, onBindActor, onDelete }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly character: StoryCharacter
+  readonly actorResources: readonly RoleplayResourceDescriptor[]
+  readonly busy: boolean
+  readonly dirty: boolean
   readonly update: UpdateWorkspace
   readonly perspectiveId: string | undefined
   readonly previewId: string | undefined
   readonly setPerspectiveId: (id: string | undefined) => void
   readonly setPreviewId: (id: string | undefined) => void
+  readonly onBindActor: (actorId?: string) => void
   readonly onDelete: () => void
 }) {
   const facts = workspace.facts.filter(fact => factKnownBy(workspace, fact).includes(character.id))
@@ -523,8 +611,13 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
   return <>
     <h2>{character.name}</h2>
     <div className="story-studio-inspector-subtitle">人物档案与可追溯认知</div>
+    <Field label="角色卡"><select className="story-studio-input" value={character.actor?.id ?? ''} disabled={busy || dirty}
+      onChange={event => { onBindActor(event.target.value === '' ? undefined : event.target.value) }}>
+      <option value="">手写人物</option>{actorResources.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
+    </select></Field>
+    {dirty && <p className="story-studio-inline-note">保存当前修改后即可绑定角色卡。</p>}
     <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
-    <TextField label="Persona" rows={7} value={character.persona} onChange={value => { patchCharacter(current => ({ ...current, persona: value })) }} />
+    <TextField label={character.actor === undefined ? 'Persona' : '角色卡 Persona 快照'} rows={7} value={character.persona} onChange={value => { patchCharacter(current => ({ ...current, persona: value })) }} />
     <div className="story-studio-actions">
       <button className="story-studio-button" type="button" onClick={() => { setPerspectiveId(perspectiveId === character.id ? undefined : character.id) }}>
         {perspectiveId === character.id ? '退出人物视角' : '以此人物查看'}
@@ -1139,6 +1232,13 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
 }) {
   return <aside className="story-studio-sidebar">
     <div className="story-studio-nav-group">
+      <div className="story-studio-nav-heading"><span>游玩</span></div>
+      <button className="story-studio-nav-item" data-active={view === 'world'} type="button" onClick={() => { setView('world') }}>
+        <span className="story-studio-nav-icon">✦</span><span>{workspace.world?.title ?? '选择世界'}</span>
+        <span className="story-studio-nav-count">{workspace.world?.events.length ?? 0}</span>
+      </button>
+    </div>
+    <div className="story-studio-nav-group">
       <div className="story-studio-nav-heading"><span>故事</span></div>
       <button className="story-studio-nav-item" data-active={view === 'map'} type="button" onClick={() => { setView('map') }}>
         <span className="story-studio-nav-icon">⌘</span><span>故事地图</span><span className="story-studio-nav-count">{workspace.graph.nodes.length}</span>
@@ -1179,11 +1279,131 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
   </aside>
 }
 
-/** Full-screen story studio backed by the typed workspace model. */
-export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorkspaceEditorProps) {
+const flyingChessColors = ['#df615c', '#4b9cda', '#e4ae43', '#67aa78'] as const
+
+function flyingChessCell(index: number): { readonly column: number; readonly row: number } {
+  if (index < 7) return { column: index + 1, row: 1 }
+  if (index < 13) return { column: 7, row: index - 5 }
+  if (index < 19) return { column: 19 - index, row: 7 }
+  return { column: 1, row: 25 - index }
+}
+
+function flyingChessPieceCell(state: FlyingChessWorldState, piece: FlyingChessPiece): number | undefined {
+  if (piece.status !== 'track') return undefined
+  const playerIndex = state.playerOrder.indexOf(piece.ownerId)
+  return (playerIndex * Math.floor(24 / state.playerOrder.length) + piece.steps - 1) % 24
+}
+
+function FlyingChessPlayView({ workspace, state, busy, dirty, canStartSession, onStartSession, onRestart, onAction }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly state: FlyingChessWorldState
+  readonly busy: boolean
+  readonly dirty: boolean
+  readonly canStartSession: boolean
+  readonly onStartSession: () => void
+  readonly onRestart: () => void
+  readonly onAction: (action: FlyingChessWorldAction) => void
+}) {
+  const [restartArmed, setRestartArmed] = useState(false)
+  const name = (id: string): string => workspace.characters.find(character => character.id === id)?.name ?? id
+  const currentName = name(state.currentPlayerId)
+  return <div className="story-play-view">
+    <div className="story-play-heading"><div><span>可执行世界 · 第 {state.turn} 回合</span><h1>幻想乡飞行棋</h1>
+      <p>棋盘是权威状态；正文和 Agent 只能读取投影，不能靠叙述改写棋子位置。</p></div>
+      <div className="story-play-turn"><small>{state.winnerId === undefined ? '当前行动' : '棋局结束'}</small><strong>{state.winnerId === undefined ? currentName : `${name(state.winnerId)}获胜`}</strong>
+        <div className="story-play-turn-actions">
+          {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button story-studio-button-primary" type="button"
+            disabled={busy || dirty} onClick={() => { onAction({ type: 'roll', actorId: state.currentPlayerId }) }}>掷骰</button>}
+          {state.pendingRoll !== undefined && <span className="story-die" aria-label={`骰点 ${state.pendingRoll.value}`}>{state.pendingRoll.value}</span>}
+          <button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
+            if (!restartArmed) {
+              setRestartArmed(true)
+              return
+            }
+            setRestartArmed(false)
+            onRestart()
+          }}>{restartArmed ? '确认重新开局' : '重新开局'}</button>
+        </div>
+      </div>
+    </div>
+    {canStartSession && <div className="story-play-session-action"><span>让人物 Worker、导演和正文流水线从这个权威棋局开始。</span>
+      <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || dirty} onClick={onStartSession}>开始新会话</button></div>}
+    {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进棋局。</div>}
+    <div className="story-flying-layout">
+      <div className="story-flying-board" aria-label="24 格飞行棋棋盘">
+        {Array.from({ length: 24 }, (_, index) => {
+          const position = flyingChessCell(index)
+          const pieces = state.pieces.filter(piece => flyingChessPieceCell(state, piece) === index)
+          return <div className="story-flying-cell" key={index} style={{ gridColumn: position.column, gridRow: position.row }}>
+            <small>{index + 1}</small><div>{pieces.map(piece => {
+              const playerIndex = state.playerOrder.indexOf(piece.ownerId)
+              return <span className="story-flying-token" key={piece.id} title={`${name(piece.ownerId)} ${piece.number} 号`}
+                style={{ '--flying-color': flyingChessColors[playerIndex] } as CSSProperties}>{piece.number}</span>
+            })}</div>
+          </div>
+        })}
+        <div className="story-flying-center"><span>当前骰点</span><strong>{state.pendingRoll?.value ?? '—'}</strong><small>{currentName}</small></div>
+      </div>
+      <div className="story-flying-players">{state.playerOrder.map((playerId, playerIndex) => {
+        const pieces = state.pieces.filter(piece => piece.ownerId === playerId)
+        const isCurrent = state.currentPlayerId === playerId
+        return <section className="story-flying-player" data-current={isCurrent} key={playerId}
+          style={{ '--flying-color': flyingChessColors[playerIndex] } as CSSProperties}>
+          <header><span className="story-flying-player-dot" /><strong>{name(playerId)}</strong><small>{isCurrent ? '行动中' : '等待'}</small></header>
+          <div className="story-flying-piece-list">{pieces.map(piece => {
+            const legal = state.pendingRoll?.legalPieceIds.includes(piece.id) ?? false
+            const location = piece.status === 'base' ? '基地' : piece.status === 'home' ? '已到达' : `航线 ${piece.steps}`
+            return <button type="button" key={piece.id} data-legal={legal} disabled={!legal || busy || dirty}
+              onClick={() => { onAction({ type: 'move', actorId: playerId, pieceId: piece.id }) }}>
+              <span>{piece.number}</span><small>{location}</small>{legal && <b>移动</b>}
+            </button>
+          })}</div>
+        </section>
+      })}</div>
+    </div>
+    <section className="story-world-events"><div><strong>世界事件</strong><span>由规则执行产生，可供时间线和 Agent 读取。</span></div>
+      {[...(workspace.world?.events ?? [])].reverse().slice(0, 10).map(item => <article key={item.id}><span>{item.sequence}</span><div><strong>{item.title}</strong><p>{item.summary}</p></div></article>)}
+    </section>
+  </div>
+}
+
+function PlayWorldView({ workspace, modules, busy, dirty, canStartSession, onStartSession, onInstall, onRestart, onAction }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly modules: readonly PlayWorldModuleDescriptor[]
+  readonly busy: boolean
+  readonly dirty: boolean
+  readonly canStartSession: boolean
+  readonly onStartSession: () => void
+  readonly onInstall: (moduleId: string) => void
+  readonly onRestart: () => void
+  readonly onAction: (action: FlyingChessWorldAction) => void
+}) {
+  if (workspace.world === undefined) {
+    return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
+      <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
+      <div className="story-world-module-grid">{modules.map(module => {
+        const ready = workspace.characters.length >= module.minCharacters && workspace.characters.length <= module.maxCharacters
+        return <article className="story-world-module-card" key={module.id}><span>{module.category === 'game' ? '游戏' : '模拟'}</span><h2>{module.name}</h2>
+          <p>{module.summary}</p><small>需要 {module.minCharacters}–{module.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
+          <button className="story-studio-button story-studio-button-primary" type="button" disabled={!ready || busy || dirty}
+            onClick={() => { onInstall(module.id) }}>{ready ? '装入这个世界' : '先补齐人物'}</button></article>
+      })}{modules.length === 0 && <div className="story-studio-empty">当前没有已安装的世界模块。</div>}</div>
+    </div>
+  }
+  if (workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID && isFlyingChessWorldState(workspace.world.state)) {
+    return <FlyingChessPlayView workspace={workspace} state={workspace.world.state} busy={busy} dirty={dirty}
+      canStartSession={canStartSession} onStartSession={onStartSession} onRestart={onRestart} onAction={onAction} />
+  }
+  return <div className="story-studio-empty"><strong>{workspace.world.title}</strong><span>这个世界模块尚未提供原生场地视图。</span></div>
+}
+
+/** Full-screen play space backed by typed story and executable-world state. */
+export function StoryWorkspaceEditor({ accent, sessionId, launchSourceSessionId, onStartSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
+  const [worldModules, setWorldModules] = useState<readonly PlayWorldModuleDescriptor[]>([])
+  const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
   const [workspace, setWorkspace] = useState<StoryWorkspaceSnapshot>()
-  const [view, setView] = useState<StudioView>('map')
+  const [view, setView] = useState<StudioView>('world')
   const [selection, setSelection] = useState<StudioSelection>()
   const [readerSourceId, setReaderSourceId] = useState<string>()
   const [perspectiveId, setPerspectiveId] = useState<string>()
@@ -1203,7 +1423,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     setDirty(false)
     setSelection(undefined)
     setReaderSourceId(undefined)
-    setView('map')
+    setView('world')
     setPerspectiveId(undefined)
     setPreviewId(undefined)
   }
@@ -1222,10 +1442,12 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   useEffect(() => {
     let active = true
     setLoading(true)
-    void listWorkspaces().then(async next => {
+    void Promise.all([listWorkspaces(), listPlayWorldModules(), listActorResources()]).then(async ([next, modules, actors]) => {
       const selected = next[0] === undefined ? undefined : await readWorkspace(next[0].id)
       if (!active) return
       setItems(next)
+      setWorldModules(modules)
+      setActorResources(actors)
       setWorkspace(selected)
       setSelection(undefined)
       setReaderSourceId(undefined)
@@ -1261,7 +1483,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   }
   const changeProject = (id: string): void => {
     if (workspace?.id === id) return
-    if (dirty && !window.confirm('当前修改尚未保存，仍要切换故事吗？')) return
+    if (dirty && !window.confirm('当前修改尚未保存，仍要切换场地吗？')) return
     setSaving(true)
     setError(undefined)
     void load(id).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -1269,15 +1491,15 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   const createNew = (): void => {
     setSaving(true)
     setError(undefined)
-    void createWorkspace(`新故事 ${items.length + 1}`).then(async created => {
+    void createWorkspace(`新场地 ${items.length + 1}`).then(async created => {
       const next = await listWorkspaces()
       setItems(next)
       setWorkspace(created)
       setDirty(false)
       setSelection(undefined)
       setReaderSourceId(undefined)
-      setView('map')
-      setNotice('新故事已经准备好')
+      setView('world')
+      setNotice('新场地已经准备好')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const save = (): void => {
@@ -1291,6 +1513,45 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       setNotice('所有修改已保存')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
+  const installWorld = (moduleId: string, restarting = false): void => {
+    if (workspace === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    void installPlayWorld(workspace, moduleId).then(async saved => {
+      setWorkspace(saved)
+      setItems(await listWorkspaces())
+      setView('world')
+      setNotice(`${saved.world?.title ?? '世界'}已经${restarting ? '重新开局' : '装入场地'}`)
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const runWorldAction = (action: FlyingChessWorldAction): void => {
+    if (workspace === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    void dispatchPlayWorldAction(workspace, action).then(async saved => {
+      setWorkspace(saved)
+      setItems(await listWorkspaces())
+      setNotice(action.type === 'roll' ? '骰点已经记录' : '棋子已经移动')
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const bindActor = (characterId: string, actorId?: string): void => {
+    if (workspace === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    void bindStoryCharacterActor(workspace, characterId, actorId).then(async saved => {
+      setWorkspace(saved)
+      setItems(await listWorkspaces())
+      setNotice(actorId === undefined ? '人物已经改为手写档案' : '角色卡已经绑定到本局人物')
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const startSession = (): void => {
+    if (workspace === undefined || launchSourceSessionId === undefined || onStartSession === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    void onStartSession(launchSourceSessionId, workspace.id).then(() => {
+      onClose()
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
   const removeWorkspace = (): void => {
     if (workspace === undefined) return
     if (!deleteArmed) {
@@ -1302,7 +1563,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
       setSettingsOpen(false)
       setDirty(false)
       await refreshList()
-      setNotice('故事已删除')
+      setNotice('场地已删除')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const selectForSession = (workspaceId: string | null): void => {
@@ -1311,7 +1572,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     setError(undefined)
     void executeAgentRpCommand(sessionId, `/rp-story-workspace ${JSON.stringify({ format: 0, workspaceId })}`)
       .then(result => {
-        if (!result.matched) throw new Error('当前角色会话没有故事工作室命令')
+        if (!result.matched) throw new Error('当前角色会话没有游玩场地命令')
         setNotice(workspaceId === null ? '当前会话已停止使用故事流水线' : '当前会话已连接这个故事')
       }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
@@ -1489,8 +1750,10 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     : selectedNode !== undefined ? <NodeInspector workspace={workspace} node={selectedNode} update={update} onSelect={setSelection}
       onOpenEvent={id => { select({ kind: 'event', id }) }} onDelete={() => { deleteNode(selectedNode.id) }} />
       : selectedEdge !== undefined ? <EdgeInspector workspace={workspace} edge={selectedEdge} update={update} onDelete={() => { deleteEdge(selectedEdge.id) }} />
-        : selectedCharacter !== undefined ? <CharacterInspector workspace={workspace} character={selectedCharacter} update={update}
+        : selectedCharacter !== undefined ? <CharacterInspector workspace={workspace} character={selectedCharacter} actorResources={actorResources}
+          busy={saving} dirty={dirty} update={update}
           perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
+          onBindActor={actorId => { bindActor(selectedCharacter.id, actorId) }}
           onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
           : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update}
             onOpenKnowledge={() => { setView('characters') }} onSelect={select}
@@ -1514,8 +1777,14 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
 
   let main: React.ReactNode
   if (workspace === undefined) {
-    main = <div className="story-studio-empty"><span style={{ fontSize: 34 }}>✦</span><strong>从一个新故事开始</strong><span>人物、剧情关系、事件与资料会在同一个工作室中持续生长。</span>
-      <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建故事</button></div>
+    main = <div className="story-studio-empty"><span style={{ fontSize: 34 }}>✦</span><strong>创建一个游玩场地</strong><span>人物、世界规则、认知、事件与资料会在同一处持续演进。</span>
+      <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建场地</button></div>
+  } else if (view === 'world') {
+    main = <PlayWorldView workspace={workspace} modules={worldModules} busy={saving} dirty={dirty}
+      canStartSession={launchSourceSessionId !== undefined && onStartSession !== undefined} onStartSession={startSession}
+      onInstall={installWorld} onRestart={() => {
+        if (workspace.world !== undefined) installWorld(workspace.world.moduleId, true)
+      }} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}
       clearPerspective={() => { setPerspectiveId(undefined) }} />
@@ -1595,6 +1864,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   }
 
   const views: readonly { readonly id: StudioView; readonly label: string }[] = [
+    { id: 'world', label: '场地' },
     { id: 'map', label: '故事地图' },
     { id: 'timeline', label: '时间线' },
     { id: 'characters', label: '人物' },
@@ -1602,43 +1872,43 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     { id: 'outputs', label: '输出布局' },
   ]
 
-  return <div className="agent-rp-story-studio" role="dialog" aria-modal="true" aria-label="故事工作室"
+  return <div className="agent-rp-story-studio" role="dialog" aria-modal="true" aria-label="游玩场地"
     style={{ '--story-accent': accent } as CSSProperties}>
     <style>{xyFlowCss}</style><style>{storyStudioCss}</style>
     <header className="story-studio-topbar">
-      <div className="story-studio-brand"><span className="story-studio-brand-mark">✦</span><div><strong>故事工作室</strong><span>人物、剧情与资料</span></div></div>
-      <select className="story-studio-project" aria-label="当前故事" value={workspace?.id ?? ''} disabled={saving || items.length === 0}
+      <div className="story-studio-brand"><span className="story-studio-brand-mark">✦</span><div><strong>游玩场地</strong><span>世界、人物与故事</span></div></div>
+      <select className="story-studio-project" aria-label="当前场地" value={workspace?.id ?? ''} disabled={saving || items.length === 0}
         onChange={event => { changeProject(event.target.value) }}>
-        {items.length === 0 && <option value="">还没有故事</option>}
+        {items.length === 0 && <option value="">还没有场地</option>}
         {items.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}
       </select>
-      <button className="story-studio-icon-button" type="button" aria-label="新建故事" disabled={saving} onClick={createNew}>＋</button>
-      <nav className="story-studio-tabs" aria-label="故事工作室视图">{views.map(item => <button className="story-studio-tab" aria-current={view === item.id ? 'page' : undefined}
+      <button className="story-studio-icon-button" type="button" aria-label="新建场地" disabled={saving} onClick={createNew}>＋</button>
+      <nav className="story-studio-tabs" aria-label="游玩场地视图">{views.map(item => <button className="story-studio-tab" aria-current={view === item.id ? 'page' : undefined}
         type="button" key={item.id} onClick={() => { navigate(item.id) }}>{item.label}</button>)}</nav>
       <button className="story-studio-button" type="button" disabled={workspace === undefined || saving || !dirty} onClick={save}>{saving ? '处理中…' : dirty ? '保存修改' : '已保存'}</button>
-      <button className="story-studio-icon-button" type="button" aria-label="故事设置" disabled={workspace === undefined} onClick={() => { setSettingsOpen(true) }}>⚙</button>
-      <button className="story-studio-icon-button" type="button" aria-label="关闭故事工作室" onClick={onClose}>×</button>
+      <button className="story-studio-icon-button" type="button" aria-label="场地设置" disabled={workspace === undefined} onClick={() => { setSettingsOpen(true) }}>⚙</button>
+      <button className="story-studio-icon-button" type="button" aria-label="关闭游玩场地" onClick={onClose}>×</button>
     </header>
-    <div className="story-studio-shell">
+    <div className="story-studio-shell" data-inspector-open={selection !== undefined}>
       {workspace !== undefined && <StudioNavigation workspace={workspace} view={view} selection={selection} setView={navigate} select={select}
         addCharacter={addCharacter} addSource={addSource} />}
-      <main className="story-studio-main">{loading ? <div className="story-studio-empty">正在打开故事工作室…</div> : main}</main>
+      <main className="story-studio-main">{loading ? <div className="story-studio-empty">正在打开游玩场地…</div> : main}</main>
       <aside className="story-studio-inspector" data-open={selection !== undefined}>
         {selection !== undefined && <button className="story-studio-icon-button" style={{ float: 'right' }} type="button" aria-label="关闭属性面板" onClick={() => { setSelection(undefined) }}>×</button>}
         {inspector}
       </aside>
     </div>
     <footer className="story-studio-statusbar">
-      <strong>故事流水线</strong><span>研究 → 人物 → 导演 → 分区 → 编辑</span><span>{sessionId === undefined ? '打开角色会话后可连接' : '当前会话可连接'}</span>
+      <strong>游玩流水线</strong><span>世界 → 研究 → 人物 → 导演 → 分区 → 编辑</span><span>{sessionId === undefined ? '打开角色会话后可连接' : '当前会话可连接'}</span>
       {error !== undefined ? <span className="story-studio-status-error" role="alert">{error}</span>
         : notice !== undefined ? <span className="story-studio-status-message" role="status">{notice}</span>
           : dirty ? <span className="story-studio-status-message">有未保存修改</span> : undefined}
     </footer>
     {settingsOpen && workspace !== undefined && <>
       <button className="story-studio-drawer-backdrop" type="button" aria-label="关闭设置" onClick={() => { setSettingsOpen(false) }} />
-      <aside className="story-studio-drawer" aria-label="故事设置">
-        <div className="story-studio-drawer-header"><h2>故事设置</h2><button className="story-studio-icon-button" type="button" onClick={() => { setSettingsOpen(false) }}>×</button></div>
-        <TextField label="故事名称" rows={1} value={workspace.name} onChange={value => { update(current => ({ ...current, name: value })) }} />
+      <aside className="story-studio-drawer" aria-label="场地设置">
+        <div className="story-studio-drawer-header"><h2>场地设置</h2><button className="story-studio-icon-button" type="button" onClick={() => { setSettingsOpen(false) }}>×</button></div>
+        <TextField label="场地名称" rows={1} value={workspace.name} onChange={value => { update(current => ({ ...current, name: value })) }} />
         <hr className="story-studio-divider" />
         <h3 style={{ fontSize: 13 }}>当前会话</h3>
         <p style={{ color: 'var(--studio-muted)', fontSize: 11, lineHeight: 1.5 }}>{sessionId === undefined ? '打开一个 Agent RP 角色会话后，可以让每轮生成使用这个故事。' : '连接后，下一轮会按人物认知、剧情节点、资料和输出布局运行。'}</p>

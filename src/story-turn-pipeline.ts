@@ -13,6 +13,7 @@ import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActMode
 import { appendAgentRpSessionEvent } from './session-event-compat.ts'
 import {
   compileStoryCharacterContext,
+  compileStoryDirectorWorldContext,
   storyDirectorMap,
   storyOpenForeshadowing,
   storyParticipantCharacters,
@@ -888,6 +889,8 @@ function directorFallback(
     storyDirectorMap(input.workspace),
     '# 尚未回收的伏笔',
     storyOpenForeshadowing(input.workspace),
+    '# 权威世界状态',
+    compileStoryDirectorWorldContext(input.workspace),
     '# 与本轮相关的资料',
     research,
     '# 各人物独立决策',
@@ -945,6 +948,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     [
       '<story_map>', storyDirectorMap(input.workspace), '</story_map>',
       '<foreshadowing>', storyOpenForeshadowing(input.workspace), '</foreshadowing>',
+      '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
       '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
       '<research>', researchText, '</research>',
       '<character_decisions>', characterDecisions.join('\n\n'), '</character_decisions>',
@@ -1067,6 +1071,7 @@ export async function materializeStoryTurn(input: {
       '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.parentId ?? '-'}\t${node.title}`).join('\n'), '</canonical_nodes>',
       '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
       '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
+      '<world_state>', compileStoryDirectorWorldContext(workspace), '</world_state>',
       '<visible_reply>', visibleReply, '</visible_reply>',
     ].join('\n'),
     4_096,

@@ -222,6 +222,10 @@ test('maps all reusable Host libraries onto the exact references written into a 
     kind: 'actor',
     openings: [{ id: 'greeting:0', label: '默认开场', preview: '门还没锁。', truncated: false }],
   })
+  const actorProjection = catalog.projectActor({ kind: 'actor', id: characterLibraryRoleplayResourceId(card.id) })
+  assert.equal(actorProjection.name, '白露')
+  assert.match(actorProjection.persona, /角色描述：钟表匠/u)
+  assert.match(actorProjection.persona, /性格：沉静/u)
   assert.deepEqual(catalog.inspect('persona', persona.id), {
     kind: 'persona', description: '刚到海城的旅人。',
   })

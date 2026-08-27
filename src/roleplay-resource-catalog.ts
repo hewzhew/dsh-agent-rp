@@ -30,6 +30,14 @@ export interface RoleplayResourceProvider {
   inspect?(descriptor: RoleplayResourceDescriptor): RoleplayResourceDetail
   /** Preserve the Session-event prefix and append a snapshot when the selection is not already active. */
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization
+  /** Resolve one actor into a stable model-facing identity without exposing source payloads. */
+  projectActor?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayActorProjection
+}
+
+/** Host-only actor snapshot stored by a play-space character instance. */
+export interface RoleplayActorProjection {
+  readonly name: string
+  readonly persona: string
 }
 
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
@@ -64,6 +72,7 @@ interface Registration {
   readonly list: RoleplayResourceProvider['list']
   readonly inspect?: NonNullable<RoleplayResourceProvider['inspect']>
   readonly materialize?: NonNullable<RoleplayResourceProvider['materialize']>
+  readonly projectActor?: NonNullable<RoleplayResourceProvider['projectActor']>
 }
 
 const KIND_ORDER = new Map<RoleplayResourceKind, number>(
@@ -136,6 +145,7 @@ export class RoleplayResourceCatalog {
       list: provider.list.bind(provider),
       ...(provider.inspect === undefined ? {} : { inspect: provider.inspect.bind(provider) }),
       ...(provider.materialize === undefined ? {} : { materialize: provider.materialize.bind(provider) }),
+      ...(provider.projectActor === undefined ? {} : { projectActor: provider.projectActor.bind(provider) }),
     }
     this.#providers.set(id, registration)
     return () => {
@@ -195,6 +205,26 @@ export class RoleplayResourceCatalog {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} has no detail reader`)
     }
     return parseRoleplayResourceDetail(registration.inspect(located.descriptor), located.descriptor)
+  }
+
+  /** Resolve one actor selection into a bounded stable identity snapshot. */
+  projectActor(selection: RoleplayResourceSelection): RoleplayActorProjection {
+    if (selection.kind !== 'actor') throw new Error('人物实例只能绑定 actor 资源')
+    const located = this.locate(selection.kind, selection.id)
+    if (located === undefined) throw new Error(`Roleplay resource ${descriptorKey(selection)} is unavailable`)
+    if (located.descriptor.availability !== 'available') throw new Error(`Roleplay resource ${descriptorKey(selection)} is archived`)
+    if (selection.variant !== undefined) stableId(selection.variant, 'Roleplay resource variant')
+    const registration = this.#providers.get(located.providerId)
+    if (registration?.projectActor === undefined) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} cannot project actors`)
+    }
+    const projected = registration.projectActor(Object.freeze({ ...selection }), located.descriptor)
+    if (typeof projected !== 'object' || projected === null || typeof projected.name !== 'string'
+      || projected.name.trim() === '' || projected.name.length > 120 || typeof projected.persona !== 'string'
+      || Buffer.byteLength(projected.persona, 'utf8') > 2 * 1024 * 1024) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid actor projection`)
+    }
+    return Object.freeze({ name: projected.name.trim(), persona: projected.persona })
   }
 
   /** Dispatch one selection to its owning provider and verify append-only Session semantics. */

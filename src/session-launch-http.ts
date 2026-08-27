@@ -32,6 +32,8 @@ import {
   type AgentPresetGateway,
 } from './agent-capability-preset.ts'
 import { AGENT_RP_PRESET_ID } from './preset.ts'
+import { createStoryWorkspaceSessionSeed } from './session-story-workspace.ts'
+import type { StoryWorkspaceStore } from './story-workspace.ts'
 
 const MAX_REQUEST_BYTES = 32 * 1024
 
@@ -116,6 +118,7 @@ export async function launchAgentRpSession(
   worldInfos: WorldInfoLibrary,
   input: unknown,
   resources?: RoleplayResourceCatalog,
+  storyWorkspaces?: StoryWorkspaceStore,
 ): Promise<{
   readonly sessionId: SessionId
   readonly title: string
@@ -148,9 +151,15 @@ export async function launchAgentRpSession(
     if (!agentHasAgentRpRuntime(agentPresets, source)) throw new Error('只能改写 Agent RP 角色会话')
     if (source.status !== 'idle' || source.inbox.hasPending) throw new Error('请等待当前回复完成后再改写')
   }
-  let prepared = request.kind === 'rewrite'
-    ? prepareAgentRpRewriteSession(source.session, request.turn, titles?.get(source.session)?.title)
-    : prepareAgentRpSession(characters, chats, presetLibrary, worldInfos, request, resources)
+  let prepared
+  if (request.kind === 'rewrite') {
+    prepared = prepareAgentRpRewriteSession(source.session, request.turn, titles?.get(source.session)?.title)
+  } else if (request.kind === 'story-workspace') {
+    if (storyWorkspaces === undefined) throw new Error('当前 Host 没有可用的游玩场地目录')
+    prepared = createStoryWorkspaceSessionSeed(storyWorkspaces, request.workspaceId)
+  } else {
+    prepared = prepareAgentRpSession(characters, chats, presetLibrary, worldInfos, request, resources)
+  }
   if (request.kind === 'character' && request.memory === 'copy-active') {
     if (!agentHasAgentRpRuntime(agentPresets, source)) throw new Error('只能从角色会话继承记忆')
     if (source.status !== 'idle' || source.inbox.hasPending) throw new Error('请等待当前回复完成后再继承记忆')
@@ -264,6 +273,7 @@ export function installSessionLaunchHttp(
   worldInfos: WorldInfoLibrary,
   resources: RoleplayResourceCatalog,
   server: AgentRpHttpServer,
+  storyWorkspaces?: StoryWorkspaceStore,
 ): void {
   routeCtx.effect(() => server.register({
     kind: 'exact',
@@ -287,6 +297,7 @@ export function installSessionLaunchHttp(
           worldInfos,
           await readJson(request),
           resources,
+          storyWorkspaces,
         )
         json(response, 200, {
           format: 0,

@@ -12,10 +12,21 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import {
+  createDefaultPlayWorldRegistry,
+  type PlayWorldRegistry,
+} from './play-world.ts'
+import type {
+  PlayWorldActionRequest,
+  PlayWorldInstallRequest,
+  PlayWorldSnapshot,
+} from './play-world-protocol.ts'
+import type { RoleplayActorProjection } from './roleplay-resource-catalog.ts'
 import type {
   StoryAudience,
   StoryCitation,
   StoryCharacter,
+  StoryCharacterActorBindRequest,
   StoryEdge,
   StoryEdgeKind,
   StoryEvent,
@@ -68,6 +79,7 @@ const KNOWLEDGE_MODES = new Set<StoryKnowledgePolicy['mode']>(['inherit', 'none'
 const OUTPUT_KINDS = new Set<StoryOutputKind>(['prose', 'character', 'history'])
 const SOURCE_KINDS = new Set<StorySourceKind>(['original', 'reference', 'research', 'web'])
 const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4, researchMaxPasses: 2 }
+const DEFAULT_PLAY_WORLD_REGISTRY = createDefaultPlayWorldRegistry()
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
 interface StoredStoryCharacter extends Omit<StoryCharacter, 'persona'> {}
@@ -94,6 +106,7 @@ interface StoredStoryWorkspace {
   readonly sources: readonly StoredStorySource[]
   readonly citations: readonly StoryCitation[]
   readonly researchInbox: readonly StoryResearchItem[]
+  readonly world?: PlayWorldSnapshot
 }
 
 interface LegacyManifest {
@@ -123,6 +136,7 @@ interface LegacyManifest {
 /** Filesystem override used by focused checks and portable deployments. */
 export interface StoryWorkspaceStoreOptions {
   readonly root?: string
+  readonly worlds?: PlayWorldRegistry
 }
 
 /** Public facts from the current scene that every participating character may observe. */
@@ -137,6 +151,7 @@ export interface StoryCharacterContext {
   readonly characterName: string
   readonly persona: string
   readonly privateKnowledge: string
+  readonly worldContext: string
   readonly playerInput: string
   readonly text: string
 }
@@ -223,10 +238,26 @@ function normalizePipeline(value: unknown): StoryPipelineSettings {
 function normalizeCharacter(value: unknown): StoryCharacter {
   if (!isRecord(value)) throw new Error('人物不是对象')
   assertId(value.id, CHARACTER_ID_PATTERN, '人物')
+  let actor: StoryCharacter['actor']
+  if (value.actor !== undefined) {
+    if (!isRecord(value.actor) || value.actor.kind !== 'actor' || typeof value.actor.id !== 'string'
+      || value.actor.id.trim() === '' || value.actor.id.trim() !== value.actor.id || /\s/u.test(value.actor.id)
+      || (value.actor.variant !== undefined && (typeof value.actor.variant !== 'string'
+        || value.actor.variant.trim() === '' || value.actor.variant.trim() !== value.actor.variant || /\s/u.test(value.actor.variant)))
+      || Object.keys(value.actor).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')) {
+      throw new Error('人物绑定的角色资源无效')
+    }
+    actor = {
+      kind: 'actor',
+      id: value.actor.id,
+      ...(value.actor.variant === undefined ? {} : { variant: value.actor.variant }),
+    }
+  }
   return {
     id: value.id,
     name: cleanName(value.name, '人物'),
     persona: cleanDocument(value.persona, '人物 Persona'),
+    ...(actor === undefined ? {} : { actor }),
   }
 }
 
@@ -513,7 +544,7 @@ function normalizeCitation(
   }
 }
 
-function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
+function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWorkspaceSnapshot {
   if (!isRecord(value) || value.format !== 2 || !isRecord(value.graph)
     || !Array.isArray(value.characters) || !Array.isArray(value.graph.nodes)
     || !Array.isArray(value.graph.edges) || !Array.isArray(value.facts)
@@ -526,6 +557,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   const characters = value.characters.map(normalizeCharacter)
   assertUnique(characters.map(character => character.id), '人物')
   const characterIds = new Set(characters.map(character => character.id))
+  const world = value.world === undefined ? undefined : worlds.normalize(value.world, { characters })
   const nodes = value.graph.nodes.map(node => normalizeNode(node, characterIds))
   assertUnique(nodes.map(node => node.id), '故事节点')
   const nodeIds = new Set(nodes.map(node => node.id))
@@ -595,6 +627,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     .concat(citations.flatMap(citation => [citation.quote, citation.note]))
     .concat(researchInbox.flatMap(item => [item.query, item.title, item.snippet]))
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
+    + (world === undefined ? 0 : Buffer.byteLength(JSON.stringify(world), 'utf8'))
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
     format: 2,
@@ -612,6 +645,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     sources,
     citations,
     researchInbox,
+    ...(world === undefined ? {} : { world }),
   }
 }
 
@@ -666,10 +700,11 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
     sources: snapshot.sources.map(({ content: _content, ...source }) => source),
     citations: snapshot.citations,
     researchInbox: snapshot.researchInbox,
+    ...(snapshot.world === undefined ? {} : { world: snapshot.world }),
   }
 }
 
-function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
+function hydrateStored(root: string, value: unknown, worlds: PlayWorldRegistry): StoryWorkspaceSnapshot {
   if (!isRecord(value) || value.format !== 2 || !isRecord(value.graph)
     || !Array.isArray(value.graph.nodes) || !Array.isArray(value.characters)
     || !Array.isArray(value.outputs) || !Array.isArray(value.sources)) {
@@ -709,10 +744,10 @@ function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
     sources,
     citations: Array.isArray(value.citations) ? value.citations : [],
     researchInbox: Array.isArray(value.researchInbox) ? value.researchInbox : [],
-  })
+  }, worlds)
 }
 
-function migrateTypedFormat1(root: string, value: unknown): StoryWorkspaceSnapshot {
+function migrateTypedFormat1(root: string, value: unknown, worlds: PlayWorldRegistry): StoryWorkspaceSnapshot {
   if (!isRecord(value) || value.format !== 1 || !isRecord(value.graph)
     || !Array.isArray(value.graph.nodes) || !Array.isArray(value.characters)
     || !Array.isArray(value.facts) || !Array.isArray(value.events)
@@ -779,7 +814,7 @@ function migrateTypedFormat1(root: string, value: unknown): StoryWorkspaceSnapsh
     sources,
     citations: Array.isArray(value.citations) ? value.citations : [],
     researchInbox: Array.isArray(value.researchInbox) ? value.researchInbox : [],
-  })
+  }, worlds)
 }
 
 function parseLegacyManifest(value: unknown): LegacyManifest {
@@ -965,9 +1000,11 @@ export function storyOpenForeshadowing(workspace: StoryWorkspaceSnapshot): strin
 /** Local workspace store whose accepted ids cannot escape its configured root. */
 export class StoryWorkspaceStore {
   readonly root: string
+  readonly worlds: PlayWorldRegistry
 
   constructor(options: StoryWorkspaceStoreOptions = {}) {
     this.root = resolve(options.root ?? dshHomePath('agent-rp', 'story-workspaces'))
+    this.worlds = options.worlds ?? DEFAULT_PLAY_WORLD_REGISTRY
   }
 
   /** List valid workspaces newest first, migrating format 0 on first access. */
@@ -1006,7 +1043,7 @@ export class StoryWorkspaceStore {
       sources: [],
       citations: [],
       researchInbox: [],
-    })
+    }, this.worlds)
     this.writeSnapshot(snapshot)
     return snapshot
   }
@@ -1020,11 +1057,11 @@ export class StoryWorkspaceStore {
     try {
       const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as unknown
       if (isRecord(stored) && stored.format === 1) {
-        const migrated = migrateTypedFormat1(root, stored)
+        const migrated = migrateTypedFormat1(root, stored, this.worlds)
         this.writeSnapshot(migrated)
         return migrated
       }
-      return hydrateStored(root, stored)
+      return hydrateStored(root, stored, this.worlds)
     } catch (error: unknown) {
       throw new Error(`无法读取故事工作室 ${JSON.stringify(id)}`, { cause: error })
     }
@@ -1042,9 +1079,66 @@ export class StoryWorkspaceStore {
       revision: current.revision + 1,
       createdAt: current.createdAt,
       updatedAt: Math.max(Date.now(), current.updatedAt + 1),
-    })
+      ...(current.world === undefined ? {} : { world: current.world }),
+    }, this.worlds)
     this.writeSnapshot(snapshot)
     this.removeUnreferenced(current, snapshot)
+    return this.get(snapshot.id)
+  }
+
+  /** List executable worlds available to fresh or existing play spaces. */
+  worldModules() {
+    return this.worlds.list()
+  }
+
+  /** Replace the executable world with one fresh module-owned instance. */
+  installWorld(id: string, request: PlayWorldInstallRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    if (request.format !== 0 || typeof request.moduleId !== 'string') throw new Error('游玩世界安装请求无效')
+    const world = this.worlds.get(request.moduleId).create({ characters: current.characters })
+    return this.commitWorld(current, world)
+  }
+
+  /** Apply one typed action without permitting whole-workspace state replacement. */
+  dispatchWorldAction(id: string, request: PlayWorldActionRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    if (request.format !== 0 || current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
+    const module = this.worlds.get(current.world.moduleId)
+    const world = module.dispatch(current.world, request.action, { characters: current.characters })
+    return this.commitWorld(current, world)
+  }
+
+  /** Bind an actor snapshot to one character, or detach it while retaining the editable snapshot. */
+  bindCharacterActor(
+    id: string,
+    request: StoryCharacterActorBindRequest,
+    projection?: RoleplayActorProjection,
+  ): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    assertId(request.characterId, CHARACTER_ID_PATTERN, '人物')
+    if (request.format !== 0 || (request.actor !== undefined) !== (projection !== undefined)
+      || (request.actor !== undefined && request.actor.kind !== 'actor')) {
+      throw new Error('人物角色卡绑定请求无效')
+    }
+    if (!current.characters.some(character => character.id === request.characterId)) throw new Error('要绑定的场地人物不存在')
+    const characters = current.characters.map(character => {
+      if (character.id !== request.characterId) return character
+      if (request.actor === undefined || projection === undefined) {
+        const { actor: _actor, ...detached } = character
+        return detached
+      }
+      return { ...character, name: projection.name, persona: projection.persona, actor: request.actor }
+    })
+    const snapshot = normalizeWorkspace({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      characters,
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
     return this.get(snapshot.id)
   }
 
@@ -1204,7 +1298,7 @@ export class StoryWorkspaceStore {
   }
 
   private writeSnapshot(value: StoryWorkspaceSnapshot): void {
-    const snapshot = normalizeWorkspace(value)
+    const snapshot = normalizeWorkspace(value, this.worlds)
     const root = this.workspacePath(snapshot.id)
     for (const node of snapshot.graph.nodes) atomicWrite(join(root, 'nodes', `${node.id}.md`), node.content)
     for (const character of snapshot.characters) {
@@ -1213,6 +1307,23 @@ export class StoryWorkspaceStore {
     for (const output of snapshot.outputs) atomicWrite(join(root, 'outputs', `${output.id}.md`), output.instructions)
     for (const source of snapshot.sources) atomicWrite(join(root, 'sources', `${source.id}.md`), source.content)
     atomicWrite(join(root, 'story.json'), `${JSON.stringify(compactStored(snapshot), null, 2)}\n`)
+  }
+
+  private assertRevision(current: StoryWorkspaceSnapshot, revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision !== current.revision) {
+      throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
+    }
+  }
+
+  private commitWorld(current: StoryWorkspaceSnapshot, world: PlayWorldSnapshot): StoryWorkspaceSnapshot {
+    const snapshot = normalizeWorkspace({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      world,
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
+    return this.get(snapshot.id)
   }
 
   private removeUnreferenced(before: StoryWorkspaceSnapshot, after: StoryWorkspaceSnapshot): void {
@@ -1367,7 +1478,7 @@ export class StoryWorkspaceStore {
       sources,
       citations: [],
       researchInbox: [],
-    })
+    }, this.worlds)
     this.writeSnapshot(migrated)
     for (const path of ['manifest.json', 'outline.md', 'foreshadowing.md', 'proposals.md', 'history.md']) {
       rmSync(join(root, path), { force: true })
@@ -1385,6 +1496,7 @@ export function compileStoryCharacterContext(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
   scene: StoryPublicSceneContext,
+  worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
 ): StoryCharacterContext {
   const character = workspace.characters.find(candidate => candidate.id === characterId)
   if (character === undefined) throw new Error(`故事工作室中没有人物 ${JSON.stringify(characterId)}`)
@@ -1395,12 +1507,16 @@ export function compileStoryCharacterContext(
     return [`- ${prefix}${fact.text}`, ...citations.map(citation => `  ${renderStoryCitation(workspace, citation)}`)].join('\n')
   }).join('\n')
   const playerInput = cleanDocument(scene.playerInput, '本轮玩家输入')
+  const worldContext = workspace.world === undefined
+    ? ''
+    : worlds.get(workspace.world.moduleId).projectForCharacter(workspace.world, characterId, { characters: workspace.characters }).text
   const text = [
     `# 人物：${character.name}`,
     '## Persona',
     character.persona,
     '## 此人物已经知道的事实',
     privateKnowledge,
+    ...(worldContext === '' ? [] : ['## 此人物可见的世界状态', worldContext]),
     '## 本轮玩家输入',
     playerInput,
     '只能依据以上材料决定该人物此刻相信什么、注意到什么和采取什么行动。不得假设其他人物的私有知识，也不得读取导演故事图、建议节点或未公开的未来安排。',
@@ -1411,7 +1527,17 @@ export function compileStoryCharacterContext(
     characterName: character.name,
     persona: character.persona,
     privateKnowledge,
+    worldContext,
     playerInput,
     text,
   }
+}
+
+/** Compile authoritative world state for director and continuity Workers. */
+export function compileStoryDirectorWorldContext(
+  workspace: StoryWorkspaceSnapshot,
+  worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
+): string {
+  if (workspace.world === undefined) return ''
+  return worlds.get(workspace.world.moduleId).projectForDirector(workspace.world, { characters: workspace.characters }).text
 }

@@ -2755,6 +2755,7 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
     agentPresetId?: string,
     regexPackIds?: readonly string[],
   ) => Promise<void>
+  readonly startStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string) => Promise<void>
   readonly renamePreset: (id: string, name: string) => Promise<PresetLibrarySummary>
   readonly deletePreset: (id: string) => Promise<void>
   readonly workspaceSettings: WorkspaceSettingsSource
@@ -2838,7 +2839,7 @@ function SidebarRoleplayDestination({
   listPresets, listRegexPacks, importRegexPackFile, deleteRegexPack,
   listAgentCapabilityPresets, importPresetFile, listPersonas, savePersona, deletePersona,
   listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo, renamePreset, deletePreset,
-  startWorldInfoSession,
+  startWorldInfoSession, startStoryWorkspaceSession,
   workspaceSettings, workspaceList,
 }: SidebarRoleplayDestinationProps) {
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
@@ -2873,6 +2874,7 @@ function SidebarRoleplayDestination({
     && !accessSaving
   const blankSessionReady = currentSession?.blank === true
     && workspaceEnabled
+  const storyWorkspaceLaunchReady = blankSessionReady
   const unavailableReason = currentSessionId === undefined
     ? '先点侧栏的“新会话”，再从这里选择角色或迁移聊天'
     : !currentSession?.blank
@@ -3062,9 +3064,9 @@ function SidebarRoleplayDestination({
           }}>
             <span aria-hidden="true" style={{ color, fontSize: '20px', lineHeight: 1 }}>✎</span>
             <span style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ display: 'block', fontSize: '13px' }}>故事工作室</strong>
+              <strong style={{ display: 'block', fontSize: '13px' }}>游玩场地</strong>
               <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '3px', opacity: .52 }}>
-                故事地图、人物认知、事件时间线、资料与输出布局
+                可执行世界、人物认知、故事地图、资料与输出布局
               </span>
             </span>
             <span aria-hidden="true" style={{ fontSize: '16px', opacity: .38 }}>›</span>
@@ -3148,6 +3150,10 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
+      {...(storyWorkspaceLaunchReady && currentSessionId !== undefined ? {
+        launchSourceSessionId: String(currentSessionId),
+        onStartSession: (sourceSessionId: string, workspaceId: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId),
+      } : {})}
       {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)
         ? {}
         : { sessionId: String(currentSessionId) })}
@@ -12961,6 +12967,17 @@ export function apply(ctx: ClientContext): void {
     )
     await archiveConsumedBlankSession(sessionId)
   }
+  const startStoryWorkspaceFromBlankSession = async (sessionId: SessionId, workspaceId: string): Promise<void> => {
+    const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
+    if (summary === undefined || !summary.blank) throw new Error('只能从尚未开始的会话进入游玩场地')
+    await launchRoleplaySession({
+      format: 0,
+      sourceSessionId: String(sessionId),
+      kind: 'story-workspace',
+      workspaceId,
+    })
+    await archiveConsumedBlankSession(sessionId)
+  }
   const startCharacterFromCurrentSession = async (
     sessionId: SessionId,
     character: CharacterLibraryDetail,
@@ -13381,6 +13398,7 @@ export function apply(ctx: ClientContext): void {
     renamePreset: renamePresetLibraryEntry, deletePreset: deletePresetLibraryEntry, listPersonas, savePersona, deletePersona,
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
+    startStoryWorkspaceSession: startStoryWorkspaceFromBlankSession,
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({
     name: 'sidebar.destinations', id: 'agent-rp-workbench', order: 20,

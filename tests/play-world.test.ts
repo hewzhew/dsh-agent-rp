@@ -1,0 +1,181 @@
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
+import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
+import { PlayWorldRegistry } from '../src/play-world.ts'
+import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
+import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
+import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import {
+  compileStoryCharacterContext,
+  compileStoryDirectorWorldContext,
+  createStoryCharacterId,
+  StoryWorkspaceStore,
+} from '../src/story-workspace.ts'
+
+function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
+  return {
+    format: 2,
+    id: snapshot.id,
+    revision: snapshot.revision,
+    name: snapshot.name,
+    pipeline: snapshot.pipeline,
+    graph: snapshot.graph,
+    characters: snapshot.characters,
+    facts: snapshot.facts,
+    events: snapshot.events,
+    outputs: snapshot.outputs,
+    sources: snapshot.sources,
+    citations: snapshot.citations,
+    researchInbox: snapshot.researchInbox,
+  }
+}
+
+test('advances a host-owned flying-chess world only through typed actions', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const rolls = [6, 1]
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift() ?? 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '博丽神社飞行棋' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const withCharacters = store.save({
+    ...editable(created),
+    characters: [
+      { id: reimuId, name: '博丽灵梦', persona: '博丽神社的巫女。' },
+      { id: marisaId, name: '雾雨魔理沙', persona: '普通的魔法使。' },
+    ],
+  })
+
+  const installed = store.installWorld(withCharacters.id, {
+    format: 0,
+    revision: withCharacters.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const initial = installed.world?.state as FlyingChessWorldState
+  assert.equal(initial.currentPlayerId, reimuId)
+  assert.equal(initial.pieces.length, 8)
+  assert.equal(installed.world?.events[0]?.type, 'game.started')
+  assert.throws(() => worlds.get(FLYING_CHESS_WORLD_MODULE_ID).normalize({
+    ...installed.world,
+    state: { ...initial, pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [] } },
+  }, { characters: withCharacters.characters }), /合法棋子集合无效/u)
+
+  const rolled = store.dispatchWorldAction(installed.id, {
+    format: 0,
+    revision: installed.revision,
+    action: { type: 'roll', actorId: reimuId },
+  })
+  const pending = rolled.world?.state as FlyingChessWorldState
+  assert.equal(pending.pendingRoll?.value, 6)
+  assert.equal(pending.pendingRoll?.legalPieceIds.length, 4)
+  assert.equal(rolled.world?.events.at(-1)?.type, 'die.rolled')
+
+  const pieceId = pending.pendingRoll?.legalPieceIds[0]
+  assert.ok(pieceId)
+  const moved = store.dispatchWorldAction(rolled.id, {
+    format: 0,
+    revision: rolled.revision,
+    action: { type: 'move', actorId: reimuId, pieceId },
+  })
+  const afterMove = moved.world?.state as FlyingChessWorldState
+  assert.equal(afterMove.pieces.find(piece => piece.id === pieceId)?.status, 'track')
+  assert.equal(afterMove.currentPlayerId, reimuId)
+
+  const rolledAgain = store.dispatchWorldAction(moved.id, {
+    format: 0,
+    revision: moved.revision,
+    action: { type: 'roll', actorId: reimuId },
+  })
+  const secondPending = rolledAgain.world?.state as FlyingChessWorldState
+  assert.equal(secondPending.pendingRoll?.value, 1)
+  const movedAgain = store.dispatchWorldAction(rolledAgain.id, {
+    format: 0,
+    revision: rolledAgain.revision,
+    action: { type: 'move', actorId: reimuId, pieceId },
+  })
+  const finalState = movedAgain.world?.state as FlyingChessWorldState
+  assert.equal(finalState.pieces.find(piece => piece.id === pieceId)?.steps, 2)
+  assert.equal(finalState.currentPlayerId, marisaId)
+  assert.throws(() => store.dispatchWorldAction(movedAgain.id, {
+    format: 0,
+    revision: rolledAgain.revision,
+    action: { type: 'roll', actorId: marisaId },
+  }), /当前 revision/u)
+
+  const characterContext = compileStoryCharacterContext(movedAgain, reimuId, { playerInput: '继续。' }, worlds)
+  assert.match(characterContext.worldContext, /当前第 3 回合/u)
+  assert.match(characterContext.text, /此人物可见的世界状态/u)
+  assert.match(compileStoryDirectorWorldContext(movedAgain, worlds), /雾雨魔理沙/u)
+  const restarted = store.installWorld(movedAgain.id, {
+    format: 0,
+    revision: movedAgain.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  assert.notEqual(restarted.world?.instanceId, movedAgain.world?.instanceId)
+  assert.equal(restarted.world?.events.length, 1)
+  assert.equal((restarted.world?.state as FlyingChessWorldState).turn, 1)
+})
+
+test('keeps executable world state out of whole-workspace edits', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-save-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '场地' })
+  const first = createStoryCharacterId()
+  const second = createStoryCharacterId()
+  const withCharacters = store.save({
+    ...editable(created),
+    characters: [
+      { id: first, name: '甲', persona: '' },
+      { id: second, name: '乙', persona: '' },
+    ],
+  })
+  const installed = store.installWorld(withCharacters.id, {
+    format: 0,
+    revision: withCharacters.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const launch = parseAgentRpSessionLaunchRequest({
+    format: 0,
+    sourceSessionId: 'session-source',
+    kind: 'story-workspace',
+    workspaceId: installed.id,
+  })
+  assert.equal(launch.kind, 'story-workspace')
+  const prepared = createStoryWorkspaceSessionSeed(store, installed.id)
+  assert.equal(prepared.title, '场地')
+  assert.equal(readSessionStoryWorkspaceId(prepared.seed), installed.id)
+  assert.deepEqual(prepared.seed.map(event => event.type), [
+    'agent-rp/story-workspace-selection',
+    'turn/start',
+    'turn/end',
+  ])
+  const launched = Session.create(SessionId('play-world-launch'), prepared.seed)
+  assert.deepEqual(launched.deriveMessages(), [])
+  assert.equal(launched.events.findLast(event => event.type === 'turn/end')?.data.turn, 1)
+  const renamed = store.save({ ...editable(installed), name: '新名称' })
+  assert.deepEqual(renamed.world, installed.world)
+  const bound = store.bindCharacterActor(renamed.id, {
+    format: 0,
+    revision: renamed.revision,
+    characterId: first,
+    actor: { kind: 'actor', id: 'actor:reimu' },
+  }, { name: '博丽灵梦', persona: '博丽神社的巫女。' })
+  assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
+  const detached = store.bindCharacterActor(bound.id, {
+    format: 0,
+    revision: bound.revision,
+    characterId: first,
+  })
+  assert.equal(detached.characters[0]?.actor, undefined)
+  assert.equal(detached.characters[0]?.name, '博丽灵梦')
+  assert.equal(detached.characters[0]?.persona, '博丽神社的巫女。')
+  assert.deepEqual(detached.world, installed.world)
+})

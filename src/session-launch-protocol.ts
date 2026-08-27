@@ -64,6 +64,16 @@ export interface RoleplayExperienceSessionLaunchRequest {
   readonly agentPresetId?: string
 }
 
+/** Start one Session directly from an executable play space. */
+export interface StoryWorkspaceSessionLaunchRequest {
+  readonly format: 0
+  readonly sourceSessionId: string
+  readonly kind: 'story-workspace'
+  readonly workspaceId: string
+  /** DSH Agent composition providing tools and runtime capabilities. */
+  readonly agentPresetId?: string
+}
+
 /** Start a child Session immediately before one completed user turn. */
 export interface RewriteSessionLaunchRequest {
   readonly format: 0
@@ -79,6 +89,7 @@ export type AgentRpSessionLaunchRequest =
   | WorldInfoSessionLaunchRequest
   | ChatSessionLaunchRequest
   | RoleplayExperienceSessionLaunchRequest
+  | StoryWorkspaceSessionLaunchRequest
   | RewriteSessionLaunchRequest
 
 /** Library-backed launch request that does not depend on an existing RP transcript. */
@@ -87,6 +98,7 @@ export type LibrarySessionLaunchRequest =
   | WorldInfoSessionLaunchRequest
   | ChatSessionLaunchRequest
   | RoleplayExperienceSessionLaunchRequest
+  | StoryWorkspaceSessionLaunchRequest
 
 /** Successful launch result returned after the Agent is published. */
 export interface AgentRpSessionLaunchResponse {

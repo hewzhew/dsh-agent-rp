@@ -1,4 +1,7 @@
-/** Public records for the typed Agent RP story studio. */
+/** Public records for the typed Agent RP play space. */
+
+import type { PlayWorldSnapshot } from './play-world-protocol.ts'
+import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 
 /** Same-origin collection endpoint for local story workspaces. */
 export const STORY_WORKSPACES_PATH = '/api/agent-rp/story-workspaces'
@@ -102,6 +105,16 @@ export interface StoryCharacter {
   readonly id: string
   readonly name: string
   readonly persona: string
+  /** Stable source reference for a persona snapshot bound from the resource center. */
+  readonly actor?: RoleplayResourceSelection
+}
+
+/** Revision-guarded request to bind or detach one actor resource from a character instance. */
+export interface StoryCharacterActorBindRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly characterId: string
+  readonly actor?: RoleplayResourceSelection
 }
 
 /** Provenance for a manually authored or observed fact. */
@@ -204,6 +217,8 @@ export interface StoryWorkspaceSnapshot {
   readonly sources: readonly StorySource[]
   readonly citations: readonly StoryCitation[]
   readonly researchInbox: readonly StoryResearchItem[]
+  /** Executable authoritative world; mutations use the dedicated action endpoint. */
+  readonly world?: PlayWorldSnapshot
 }
 
 /** Lightweight workspace list item. */

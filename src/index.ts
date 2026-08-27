@@ -1795,10 +1795,11 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
           worldInfoLibrary,
           resourceCatalog,
           server,
+          storyWorkspaces,
         )
         installWorldInfoLibraryHttp(webCtx, worldInfoLibrary, server)
         installWorkspaceSettingsHttp(webCtx, workspaceSettings, server)
-        installStoryWorkspaceHttp(webCtx, storyWorkspaces, server)
+        installStoryWorkspaceHttp(webCtx, storyWorkspaces, server, resourceCatalog)
         installAgentRpCapabilityPresetHttp(webCtx, ctx, server)
         installRoleplayResourceCatalogHttp(webCtx, resourceCatalog, server)
         installNativeIdentityHttp(webCtx, new NativeIdentityStore(webCtx.credentials), server)

@@ -10,7 +10,7 @@ import { appendCharacterWorldSessionSeed, appendWorldInfoLibrarySessionSeed } fr
 import type { PersonaLibrary } from './persona-library.ts'
 import type { PresetLibrary, PresetLibraryEntry } from './preset-library.ts'
 import type { RegexPackLibrary } from './regex-pack-library.ts'
-import { substituteCardMacros } from './prompt.ts'
+import { renderImportedCharacterPrompt, substituteCardMacros } from './prompt.ts'
 import type {
   RoleplayResourceMaterializationInput,
   RoleplayResourceProvider,
@@ -188,6 +188,15 @@ export function roleplayLibraryResourceProviders(libraries: {
       return {
         events: appendCharacterWorldSessionSeed(characterEvents, resolved.worldBinding, libraries.worldInfos),
         title: resolved.detail.displayName,
+      }
+    },
+    projectActor: (selection, descriptor) => {
+      if (selection.variant !== undefined) throw new Error('故事人物绑定暂不使用角色开场变体')
+      const resolved = libraries.characters.resolve(libraryId(descriptor.id, 'character:library:'))
+      if (resolved.detail.archived) throw new Error('请先恢复这个角色，再绑定人物')
+      return {
+        name: resolved.detail.displayName,
+        persona: renderImportedCharacterPrompt(resolved.card, [], []),
       }
     },
   }, {
