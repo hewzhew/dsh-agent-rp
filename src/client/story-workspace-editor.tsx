@@ -1258,6 +1258,8 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
         <h3 style={{ fontSize: 13 }}>执行设置</h3>
         <Field label="同阶段最大并发"><input className="story-studio-input" type="number" min={1} max={8} value={workspace.pipeline.maxParallel}
           onChange={event => { update(current => ({ ...current, pipeline: { ...current.pipeline, maxParallel: Number(event.target.value) } })) }} /></Field>
+        <Field label="研究最多轮数"><input className="story-studio-input" type="number" min={1} max={4} value={workspace.pipeline.researchMaxPasses}
+          onChange={event => { update(current => ({ ...current, pipeline: { ...current.pipeline, researchMaxPasses: Number(event.target.value) } })) }} /></Field>
         <Field label="Worker provider（留空则跟随会话）"><input className="story-studio-input" value={workspace.pipeline.workerModel?.provider ?? ''}
           onChange={event => { update(current => ({ ...current, pipeline: { ...current.pipeline, workerModel: {
             provider: event.target.value,
@@ -1268,7 +1270,7 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
             provider: current.pipeline.workerModel?.provider ?? '',
             model: event.target.value,
           } } })) }} /></Field>
-        <p style={{ color: 'var(--studio-muted)', fontSize: 10, lineHeight: 1.5 }}>研究、人物、导演、分区与编辑保持阶段顺序；同阶段的人物和分区可以并行。</p>
+        <p style={{ color: 'var(--studio-muted)', fontSize: 10, lineHeight: 1.5 }}>研究先读取本地证据，再按需要追查；人物、导演、分区与编辑保持阶段顺序，同阶段的人物和分区可以并行。</p>
         <hr className="story-studio-divider" />
         <button className="story-studio-button story-studio-danger" type="button" disabled={saving} onClick={removeWorkspace}>{deleteArmed ? '再次点击，确认删除故事' : '删除这个故事'}</button>
       </aside>

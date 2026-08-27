@@ -38,7 +38,10 @@ export interface StoryWorkerModelRoute {
 
 /** Execution settings that preserve stage order while parallelizing peers. */
 export interface StoryPipelineSettings {
+  /** Maximum number of same-stage character or output Workers. */
   readonly maxParallel: number
+  /** Maximum research Worker passes, including the initial local-evidence pass. */
+  readonly researchMaxPasses: number
   readonly workerModel?: StoryWorkerModelRoute
 }
 

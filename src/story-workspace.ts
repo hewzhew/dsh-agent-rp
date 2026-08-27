@@ -64,7 +64,7 @@ const AUDIENCES = new Set<StoryAudience>(['director', 'public'])
 const FACT_STATUSES = new Set<StoryFactStatus>(['asserted', 'uncertain', 'refuted'])
 const OUTPUT_KINDS = new Set<StoryOutputKind>(['prose', 'character', 'history'])
 const SOURCE_KINDS = new Set<StorySourceKind>(['original', 'reference', 'research', 'web'])
-const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4 }
+const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4, researchMaxPasses: 2 }
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
 interface StoredStoryCharacter extends Omit<StoryCharacter, 'persona'> {}
@@ -194,21 +194,27 @@ function stringArray(value: unknown, subject: string): readonly string[] {
 function normalizePipeline(value: unknown): StoryPipelineSettings {
   if (value === undefined) return DEFAULT_STORY_PIPELINE
   if (!isRecord(value)) throw new Error('故事流水线设置不是对象')
+  const researchMaxPasses = value.researchMaxPasses === undefined ? DEFAULT_STORY_PIPELINE.researchMaxPasses : value.researchMaxPasses
   if (!Number.isSafeInteger(value.maxParallel) || (value.maxParallel as number) < 1
-    || (value.maxParallel as number) > 8
-    || Object.keys(value).some(key => key !== 'maxParallel' && key !== 'workerModel')) {
+    || (value.maxParallel as number) > 8) {
     throw new Error('故事流水线并发数应为 1 至 8')
   }
-  if (value.workerModel === undefined) return { maxParallel: value.maxParallel as number }
+  if (!Number.isSafeInteger(researchMaxPasses) || (researchMaxPasses as number) < 1
+    || (researchMaxPasses as number) > 4) throw new Error('故事研究轮数应为 1 至 4')
+  if (Object.keys(value).some(key => key !== 'maxParallel' && key !== 'researchMaxPasses' && key !== 'workerModel')) {
+    throw new Error('故事流水线设置字段无效')
+  }
+  const normalized = { maxParallel: value.maxParallel as number, researchMaxPasses: researchMaxPasses as number }
+  if (value.workerModel === undefined) return normalized
   if (!isRecord(value.workerModel)
     || Object.keys(value.workerModel).some(key => key !== 'provider' && key !== 'model')) {
     throw new Error('故事 Worker 模型路由字段无效')
   }
   const provider = cleanLabel(value.workerModel.provider, '故事 Worker provider', 200)
   const model = cleanLabel(value.workerModel.model, '故事 Worker model', 200)
-  if (provider === '' && model === '') return { maxParallel: value.maxParallel as number }
+  if (provider === '' && model === '') return normalized
   if (provider === '' || model === '') throw new Error('故事 Worker provider 与 model 必须同时填写')
-  return { maxParallel: value.maxParallel as number, workerModel: { provider, model } }
+  return { ...normalized, workerModel: { provider, model } }
 }
 
 function normalizeCharacter(value: unknown): StoryCharacter {

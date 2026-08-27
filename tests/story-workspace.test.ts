@@ -52,13 +52,13 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   const nodeCitationId = createStoryCitationId()
   const factCitationId = createStoryCitationId()
 
-  assert.deepEqual(created.pipeline, { maxParallel: 4 })
+  assert.deepEqual(created.pipeline, { maxParallel: 4, researchMaxPasses: 2 })
   const saved = store.save({
     format: 1,
     id: created.id,
     revision: created.revision,
     name: '长夜',
-    pipeline: { maxParallel: 3, workerModel: { provider: 'fast', model: 'story' } },
+    pipeline: { maxParallel: 3, researchMaxPasses: 3, workerModel: { provider: 'fast', model: 'story' } },
     graph: {
       activeNodeId: nodeId,
       nodes: [{
@@ -123,6 +123,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   assert.equal(saved.revision, 1)
   assert.deepEqual(saved.pipeline, {
     maxParallel: 3,
+    researchMaxPasses: 3,
     workerModel: { provider: 'fast', model: 'story' },
   })
   assert.equal(saved.outputs[0]?.characterId, characterId)
@@ -160,6 +161,10 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
       target: { kind: 'fact', factId: createStoryFactId() },
     }],
   }), /资料引用指向未知人物事实/u)
+  assert.throws(() => store.save({
+    ...editable(saved),
+    pipeline: { ...saved.pipeline, researchMaxPasses: 5 },
+  }), /故事研究轮数应为 1 至 4/u)
   assert.throws(() => store.save({ ...editable(saved), revision: 0, name: '过期编辑' }), /当前 revision 为 1/u)
 })
 
@@ -199,6 +204,7 @@ test('migrates one format 0 workspace into the typed story model and removes obs
 
   assert.equal(migrated.format, 1)
   assert.equal(migrated.revision, 5)
+  assert.deepEqual(migrated.pipeline, { maxParallel: 2, researchMaxPasses: 2 })
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'arc')?.content, '第一幕在车站重逢。')
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'secret')?.content, '旧车票将在终章回收。')
   assert.equal(migrated.graph.nodes.find(node => node.lifecycle === 'suggested')?.content, '让列车提前进站。')
@@ -529,7 +535,7 @@ test('retrieves the most relevant bounded original excerpts before model researc
   const created = store.create({ format: 1, name: '原著检索' })
   const workspace = store.save({
     ...editable(created),
-    pipeline: { maxParallel: 2 },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
     sources: [
       {
         id: createStorySourceId(),
@@ -549,6 +555,7 @@ test('retrieves the most relevant bounded original excerpts before model researc
   })
 
   const result = searchStoryWorkspaceSources(workspace, '阿梨手里的怀表和车票', 120)
+  assert.match(result, /### \[local:source-[0-9a-f-]+:\d+\]/u)
   assert.match(result, /第二卷/u)
   assert.match(result, /第三章 · 第 2 段/u)
   assert.match(result, /旧车票藏进怀表/u)

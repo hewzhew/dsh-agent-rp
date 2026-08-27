@@ -27,6 +27,7 @@ const sectionId = 'output-00000000-0000-4000-8000-000000000001'
 const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
+const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
 
 function workspace(): StoryWorkspaceSnapshot {
   return {
@@ -36,7 +37,7 @@ function workspace(): StoryWorkspaceSnapshot {
     revision: 3,
     createdAt: 1,
     updatedAt: 2,
-    pipeline: { maxParallel: 2, workerModel: { provider: 'worker-fixture', model: 'worker-model' } },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2, workerModel: { provider: 'worker-fixture', model: 'worker-model' } },
     graph: {
       activeNodeId,
       nodes: [
@@ -123,7 +124,10 @@ function workspace(): StoryWorkspaceSnapshot {
       { id: characterSectionId, name: '阿梨视角', kind: 'character', enabled: true, characterId: aliceId, instructions: '只写阿梨能表现出的内容。' },
       { id: historySectionId, name: '公开档案', kind: 'history', enabled: true, instructions: '使用简短时间线。' },
     ],
-    sources: [{ id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' }],
+    sources: [
+      { id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' },
+      { id: originalSourceId, name: '终章原著', kind: 'original', enabled: true, content: '鸦青印记只在列车终章显现。' },
+    ],
     citations: [],
     researchInbox: [],
   }
@@ -137,7 +141,8 @@ test('runs logged story stages while keeping each character request privately sc
   })
   const characterBodies: string[] = []
   const sectionSystems: string[] = []
-  let researchBody = ''
+  const researchBodies: string[] = []
+  let directorBody = ''
   let editorBody = ''
   let webQuery = ''
   let calls = 0
@@ -173,13 +178,36 @@ test('runs logged story stages while keeping each character request privately sc
         const body = JSON.stringify(options.messages)
         let text: string
         if (system.includes('剧情研究 Worker')) {
-          researchBody = body
-          text = '研究简报'
+          researchBodies.push(body)
+          if (researchBodies.length === 1) {
+            text = JSON.stringify({
+              findings: [{ certainty: 'fact', text: '两人已经看见雨停。', evidence: ['story:public-history'] }],
+              followUps: [
+                { kind: 'local', query: '鸦青印记' },
+                { kind: 'web', query: '旧车站徽章 原著设定' },
+              ],
+            })
+          } else {
+            const webReference = body.match(/web:\d+:1/u)?.[0] ?? 'web:missing'
+            const localReference = body.match(/local:source-[0-9a-f-]+:1/u)?.[0] ?? 'local:missing'
+            text = JSON.stringify({
+              findings: [
+                { certainty: 'fact', text: '两人已经看见雨停。', evidence: ['story:public-history'] },
+                { certainty: 'fact', text: '徽章属于旧车站。', evidence: [webReference] },
+                { certainty: 'fact', text: '鸦青印记只在终章显现。', evidence: [localReference] },
+                { certainty: 'fact', text: '无法核验的徽章传闻。', evidence: ['web:missing:1'] },
+              ],
+              followUps: [{ kind: 'web', query: '超过轮数上限的查询' }],
+            })
+          }
         }
         else if (system.includes('指定人物认知')) {
           characterBodies.push(body)
           text = body.includes('阿梨知道徽章') ? '阿梨先观察徽章。' : '柏舟避开车票话题。'
-        } else if (system.includes('剧情导演 Worker')) text = '导演方案'
+        } else if (system.includes('剧情导演 Worker')) {
+          directorBody = body
+          text = '导演方案'
+        }
         else if (system.includes('分区的 ')) {
           sectionSystems.push(system)
           text = body.includes('kind=\\"character\\"') ? '阿梨谨慎地观察徽章。'
@@ -220,13 +248,21 @@ test('runs logged story stages while keeping each character request privately sc
 
   const result = await runStoryTurnPipeline(input)
 
-  assert.equal(calls, 8)
+  assert.equal(calls, 9)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(characterBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
-  assert.match(webQuery, /玩家举起徽章/u)
-  assert.match(researchBody, /徽章属于旧车站/u)
+  assert.match(webQuery, /旧车站徽章 原著设定/u)
+  assert.equal(researchBodies.length, 2)
+  assert.match(researchBodies[0]!, /story:public-history/u)
+  assert.doesNotMatch(researchBodies[0]!, /鸦青印记只在列车终章显现/u)
+  assert.match(researchBodies[1]!, /徽章属于旧车站/u)
+  assert.match(researchBodies[1]!, /鸦青印记只在列车终章显现/u)
+  assert.match(directorBody, /明确事实.*徽章属于旧车站/u)
+  assert.match(directorBody, /明确事实.*鸦青印记只在终章显现/u)
+  assert.match(directorBody, /不确定.*无法核验的徽章传闻.*无可核验依据/u)
+  assert.doesNotMatch(webQuery, /超过轮数上限/u)
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
@@ -240,15 +276,82 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(result.finalDraft, /阿梨看向徽章/u)
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 8)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 8)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 9)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 9)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
+  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-') || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 8)
+  assert.equal(calls, 9)
+})
+
+test('stops malformed research output and falls back to exact local evidence', async () => {
+  const session = Session.create(SessionId('story-research-fallback'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const inputWorkspace: StoryWorkspaceSnapshot = {
+    ...base,
+    pipeline: { ...base.pipeline, researchMaxPasses: 4 },
+    graph: { nodes: [], edges: [] },
+    characters: [],
+    facts: [],
+    events: [],
+    outputs: [],
+    sources: [{
+      id: originalSourceId,
+      name: '终章原著',
+      kind: 'original',
+      enabled: true,
+      content: '鸦青印记只在列车终章显现。',
+    }],
+  }
+  let researchCalls = 0
+  let directorBody = ''
+  const fake = {
+    get() { throw new Error('不应尝试网络查询') },
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages: readonly unknown[] }) {
+        const system = options.system ?? ''
+        let text = '最终正文'
+        if (system.includes('剧情研究 Worker')) {
+          researchCalls += 1
+          text = '不是结构化研究决策'
+        } else if (system.includes('剧情导演 Worker')) {
+          directorBody = JSON.stringify(options.messages)
+          text = '依据原著继续。'
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+
+  await runStoryTurnPipeline({
+    ctx: fake,
+    agent,
+    workspace: inputWorkspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '查找鸦青印记。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(researchCalls, 1)
+  assert.match(directorBody, /\[local:source-[0-9a-f-]+:1\].*鸦青印记只在列车终章显现/u)
+  assert.equal(session.events.some(event => event.type === 'agent-rp/story-web-search-request'), false)
 })
 
 test('materializes continuity from the actually visible reply instead of the prepared draft', async (context) => {
@@ -263,7 +366,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     id: created.id,
     revision: 0,
     name: '实际正文沉淀',
-    pipeline: { maxParallel: 2 },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
     graph: {
       activeNodeId: nodeId,
       nodes: [{
