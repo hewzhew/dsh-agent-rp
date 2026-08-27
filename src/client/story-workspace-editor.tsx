@@ -403,19 +403,6 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
   const patchCharacter = (transform: (value: StoryCharacter) => StoryCharacter): void => {
     update(current => ({ ...current, characters: current.characters.map(item => item.id === character.id ? transform(item) : item) }))
   }
-  const patchFact = (factId: string, transform: (value: StoryFact) => StoryFact): void => {
-    update(current => ({ ...current, facts: current.facts.map(item => item.id === factId ? transform(item) : item) }))
-  }
-  const addFact = (): void => {
-    update(current => ({ ...current, facts: [...current.facts, {
-      id: `fact-${createClientOpaqueUuid()}`,
-      text: '新事实',
-      status: 'asserted',
-      audience: 'director',
-      knownBy: [character.id],
-      source: { kind: 'manual' },
-    }] }))
-  }
   return <>
     <h2>{character.name}</h2>
     <div className="story-studio-inspector-subtitle">人物档案与可追溯认知</div>
@@ -431,42 +418,106 @@ function CharacterInspector({ workspace, character, update, perspectiveId, previ
     </div>
     {previewId === character.id && <pre className="story-studio-preview">{compileCharacterPreview(workspace, character)}</pre>}
     <hr className="story-studio-divider" />
-    <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between' }}><strong style={{ fontSize: 12 }}>此人物知道的事实</strong>
-      <button className="story-studio-icon-button" type="button" aria-label="添加人物事实" onClick={addFact}>＋</button></div>
-    {facts.length === 0 && <p style={{ color: 'var(--studio-muted)', fontSize: 11 }}>还没有记录可供此人物使用的事实。</p>}
-    {facts.map(fact => <div className="story-studio-fact" key={fact.id}>
-      <textarea className="story-studio-input" rows={3} value={fact.text}
-        onChange={event => { patchFact(fact.id, current => ({ ...current, text: event.target.value })) }} />
-      <div className="story-studio-field-row" style={{ marginTop: 7 }}>
-        <select className="story-studio-input" aria-label="事实状态" value={fact.status}
-          onChange={event => { patchFact(fact.id, current => ({ ...current, status: event.target.value as StoryFact['status'] })) }}>
-          <option value="asserted">确认</option><option value="uncertain">不确定</option><option value="refuted">已否定</option>
-        </select>
-        <select className="story-studio-input" aria-label="事实可见范围" value={fact.audience}
-          onChange={event => { patchFact(fact.id, current => ({ ...current, audience: event.target.value as StoryFact['audience'] })) }}>
-          <option value="director">导演</option><option value="public">公开</option>
-        </select>
-      </div>
-      <small>{fact.source.kind === 'manual' ? '来源：玩家记录' : `来源：事件证据「${fact.source.evidence}」`}</small>
-      <button className="story-studio-button story-studio-danger" style={{ marginTop: 7 }} type="button"
-        onClick={() => { update(current => ({
-          ...current,
-          facts: current.facts.filter(item => item.id !== fact.id),
-          citations: current.citations.map(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id
-            ? citationWithoutTarget(citation) : citation),
-        })) }}>删除事实</button>
-    </div>)}
+    <div className="story-character-knowledge-summary"><strong>{facts.length} 条人物认知</strong>
+      <span>认知内容、事件证据和知情人物在中央认知矩阵中统一编辑。</span></div>
     <hr className="story-studio-divider" />
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除人物</button>
   </>
 }
 
-function EventInspector({ workspace, event, update, onDelete }: {
+function CharacterKnowledgeView({ workspace, selectedCharacterId, update, selectCharacter, selectEvent, addCharacter }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly selectedCharacterId: string | undefined
+  readonly update: UpdateWorkspace
+  readonly selectCharacter: (id: string) => void
+  readonly selectEvent: (id: string) => void
+  readonly addCharacter: () => void
+}) {
+  const patchFact = (factId: string, transform: (value: StoryFact) => StoryFact): void => {
+    update(current => ({ ...current, facts: current.facts.map(item => item.id === factId ? transform(item) : item) }))
+  }
+  const addFact = (): void => {
+    const characterId = selectedCharacterId !== undefined
+      && workspace.characters.some(character => character.id === selectedCharacterId)
+      ? selectedCharacterId
+      : workspace.characters[0]?.id
+    if (characterId === undefined) return
+    update(current => ({ ...current, facts: [...current.facts, {
+      id: `fact-${createClientOpaqueUuid()}`,
+      text: '新事实',
+      status: 'asserted',
+      audience: 'director',
+      knownBy: [characterId],
+      source: { kind: 'manual' },
+    }] }))
+  }
+  const deleteFact = (factId: string): void => {
+    update(current => ({
+      ...current,
+      facts: current.facts.filter(fact => fact.id !== factId),
+      citations: current.citations.map(citation => citation.target?.kind === 'fact' && citation.target.factId === factId
+        ? citationWithoutTarget(citation) : citation),
+    }))
+  }
+  const knowledgeColumns = `minmax(220px, 1fr) repeat(${String(workspace.characters.length)}, minmax(70px, 86px)) 94px`
+  return <div className="story-studio-view story-knowledge-view">
+    <div className="story-studio-view-heading"><div><h1>人物与认知</h1><p>每个勾选格都决定下一轮哪个人物 Worker 能使用这条事实。</p></div>
+      <div className="story-studio-toolbar"><button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button>
+        <button className="story-studio-button story-studio-button-primary" disabled={workspace.characters.length === 0} type="button" onClick={addFact}>＋ 添加事实</button></div></div>
+    <div className="story-character-strip">{workspace.characters.map(character => {
+      const factCount = workspace.facts.filter(fact => fact.status !== 'refuted' && fact.knownBy.includes(character.id)).length
+      return <button className="story-character-card" data-selected={selectedCharacterId === character.id} key={character.id} type="button"
+        onClick={() => { selectCharacter(character.id) }}><span>{character.name}</span><small>{factCount} 条当前认知 · 查看 Persona 与 Worker 输入</small></button>
+    })}{workspace.characters.length === 0 && <div className="story-studio-empty"><span>先添加人物，再为每个人建立独立认知。</span></div>}</div>
+    {workspace.characters.length > 0 && <section className="story-knowledge-ledger">
+      <div className="story-knowledge-ledger-heading"><div><strong>认知矩阵</strong><span>事件参与不等于知情；只有下方明确勾选的人物会收到对应事实。</span></div>
+        <span>{workspace.facts.length} 条事实</span></div>
+      <div className="story-knowledge-scroll">
+        <div className="story-knowledge-row story-knowledge-row-head" style={{ gridTemplateColumns: knowledgeColumns }}>
+          <span>事实与来源</span>{workspace.characters.map(character => <span data-selected={selectedCharacterId === character.id} key={character.id}>{character.name}</span>)}<span>状态</span>
+        </div>
+        {workspace.facts.map(fact => {
+          const sourceEventId = fact.source.kind === 'event' ? fact.source.eventId : undefined
+          const sourceEvent = sourceEventId === undefined ? undefined : workspace.events.find(event => event.id === sourceEventId)
+          return <article className="story-knowledge-row" data-highlighted={selectedCharacterId !== undefined && fact.knownBy.includes(selectedCharacterId)}
+            key={fact.id} style={{ gridTemplateColumns: knowledgeColumns }}>
+            <div className="story-knowledge-fact-copy"><textarea className="story-studio-input" rows={2} value={fact.text}
+              aria-label="人物事实" onChange={event => { patchFact(fact.id, current => ({ ...current, text: event.target.value })) }} />
+              {sourceEvent === undefined
+                ? <small>玩家记录</small>
+                : <button className="story-citation-link" type="button" onClick={() => { selectEvent(sourceEvent.id) }}>
+                  第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗
+                </button>}
+            </div>
+            {workspace.characters.map(character => <label className="story-knowledge-person" data-selected={selectedCharacterId === character.id} key={character.id}>
+              <span className="story-knowledge-person-name">{character.name}</span>
+              <input aria-label={`${character.name}知道：${fact.text.slice(0, 48)}`} type="checkbox" checked={fact.knownBy.includes(character.id)}
+                onChange={event => { patchFact(fact.id, current => ({
+                  ...current,
+                  knownBy: event.target.checked ? [...new Set([...current.knownBy, character.id])] : current.knownBy.filter(id => id !== character.id),
+                })) }} />
+            </label>)}
+            <div className="story-knowledge-state"><select className="story-studio-input" aria-label="事实状态" value={fact.status}
+              onChange={event => { patchFact(fact.id, current => ({ ...current, status: event.target.value as StoryFact['status'] })) }}>
+              <option value="asserted">确认</option><option value="uncertain">不确定</option><option value="refuted">已否定</option>
+            </select><button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除事实：${fact.text.slice(0, 48)}`}
+              onClick={() => { deleteFact(fact.id) }}>×</button></div>
+          </article>
+        })}
+        {workspace.facts.length === 0 && <div className="story-studio-empty"><span>完成故事回合或手动添加事实后，人物之间的认知差异会显示在这里。</span></div>}
+      </div>
+    </section>}
+  </div>
+}
+
+function EventInspector({ workspace, event, update, onOpenKnowledge, onDelete }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly event: StoryEvent
   readonly update: UpdateWorkspace
+  readonly onOpenKnowledge: () => void
   readonly onDelete: () => void
 }) {
+  const observations = workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id)
   const patch = (transform: (value: StoryEvent) => StoryEvent): void => {
     update(current => ({ ...current, events: current.events.map(item => item.id === event.id ? transform(item) : item) }))
   }
@@ -487,6 +538,15 @@ function EventInspector({ workspace, event, update, onDelete }: {
         })) }} />{character.name}
       </label>)}
     </div></div>
+    <hr className="story-studio-divider" />
+    <div className="story-event-observations"><strong>由此事件形成的认知</strong>
+      {observations.map(fact => <div className="story-studio-fact" key={fact.id}><p>{fact.text}</p><small>
+        {fact.knownBy.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '尚未分配给人物'}
+      </small></div>)}
+      {observations.length === 0 && <p>这次事件还没有形成可供人物使用的观察。</p>}
+      <button className="story-studio-button" type="button" onClick={onOpenKnowledge}>在认知矩阵中核对</button>
+    </div>
+    <hr className="story-studio-divider" />
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除事件与其派生事实</button>
   </>
 }
@@ -1104,7 +1164,8 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
         : selectedCharacter !== undefined ? <CharacterInspector workspace={workspace} character={selectedCharacter} update={update}
           perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
           onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
-          : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update} onDelete={() => { deleteEvent(selectedEvent.id) }} />
+          : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update}
+            onOpenKnowledge={() => { setView('characters'); setSelection(undefined) }} onDelete={() => { deleteEvent(selectedEvent.id) }} />
             : selectedSource !== undefined ? <SourceInspector source={selectedSource} update={update} onDelete={() => {
               update(current => ({
                 ...current,
@@ -1136,20 +1197,13 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
         key={event.id} onClick={() => { setSelection({ kind: 'event', id: event.id }) }}>
         <h3>第 {event.turn} 回合 · {event.title}</h3><p>{event.summary}</p>
         <div className="story-studio-card-meta"><span>{event.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '未标注参与人物'}</span>
+          <span>{workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id).length} 条人物观察</span>
           {event.nodeId !== undefined && <span>关联：{workspace.graph.nodes.find(node => node.id === event.nodeId)?.title ?? '剧情节点'}</span>}</div>
       </article>)}{events.length === 0 && <div className="story-studio-empty"><span>第一轮故事完成后，事件会出现在这里。</span></div>}</div>
     </div>
   } else if (view === 'characters') {
-    main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>人物与认知</h1><p>每个人物只依据自己获得过的事实决定行动。</p></div><button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button></div>
-      <div className="story-studio-card-list">{workspace.characters.map(character => {
-        const facts = workspace.facts.filter(fact => fact.knownBy.includes(character.id) && fact.status !== 'refuted')
-        return <article className="story-studio-card" data-selected={selection?.kind === 'character' && selection.id === character.id}
-          key={character.id} onClick={() => { setSelection({ kind: 'character', id: character.id }) }}>
-          <h3>{character.name}</h3><p>{character.persona || '尚未填写 Persona'}</p>
-          <div className="story-studio-card-meta"><span>{facts.length} 条当前认知</span><span>{workspace.graph.nodes.filter(node => node.participantIds.includes(character.id)).length} 个参与节点</span></div>
-        </article>
-      })}{workspace.characters.length === 0 && <div className="story-studio-empty"><span>添加第一个人物，为其建立独立 Persona 与认知来源。</span></div>}</div>
-    </div>
+    main = <CharacterKnowledgeView workspace={workspace} selectedCharacterId={selectedCharacter?.id} update={update}
+      selectCharacter={id => { setSelection({ kind: 'character', id }) }} selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
