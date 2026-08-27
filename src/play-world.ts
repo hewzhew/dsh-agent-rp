@@ -13,6 +13,22 @@ export interface PlayWorldContext {
   readonly characters: readonly StoryCharacter[]
 }
 
+/** One legal character choice whose executable payload stays inside its owning module. */
+export interface PlayWorldCharacterAction {
+  readonly id: string
+  readonly label: string
+  readonly description: string
+  readonly action: unknown
+}
+
+/** One module-defined character turn that may require several consecutive choices. */
+export interface PlayWorldCharacterTurn {
+  readonly id: string
+  readonly characterId: string
+  readonly instruction: string
+  readonly actions: readonly PlayWorldCharacterAction[]
+}
+
 /** Host implementation of one typed, deterministic world transition system. */
 export interface PlayWorldModule {
   readonly descriptor: PlayWorldModuleDescriptor
@@ -22,6 +38,8 @@ export interface PlayWorldModule {
   normalize(value: unknown, context: PlayWorldContext): PlayWorldSnapshot
   /** Apply one validated action and return the complete next snapshot. */
   dispatch(snapshot: PlayWorldSnapshot, action: unknown, context: PlayWorldContext): PlayWorldSnapshot
+  /** Return only the legal choices for the character currently controlling the world. */
+  characterTurn(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldCharacterTurn | undefined
   /** Project only knowledge available to one character Worker. */
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project authoritative state for the director Worker. */

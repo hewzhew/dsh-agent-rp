@@ -1399,8 +1399,8 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onA
       <p>棋盘是权威状态；正文和 Agent 只能读取投影，不能靠叙述改写棋子位置。</p></div>
       <div className="story-play-turn"><small>{state.winnerId === undefined ? '当前行动' : '棋局结束'}</small><strong>{state.winnerId === undefined ? currentName : `${name(state.winnerId)}获胜`}</strong>
         <div className="story-play-turn-actions">
-          {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button story-studio-button-primary" type="button"
-            disabled={busy || dirty} onClick={() => { onAction({ type: 'roll', actorId: state.currentPlayerId }) }}>掷骰</button>}
+          {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button" type="button"
+            disabled={busy || dirty} onClick={() => { onAction({ type: 'roll', actorId: state.currentPlayerId }) }}>亲自掷骰</button>}
           {state.pendingRoll !== undefined && <span className="story-die" aria-label={`骰点 ${state.pendingRoll.value}`}>{state.pendingRoll.value}</span>}
           <button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
             if (!restartArmed) {
@@ -1414,14 +1414,14 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onA
       </div>
     </div>
     {sessionAction !== undefined && <section className="story-play-session-action">
-      <div className="story-play-session-copy"><strong>{sessionAction === 'start' ? '开始第一回合' : '继续这一回合'}</strong>
-        <span>{latestEvent === undefined ? '人物会依据各自掌握的信息行动，结果会写入正文与故事记录。' : `最近发生：${latestEvent.title}`}</span></div>
-      <label className="story-play-session-input"><span>这一回合想怎样继续？</span><textarea value={turnDirection} maxLength={4_000}
-        placeholder="可以留空，让人物从最近的世界事件自然行动；也可以写一句方向。"
+      <div className="story-play-session-copy"><strong>{sessionAction === 'start' ? '让人物开始第一回合' : `让${currentName}行动`}</strong>
+        <span>{latestEvent === undefined ? '当前人物只会从规则程序给出的合法动作中选择；结算后再写成场面。' : `从“${latestEvent.title}”之后继续，由规则程序结算下一步。`}</span></div>
+      <label className="story-play-session-input"><span>希望这一回合怎样发展？</span><textarea value={turnDirection} maxLength={4_000}
+        placeholder="可以留空，让当前人物依据自己的认知选择；也可以补充一句方向。"
         onChange={event => { setTurnDirection(event.target.value) }} /></label>
       <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || dirty}
         onClick={() => { onAdvanceSession(resolveStoryTurnRequest(workspace, turnDirection)) }}>
-        {sessionAction === 'start' ? '开始第一回合' : '继续这一回合'}
+        {sessionAction === 'start' ? '开始游玩' : `让${currentName}行动并续写`}
       </button>
     </section>}
     {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进棋局。</div>}
@@ -1451,7 +1451,7 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onA
             const location = piece.status === 'base' ? '基地' : piece.status === 'home' ? '已到达' : `航线 ${piece.steps}`
             return <button type="button" key={piece.id} data-legal={legal} disabled={!legal || busy || dirty}
               onClick={() => { onAction({ type: 'move', actorId: playerId, pieceId: piece.id }) }}>
-              <span>{piece.number}</span><small>{location}</small>{legal && <b>移动</b>}
+              <span>{piece.number}</span><small>{location}</small>{legal && <b>亲自移动</b>}
             </button>
           })}</div>
         </section>

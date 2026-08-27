@@ -219,6 +219,19 @@ export interface StoryCitation {
   readonly target?: StoryCitationTarget
 }
 
+/** Durable proof that one model-selected world action was applied exactly once. */
+export interface StoryWorldActionReceipt {
+  readonly key: string
+  readonly runKey: string
+  readonly worldInstanceId: string
+  readonly cycleId: string
+  readonly sequence: number
+  readonly characterId: string
+  readonly actionId: string
+  readonly resultEventSeq: number
+  readonly eventSequences: readonly number[]
+}
+
 /** Coherent revision returned by local storage and HTTP reads. */
 export interface StoryWorkspaceSnapshot {
   readonly format: 2
@@ -238,6 +251,8 @@ export interface StoryWorkspaceSnapshot {
   readonly researchInbox: readonly StoryResearchItem[]
   /** Executable authoritative world; mutations use the dedicated action endpoint. */
   readonly world?: PlayWorldSnapshot
+  /** Recent idempotency receipts for character-selected executable-world actions. */
+  readonly worldActionReceipts?: readonly StoryWorldActionReceipt[]
 }
 
 /** Lightweight workspace list item. */

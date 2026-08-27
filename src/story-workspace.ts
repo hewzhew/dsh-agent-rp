@@ -50,6 +50,7 @@ import type {
   StorySourceKind,
   StorySuggestionEndpoint,
   StoryTurnMaterialization,
+  StoryWorldActionReceipt,
   StoryWorkspaceCreateRequest,
   StoryWorkspaceSaveRequest,
   StoryWorkspaceSnapshot,
@@ -71,6 +72,7 @@ const RESEARCH_ID_PATTERN = new RegExp(`^research-${UUID_SUFFIX}$`, 'u')
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 const MAX_WORKSPACE_BYTES = 16 * 1024 * 1024
 const MAX_CITATION_BYTES = 32 * 1024
+const MAX_WORLD_ACTION_RECEIPTS = 256
 const NODE_KINDS = new Set<StoryNodeKind>(['arc', 'beat', 'secret'])
 const NODE_LIFECYCLES = new Set<StoryNodeLifecycle>(['canonical', 'suggested'])
 const NODE_STATUSES = new Set<StoryNodeStatus>(['planned', 'active', 'completed', 'dropped'])
@@ -110,6 +112,7 @@ interface StoredStoryWorkspace {
   readonly citations: readonly StoryCitation[]
   readonly researchInbox: readonly StoryResearchItem[]
   readonly world?: PlayWorldSnapshot
+  readonly worldActionReceipts?: readonly StoryWorldActionReceipt[]
 }
 
 interface LegacyManifest {
@@ -140,6 +143,18 @@ interface LegacyManifest {
 export interface StoryWorkspaceStoreOptions {
   readonly root?: string
   readonly worlds?: PlayWorldRegistry
+}
+
+/** One model-selected legal action guarded by a stable story-turn idempotency key. */
+export interface StoryWorldCharacterActionRequest {
+  readonly key: string
+  readonly runKey: string
+  readonly revision: number
+  readonly cycleId: string
+  readonly sequence: number
+  readonly characterId: string
+  readonly actionId: string
+  readonly resultEventSeq: number
 }
 
 /** Public facts from the current scene that every participating character may observe. */
@@ -176,6 +191,31 @@ function cleanLabel(value: unknown, subject: string, max = 240): string {
   const result = value.trim()
   if (result.length > max) throw new Error(`${subject}不能超过 ${String(max)} 个字符`)
   return result
+}
+
+function requiredLabel(value: unknown, subject: string, max = 240): string {
+  const result = cleanLabel(value, subject, max)
+  if (result === '') throw new Error(`${subject}不能为空`)
+  return result
+}
+
+function normalizeWorldActionReceipt(value: unknown, characterIds: ReadonlySet<string>): StoryWorldActionReceipt {
+  if (!isRecord(value) || !Array.isArray(value.eventSequences)) throw new Error('世界动作收据字段无效')
+  const characterId = requiredLabel(value.characterId, '世界动作人物')
+  assertId(characterId, CHARACTER_ID_PATTERN, '世界动作人物')
+  if (!characterIds.has(characterId)) throw new Error('世界动作收据指向未知人物')
+  if (value.eventSequences.length > 64) throw new Error('单次世界动作事件过多')
+  return {
+    key: requiredLabel(value.key, '世界动作收据 key'),
+    runKey: requiredLabel(value.runKey, '世界动作运行 key'),
+    worldInstanceId: requiredLabel(value.worldInstanceId, '世界实例 id'),
+    cycleId: requiredLabel(value.cycleId, '世界回合 id'),
+    sequence: safeInteger(value.sequence, '世界动作序号'),
+    characterId,
+    actionId: requiredLabel(value.actionId, '世界动作 id'),
+    resultEventSeq: safeInteger(value.resultEventSeq, '世界动作决策事件序号'),
+    eventSequences: value.eventSequences.map(sequence => safeInteger(sequence, '世界事件序号')),
+  }
 }
 
 function emptyCharacterProfile(description = ''): StoryCharacterProfile {
@@ -604,6 +644,17 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   assertUnique(characters.map(character => character.id), '人物')
   const characterIds = new Set(characters.map(character => character.id))
   const world = value.world === undefined ? undefined : worlds.normalize(value.world, { characters })
+  const worldActionReceipts = value.worldActionReceipts === undefined
+    ? []
+    : Array.isArray(value.worldActionReceipts)
+      ? value.worldActionReceipts.map(receipt => normalizeWorldActionReceipt(receipt, characterIds))
+      : (() => { throw new Error('世界动作收据字段无效') })()
+  if (worldActionReceipts.length > MAX_WORLD_ACTION_RECEIPTS) throw new Error('世界动作收据过多')
+  assertUnique(worldActionReceipts.map(receipt => receipt.key), '世界动作收据')
+  if (world === undefined && worldActionReceipts.length > 0
+    || world !== undefined && worldActionReceipts.some(receipt => receipt.worldInstanceId !== world.instanceId)) {
+    throw new Error('世界动作收据不属于当前世界实例')
+  }
   const nodes = value.graph.nodes.map(node => normalizeNode(node, characterIds))
   assertUnique(nodes.map(node => node.id), '故事节点')
   const nodeIds = new Set(nodes.map(node => node.id))
@@ -677,6 +728,7 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
     .concat(researchInbox.flatMap(item => [item.query, item.title, item.snippet]))
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
     + (world === undefined ? 0 : Buffer.byteLength(JSON.stringify(world), 'utf8'))
+    + Buffer.byteLength(JSON.stringify(worldActionReceipts), 'utf8')
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
     format: 2,
@@ -695,6 +747,7 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
     citations,
     researchInbox,
     ...(world === undefined ? {} : { world }),
+    ...(worldActionReceipts.length === 0 ? {} : { worldActionReceipts }),
   }
 }
 
@@ -766,6 +819,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
     citations: snapshot.citations,
     researchInbox: snapshot.researchInbox,
     ...(snapshot.world === undefined ? {} : { world: snapshot.world }),
+    ...(snapshot.worldActionReceipts === undefined ? {} : { worldActionReceipts: snapshot.worldActionReceipts }),
   }
 }
 
@@ -1145,6 +1199,7 @@ export class StoryWorkspaceStore {
       createdAt: current.createdAt,
       updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       ...(current.world === undefined ? {} : { world: current.world }),
+      ...(current.worldActionReceipts === undefined ? {} : { worldActionReceipts: current.worldActionReceipts }),
     }, this.worlds)
     this.writeSnapshot(snapshot)
     this.removeUnreferenced(current, snapshot)
@@ -1162,7 +1217,7 @@ export class StoryWorkspaceStore {
     this.assertRevision(current, request.revision)
     if (request.format !== 0 || typeof request.moduleId !== 'string') throw new Error('游玩世界安装请求无效')
     const world = this.worlds.get(request.moduleId).create({ characters: current.characters })
-    return this.commitWorld(current, world)
+    return this.commitWorld(current, world, [])
   }
 
   /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */
@@ -1208,6 +1263,7 @@ export class StoryWorkspaceStore {
       events: [],
       citations,
       world,
+      worldActionReceipts: [],
     }, this.worlds)
     this.writeSnapshot(snapshot)
     this.removeUnreferenced(current, snapshot)
@@ -1222,6 +1278,47 @@ export class StoryWorkspaceStore {
     const module = this.worlds.get(current.world.moduleId)
     const world = module.dispatch(current.world, request.action, { characters: current.characters })
     return this.commitWorld(current, world)
+  }
+
+  /** Apply one module-advertised character choice once, including across pipeline retries. */
+  dispatchWorldCharacterAction(id: string, request: StoryWorldCharacterActionRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    const existing = current.worldActionReceipts?.find(receipt => receipt.key === request.key)
+    if (existing !== undefined) {
+      if (existing.runKey !== request.runKey || existing.cycleId !== request.cycleId
+        || existing.sequence !== request.sequence || existing.characterId !== request.characterId
+        || existing.actionId !== request.actionId || existing.resultEventSeq !== request.resultEventSeq) {
+        throw new Error('世界动作幂等键已用于另一项动作')
+      }
+      return current
+    }
+    this.assertRevision(current, request.revision)
+    if (current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
+    const module = this.worlds.get(current.world.moduleId)
+    const turn = module.characterTurn(current.world, { characters: current.characters })
+    if (turn === undefined || turn.id !== request.cycleId || turn.characterId !== request.characterId) {
+      throw new Error('人物选择的世界回合已经变化')
+    }
+    const action = turn.actions.find(candidate => candidate.id === request.actionId)
+    if (action === undefined) throw new Error('人物选择的世界动作不再合法')
+    const world = module.dispatch(current.world, action.action, { characters: current.characters })
+    if (world.instanceId !== current.world.instanceId || world.events.length < current.world.events.length
+      || current.world.events.some((event, index) => world.events[index]?.id !== event.id)) {
+      throw new Error('世界动作没有保留既有世界事件')
+    }
+    const receipt: StoryWorldActionReceipt = {
+      key: requiredLabel(request.key, '世界动作收据 key'),
+      runKey: requiredLabel(request.runKey, '世界动作运行 key'),
+      worldInstanceId: current.world.instanceId,
+      cycleId: requiredLabel(request.cycleId, '世界回合 id'),
+      sequence: safeInteger(request.sequence, '世界动作序号'),
+      characterId: request.characterId,
+      actionId: requiredLabel(request.actionId, '世界动作 id'),
+      resultEventSeq: safeInteger(request.resultEventSeq, '世界动作决策事件序号'),
+      eventSequences: world.events.slice(current.world.events.length).map(event => event.sequence),
+    }
+    const receipts = [...(current.worldActionReceipts ?? []), receipt].slice(-MAX_WORLD_ACTION_RECEIPTS)
+    return this.commitWorld(current, world, receipts)
   }
 
   /** Bind an actor snapshot to one character, or detach it while retaining the editable snapshot. */
@@ -1453,12 +1550,17 @@ export class StoryWorkspaceStore {
     }
   }
 
-  private commitWorld(current: StoryWorkspaceSnapshot, world: PlayWorldSnapshot): StoryWorkspaceSnapshot {
+  private commitWorld(
+    current: StoryWorkspaceSnapshot,
+    world: PlayWorldSnapshot,
+    worldActionReceipts = current.worldActionReceipts ?? [],
+  ): StoryWorkspaceSnapshot {
     const snapshot = normalizeWorkspace({
       ...current,
       revision: current.revision + 1,
       updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       world,
+      worldActionReceipts,
     }, this.worlds)
     this.writeSnapshot(snapshot)
     return this.get(snapshot.id)

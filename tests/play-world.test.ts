@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
 import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
@@ -10,14 +13,19 @@ import { PlayWorldRegistry } from '../src/play-world.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
 import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
 import { acceptStorySuggestionBatch } from '../src/story-suggestion-batch.ts'
+import { advanceStoryWorldByCharacter, materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
 import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,
   createStoryCharacterId,
   createStoryNodeId,
+  createStoryOutputId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
+import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
+
+installIgnorableSessionEventFixture()
 
 function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   return {
@@ -96,26 +104,46 @@ test('advances a host-owned flying-chess world only through typed actions', (con
     state: { ...initial, pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [] } },
   }, { characters: withCharacters.characters }), /合法棋子集合无效/u)
 
-  const rolled = store.dispatchWorldAction(installed.id, {
-    format: 0,
+  const initialTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(installed.world!, { characters: installed.characters })
+  assert.equal(initialTurn?.characterId, reimuId)
+  assert.deepEqual(initialTurn?.actions.map(action => action.id), ['roll'])
+  const rollRequest = {
+    key: 'receipt-roll',
+    runKey: 'run-1',
     revision: installed.revision,
-    action: { type: 'roll', actorId: reimuId },
-  })
+    cycleId: initialTurn!.id,
+    sequence: 0,
+    characterId: reimuId,
+    actionId: 'roll',
+    resultEventSeq: 10,
+  }
+  const rolled = store.dispatchWorldCharacterAction(installed.id, rollRequest)
+  const replayedRoll = store.dispatchWorldCharacterAction(installed.id, rollRequest)
+  assert.equal(replayedRoll.revision, rolled.revision)
   const pending = rolled.world?.state as FlyingChessWorldState
   assert.equal(pending.pendingRoll?.value, 6)
   assert.equal(pending.pendingRoll?.legalPieceIds.length, 4)
   assert.equal(rolled.world?.events.at(-1)?.type, 'die.rolled')
 
+  const moveTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(rolled.world!, { characters: rolled.characters })
+  const moveAction = moveTurn?.actions[0]
+  assert.match(moveAction?.label ?? '', /移动 1 号飞机/u)
   const pieceId = pending.pendingRoll?.legalPieceIds[0]
   assert.ok(pieceId)
-  const moved = store.dispatchWorldAction(rolled.id, {
-    format: 0,
+  const moved = store.dispatchWorldCharacterAction(rolled.id, {
+    key: 'receipt-move',
+    runKey: 'run-1',
     revision: rolled.revision,
-    action: { type: 'move', actorId: reimuId, pieceId },
+    cycleId: moveTurn!.id,
+    sequence: 1,
+    characterId: reimuId,
+    actionId: moveAction!.id,
+    resultEventSeq: 11,
   })
   const afterMove = moved.world?.state as FlyingChessWorldState
   assert.equal(afterMove.pieces.find(piece => piece.id === pieceId)?.status, 'track')
   assert.equal(afterMove.currentPlayerId, reimuId)
+  assert.deepEqual(moved.worldActionReceipts?.map(receipt => receipt.actionId), ['roll', moveAction!.id])
 
   const rolledAgain = store.dispatchWorldAction(moved.id, {
     format: 0,
@@ -267,4 +295,193 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   assert.equal(detached.characters[0]?.name, '博丽灵梦')
   assert.equal(detached.characters[0]?.profile.description, '博丽神社的巫女。')
   assert.deepEqual(detached.world, installed.world)
+})
+
+test('lets the current private character Worker complete one world turn exactly once', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-character-world-action-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 6 }))
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '人物自动行动' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const withCharacters = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '灵梦只知道自己的行动偏好。'),
+      character(marisaId, '雾雨魔理沙', '魔理沙藏着不应进入灵梦输入的秘密。'),
+    ],
+  })
+  const installed = store.installWorld(withCharacters.id, {
+    format: 0,
+    revision: withCharacters.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const session = Session.create(SessionId('character-world-action'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 2_048 } },
+  })
+  const bodies: string[] = []
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly messages: readonly unknown[] }) {
+        const body = JSON.stringify(options.messages)
+        bodies.push(body)
+        const moveId = body.match(/move:piece-[0-9a-f-]+/u)?.[0]
+        const text = JSON.stringify({ actionId: moveId ?? 'roll' })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+  const input = {
+    ctx: fake,
+    agent,
+    store,
+    workspace: installed,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '请继续棋局。' }] })],
+    signal: new AbortController().signal,
+  }
+  const advanced = await advanceStoryWorldByCharacter(input)
+  const state = advanced.world?.state as FlyingChessWorldState
+  assert.equal(bodies.length, 2)
+  assert.match(bodies[0]!, /灵梦只知道自己的行动偏好/u)
+  assert.doesNotMatch(bodies.join('\n'), /魔理沙藏着不应进入灵梦输入的秘密/u)
+  assert.equal(state.turn, 2)
+  assert.equal(state.currentPlayerId, reimuId)
+  assert.equal(state.pieces.some(piece => piece.ownerId === reimuId && piece.status === 'track'), true)
+  assert.deepEqual(advanced.worldActionReceipts?.map(receipt => receipt.sequence), [0, 1])
+  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data.stage]
+    : []), ['world-action', 'world-action'])
+
+  const replayed = await advanceStoryWorldByCharacter(input)
+  assert.equal(replayed.revision, advanced.revision)
+  assert.equal(bodies.length, 2)
+})
+
+test('keeps the exact world outcome in visible history and drops the next actor rule intention', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-grounded-world-turn-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '权威世界结算' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const characterId = createStoryOutputId()
+  const historyId = createStoryOutputId()
+  const configured = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    outputs: [
+      { id: proseId, name: '对局正文', kind: 'prose', enabled: true, instructions: '只写本轮。' },
+      { id: characterId, name: '魔理沙视角', kind: 'character', enabled: true, characterId: marisaId, instructions: '只写持久内容。' },
+      { id: historyId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '只写规则事实。' },
+    ],
+  })
+  const installed = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const session = Session.create(SessionId('grounded-world-turn'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        const text = system.includes('结构化世界行动 Worker')
+          ? JSON.stringify({ actionId: 'roll' })
+          : system.includes('剧情研究 Worker')
+            ? JSON.stringify({ findings: [], followUps: [] })
+            : system.includes('指定人物认知')
+              ? JSON.stringify({ observation: '看见刚发生的结果。', action: '', speechIntent: '', voiceEvidence: [] })
+              : system.includes('剧情导演 Worker')
+                ? JSON.stringify({ sections: [
+                  { sectionId: proseId, beats: ['表现刚发生的掷骰结果。'], speech: [] },
+                  { sectionId: characterId, beats: [], speech: [] },
+                  { sectionId: historyId, beats: [], speech: [] },
+                ] })
+                : system.includes('剧情连续性记录 Worker')
+                  ? JSON.stringify({
+                    history: '错误的模型概括。',
+                    changes: {
+                      characters: [{ characterId: marisaId, objective: '准备掷骰' }],
+                      facts: [], nodes: [], edges: [],
+                    },
+                  })
+                  : system.includes('分区的 prose Worker')
+                  ? '正文故意遗漏刚发生的掷骰结果。'
+                  : system.includes('分区的 character Worker')
+                    ? JSON.stringify({ insights: [{ kind: 'intention', text: '魔理沙准备在下一回合掷骰。' }] })
+                    : '## 对局正文\n\n魔理沙准备掷骰。\n\n## 公开回合记录\n\n错误记录。'
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent,
+    store,
+    workspace: installed,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.deepEqual(result.worldEventSequences, [2, 3])
+  assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
+  assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
+  assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'section').length, 2)
+  session.append('assistant/message', {
+    turn: 2,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: result.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 2, step: 1 })
+  const materialized = await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: installed.id,
+    turn: 2,
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(materialized?.changes.characters, [])
+  assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
+  assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
+  assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
+    { location: '', condition: '', objective: '', notes: '' },
+    { location: '', condition: '', objective: '', notes: '' },
+  ])
 })

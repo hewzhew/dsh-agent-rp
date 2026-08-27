@@ -1341,6 +1341,7 @@ export function installAgentRp(
           const brief = await runStoryTurnPipeline({
             ctx,
             agent,
+            store: storyWorkspaces,
             workspace: storyWorkspaces.get(workspaceId),
             turn,
             step,

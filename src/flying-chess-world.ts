@@ -4,6 +4,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   type FlyingChessPiece,
+  type FlyingChessWorldAction,
   type FlyingChessWorldState,
 } from './flying-chess-protocol.ts'
 import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
@@ -300,6 +301,43 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
       const winnerEvents = winnerId === undefined ? [] : [event([...normalized.events, movedEvent, ...collisionEvents], 'game.finished',
         `${playerName(context, winnerId)}获胜`, '四架飞机全部抵达终点。', winnerId)]
       return this.normalize({ ...normalized, state: nextState, events: [...normalized.events, movedEvent, ...collisionEvents, ...winnerEvents] }, context)
+    },
+    characterTurn(snapshot, context) {
+      const normalized = this.normalize(snapshot, context)
+      const state = normalized.state as FlyingChessWorldState
+      if (state.winnerId !== undefined) return undefined
+      const actorId = state.currentPlayerId
+      const turnId = `turn:${String(state.turn)}:${actorId}`
+      if (state.pendingRoll === undefined) {
+        return {
+          id: turnId,
+          characterId: actorId,
+          instruction: '轮到你行动。掷骰后，世界程序会给出结果与下一步合法选择。',
+          actions: [{
+            id: 'roll',
+            label: '掷骰',
+            description: '让世界程序生成本回合骰点。',
+            action: { type: 'roll', actorId } satisfies FlyingChessWorldAction,
+          }],
+        }
+      }
+      const pieces = new Map(state.pieces.map(piece => [piece.id, piece]))
+      return {
+        id: turnId,
+        characterId: actorId,
+        instruction: `你掷出了 ${String(state.pendingRoll.value)}。选择一架合法飞机完成本回合。`,
+        actions: state.pendingRoll.legalPieceIds.map(pieceId => {
+          const piece = pieces.get(pieceId)
+          if (piece === undefined) throw new Error('飞行棋合法动作指向未知棋子')
+          const location = piece.status === 'base' ? '基地' : piece.status === 'home' ? '终点' : `航线第 ${String(piece.steps)} 步`
+          return {
+            id: `move:${piece.id}`,
+            label: `移动 ${String(piece.number)} 号飞机`,
+            description: `${String(piece.number)} 号飞机当前位于${location}。`,
+            action: { type: 'move', actorId, pieceId: piece.id } satisfies FlyingChessWorldAction,
+          }
+        }),
+      }
     },
     projectForCharacter(snapshot, characterId, context) {
       const normalized = this.normalize(snapshot, context)
