@@ -29,7 +29,9 @@ import type {
   StoryOutput,
   StoryOutputKind,
   StoryPipelineSettings,
+  StoryResearchItem,
   StorySource,
+  StorySourceOrigin,
   StorySourceKind,
   StoryTurnMaterialization,
   StoryWorkspaceCreateRequest,
@@ -49,6 +51,7 @@ const OUTPUT_ID_PATTERN = new RegExp(`^output-${UUID_SUFFIX}$`, 'u')
 const LEGACY_SECTION_ID_PATTERN = new RegExp(`^section-${UUID_SUFFIX}$`, 'u')
 const SOURCE_ID_PATTERN = new RegExp(`^source-${UUID_SUFFIX}$`, 'u')
 const CITATION_ID_PATTERN = new RegExp(`^citation-${UUID_SUFFIX}$`, 'u')
+const RESEARCH_ID_PATTERN = new RegExp(`^research-${UUID_SUFFIX}$`, 'u')
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 const MAX_WORKSPACE_BYTES = 16 * 1024 * 1024
 const MAX_CITATION_BYTES = 32 * 1024
@@ -87,6 +90,7 @@ interface StoredStoryWorkspace {
   readonly outputs: readonly StoredStoryOutput[]
   readonly sources: readonly StoredStorySource[]
   readonly citations: readonly StoryCitation[]
+  readonly researchInbox: readonly StoryResearchItem[]
 }
 
 interface LegacyManifest {
@@ -359,6 +363,40 @@ function normalizeOutput(value: unknown, characterIds: ReadonlySet<string>): Sto
   }
 }
 
+function cleanWebUrl(value: unknown, subject: string): string {
+  if (typeof value !== 'string' || value.length > 4_096) throw new Error(`${subject}无效`)
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error(`${subject}无效`)
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username !== '' || url.password !== '') {
+    throw new Error(`${subject}无效`)
+  }
+  return url.href
+}
+
+function researchText(value: unknown, subject: string, max = MAX_CITATION_BYTES): string {
+  const text = cleanDocument(value, subject).trim()
+  if (Buffer.byteLength(text, 'utf8') > max) throw new Error(`${subject}过长`)
+  return text
+}
+
+function normalizeSourceOrigin(value: unknown): StorySourceOrigin {
+  if (!isRecord(value) || value.kind !== 'web') throw new Error('故事资料来源无效')
+  const sessionId = cleanLabel(value.sessionId, '故事资料来源 Session', 240)
+  if (sessionId === '') throw new Error('故事资料来源 Session 不能为空')
+  return {
+    kind: 'web',
+    url: cleanWebUrl(value.url, '故事资料来源 URL'),
+    query: researchText(value.query, '故事资料来源查询', 2_500),
+    sessionId,
+    turn: safeInteger(value.turn, '故事资料来源回合'),
+    resultEventSeq: safeInteger(value.resultEventSeq, '故事资料来源事件'),
+  }
+}
+
 function normalizeSource(value: unknown): StorySource {
   if (!isRecord(value)) throw new Error('故事资料不是对象')
   assertId(value.id, SOURCE_ID_PATTERN, '故事资料')
@@ -371,6 +409,25 @@ function normalizeSource(value: unknown): StorySource {
     kind: value.kind as StorySourceKind,
     enabled: value.enabled,
     content: cleanDocument(value.content, '故事资料内容'),
+    ...(value.origin === undefined ? {} : { origin: normalizeSourceOrigin(value.origin) }),
+  }
+}
+
+function normalizeResearchItem(value: unknown): StoryResearchItem {
+  if (!isRecord(value)) throw new Error('研究收件箱项目不是对象')
+  assertId(value.id, RESEARCH_ID_PATTERN, '研究收件箱项目')
+  const origin = normalizeSourceOrigin(value)
+  const title = cleanLabel(value.title, '研究结果标题', 240)
+  if (title === '') throw new Error('研究结果标题不能为空')
+  const publishedAt = value.publishedAt === undefined
+    ? undefined
+    : cleanLabel(value.publishedAt, '研究结果发布时间', 120)
+  return {
+    id: value.id,
+    ...origin,
+    title,
+    snippet: researchText(value.snippet, '研究结果摘录'),
+    ...(publishedAt === undefined || publishedAt === '' ? {} : { publishedAt }),
   }
 }
 
@@ -423,7 +480,8 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     || !Array.isArray(value.characters) || !Array.isArray(value.graph.nodes)
     || !Array.isArray(value.graph.edges) || !Array.isArray(value.facts)
     || !Array.isArray(value.events) || !Array.isArray(value.outputs)
-    || !Array.isArray(value.sources) || !Array.isArray(value.citations)) {
+    || !Array.isArray(value.sources) || !Array.isArray(value.citations)
+    || !Array.isArray(value.researchInbox)) {
     throw new Error('故事工作室字段无效')
   }
   assertId(value.id, WORKSPACE_ID_PATTERN, '故事工作室')
@@ -449,6 +507,11 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
   const sourceIds = new Set(sources.map(source => source.id))
   const citations = value.citations.map(citation => normalizeCitation(citation, sourceIds, nodeIds, factIds))
   assertUnique(citations.map(citation => citation.id), '资料引用')
+  const researchInbox = value.researchInbox.map(normalizeResearchItem)
+  assertUnique(researchInbox.map(item => item.id), '研究收件箱项目')
+  assertUnique(researchInbox.map(item => item.url), '研究收件箱 URL')
+  const acceptedWebUrls = new Set(sources.flatMap(source => source.origin?.kind === 'web' ? [source.origin.url] : []))
+  if (researchInbox.some(item => acceptedWebUrls.has(item.url))) throw new Error('研究收件箱包含已经收为资料的 URL')
   const activeNodeId = value.graph.activeNodeId
   if (activeNodeId !== undefined) {
     assertId(activeNodeId, NODE_ID_PATTERN, '当前剧情节点')
@@ -475,6 +538,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     .concat(outputs.map(output => output.instructions))
     .concat(sources.map(source => source.content))
     .concat(citations.flatMap(citation => [citation.quote, citation.note]))
+    .concat(researchInbox.flatMap(item => [item.query, item.title, item.snippet]))
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
@@ -492,6 +556,7 @@ function normalizeWorkspace(value: unknown): StoryWorkspaceSnapshot {
     outputs,
     sources,
     citations,
+    researchInbox,
   }
 }
 
@@ -550,6 +615,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
     outputs: snapshot.outputs.map(({ instructions: _instructions, ...output }) => output),
     sources: snapshot.sources.map(({ content: _content, ...source }) => source),
     citations: snapshot.citations,
+    researchInbox: snapshot.researchInbox,
   }
 }
 
@@ -586,6 +652,7 @@ function hydrateStored(root: string, value: unknown): StoryWorkspaceSnapshot {
     outputs,
     sources,
     citations: Array.isArray(value.citations) ? value.citations : [],
+    researchInbox: Array.isArray(value.researchInbox) ? value.researchInbox : [],
   })
 }
 
@@ -687,6 +754,11 @@ export function createStoryCitationId(): string {
   return `citation-${randomUUID()}`
 }
 
+/** Create an opaque pending-research id. */
+export function createStoryResearchId(): string {
+  return `research-${randomUUID()}`
+}
+
 /** Return current-scene characters in workspace order. */
 export function storyParticipantCharacters(workspace: StoryWorkspaceSnapshot): readonly StoryCharacter[] {
   const active = workspace.graph.nodes.find(node => node.id === workspace.graph.activeNodeId)
@@ -786,6 +858,7 @@ export class StoryWorkspaceStore {
       outputs: [],
       sources: [],
       citations: [],
+      researchInbox: [],
     })
     this.writeSnapshot(snapshot)
     return snapshot
@@ -880,6 +953,18 @@ export class StoryWorkspaceStore {
         sourceEventId: eventId,
       })),
     ]
+    const knownResearchUrls = new Set([
+      ...current.researchInbox.map(item => item.url),
+      ...current.sources.flatMap(source => source.origin?.kind === 'web' ? [source.origin.url] : []),
+    ])
+    const researchInbox = [...current.researchInbox]
+    for (const candidate of materialization.webResearch) {
+      const url = cleanWebUrl(candidate.url, '研究结果 URL')
+      if (knownResearchUrls.has(url)) continue
+      const item = normalizeResearchItem({ ...candidate, id: createStoryResearchId(), url })
+      knownResearchUrls.add(item.url)
+      researchInbox.push(item)
+    }
     return this.save({
       format: 1,
       id: current.id,
@@ -893,6 +978,7 @@ export class StoryWorkspaceStore {
       outputs: current.outputs,
       sources: current.sources,
       citations: current.citations,
+      researchInbox,
     })
   }
 
@@ -1072,6 +1158,7 @@ export class StoryWorkspaceStore {
       outputs,
       sources,
       citations: [],
+      researchInbox: [],
     })
     this.writeSnapshot(migrated)
     for (const path of ['manifest.json', 'outline.md', 'foreshadowing.md', 'proposals.md', 'history.md']) {

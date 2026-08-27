@@ -35,6 +35,7 @@ import {
   type StoryNodeKind,
   type StoryOutput,
   type StoryOutputKind,
+  type StoryResearchItem,
   type StorySource,
   type StorySourceKind,
   type StoryWorkspaceSnapshot,
@@ -175,6 +176,7 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
       outputs: workspace.outputs,
       sources: workspace.sources,
       citations: workspace.citations,
+      researchInbox: workspace.researchInbox,
     }),
   })
   if (value.workspace === undefined) throw new Error('故事工作室保存响应无效')
@@ -495,6 +497,10 @@ function SourceInspector({ source, update, onDelete }: {
   }
   return <>
     <h2>{source.name}</h2><div className="story-studio-inspector-subtitle">{sourceKindLabels[source.kind]}资料</div>
+    {source.origin?.kind === 'web' && <div className="story-source-origin">
+      <span>来自第 {source.origin.turn} 回合网络研究</span>
+      <a href={source.origin.url} target="_blank" rel="noreferrer">打开原网页 ↗</a>
+    </div>}
     <TextField label="资料名称" rows={1} value={source.name} onChange={value => { patch(current => ({ ...current, name: value })) }} />
     <Field label="资料类型"><select className="story-studio-input" value={source.kind}
       onChange={event => { patch(current => ({ ...current, kind: event.target.value as StorySourceKind })) }}>
@@ -777,6 +783,10 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
     </div>
     <div className="story-studio-nav-group">
       <div className="story-studio-nav-heading"><span>资料库</span><button className="story-studio-icon-button" type="button" aria-label="添加资料" onClick={addSource}>＋</button></div>
+      <button className="story-studio-nav-item" data-active={view === 'sources' && selection?.kind !== 'source' && selection?.kind !== 'citation'}
+        type="button" onClick={() => { setView('sources') }}>
+        <span className="story-studio-nav-icon">⌁</span><span>研究收件箱</span><span className="story-studio-nav-count">{workspace.researchInbox.length}</span>
+      </button>
       {workspace.sources.slice(0, 8).map(source => <button key={source.id} className="story-studio-nav-item"
         data-active={selection?.kind === 'source' && selection.id === source.id} type="button" onClick={() => { select({ kind: 'source', id: source.id }) }}>
         <span className="story-studio-nav-icon">▤</span><span>{source.name}</span>
@@ -956,6 +966,33 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
     }] }))
     setSelection({ kind: 'citation', id })
   }
+  const acceptResearch = (item: StoryResearchItem): void => {
+    const id = `source-${createClientOpaqueUuid()}`
+    const content = [`# ${item.title}`, '', item.snippet || '这个搜索结果没有提供摘要。', '', `来源：${item.url}`].join('\n')
+    update(current => ({
+      ...current,
+      sources: [...current.sources, {
+        id,
+        name: item.title.slice(0, 120),
+        kind: 'research',
+        enabled: true,
+        content,
+        origin: {
+          kind: 'web',
+          url: item.url,
+          query: item.query,
+          sessionId: item.sessionId,
+          turn: item.turn,
+          resultEventSeq: item.resultEventSeq,
+        },
+      }],
+      researchInbox: current.researchInbox.filter(candidate => candidate.id !== item.id),
+    }))
+    select({ kind: 'source', id })
+  }
+  const dismissResearch = (id: string): void => {
+    update(current => ({ ...current, researchInbox: current.researchInbox.filter(item => item.id !== id) }))
+  }
   const addOutput = (): void => {
     if (workspace === undefined) return
     const id = `output-${createClientOpaqueUuid()}`
@@ -1110,6 +1147,18 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
+        {workspace.researchInbox.length > 0 && <section className="story-research-inbox">
+          <div className="story-research-heading"><div><strong>研究收件箱</strong><span>网络结果不会自动成为故事事实；收为资料后才能被后续检索和引用。</span></div><span>{workspace.researchInbox.length} 条待处理</span></div>
+          <div className="story-research-grid">{workspace.researchInbox.map(item => <article className="story-research-card" key={item.id}>
+            <div className="story-research-card-heading"><div><span>第 {item.turn} 回合</span><h3>{item.title}</h3></div>
+              <a href={item.url} target="_blank" rel="noreferrer">查看网页 ↗</a></div>
+            <p>{item.snippet || '搜索服务没有返回摘要，可以先查看原网页再决定是否保留。'}</p>
+            <div className="story-research-query">查询：{item.query}</div>
+            <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
+              onClick={() => { acceptResearch(item) }}>收为资料</button>
+              <button className="story-studio-button" type="button" onClick={() => { dismissResearch(item.id) }}>忽略</button></div>
+          </article>)}</div>
+        </section>}
         <div className="story-studio-card-list">{workspace.sources.map(source => {
           const passages = splitStorySourcePassages(source)
           const citationCount = workspace.citations.filter(citation => citation.sourceId === source.id).length

@@ -125,6 +125,7 @@ function workspace(): StoryWorkspaceSnapshot {
     ],
     sources: [{ id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' }],
     citations: [],
+    researchInbox: [],
   }
 }
 
@@ -284,6 +285,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     outputs: [],
     sources: [],
     citations: [],
+    researchInbox: [],
   })
   const session = Session.create(SessionId('story-continuity'))
   session.append('request/header', {
@@ -292,6 +294,28 @@ test('materializes continuity from the actually visible reply instead of the pre
   })
   session.append('turn/start', { turn: 1 })
   session.append('step/start', { turn: 1, step: 1 })
+  const webRequest = appendAgentRpSessionEvent(session, 'agent-rp/story-web-search-request', {
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 1,
+    step: 1,
+    query: '雨停之后徽章会怎样反光',
+    maxResults: 6,
+  })
+  const webResult = appendAgentRpSessionEvent(session, 'agent-rp/story-web-search-result', {
+    format: 0,
+    requestSeq: webRequest.seq,
+    result: {
+      kind: 'success',
+      sources: [
+        { url: 'https://example.test/badge', title: '徽章设定资料', snippet: '雨水会让旧徽章显出刻痕。' },
+        { url: 'javascript:alert(1)', title: '无效来源', snippet: '不得进入收件箱。' },
+      ],
+      truncated: false,
+    },
+  })
   appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
     format: 0,
     sessionId: String(session.id),
@@ -299,7 +323,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     workspaceRevision: workspace.revision,
     turn: 1,
     step: 1,
-    resultEventSeqs: [],
+    resultEventSeqs: [webResult.seq],
     directorBrief: '内部导演方案。',
     finalDraft: '流水线准备稿。',
     modelContext: '准备上下文。',
@@ -353,6 +377,12 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
   assert.equal(saved.facts.find(fact => fact.text.includes('阿梨亲眼看见雨停'))?.knownBy[0], characterId)
   assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /徽章在雨后反光/u)
+  assert.deepEqual(saved.researchInbox.map(item => ({ title: item.title, url: item.url, snippet: item.snippet })), [{
+    title: '徽章设定资料',
+    url: 'https://example.test/badge',
+    snippet: '雨水会让旧徽章显出刻痕。',
+  }])
+  assert.equal(saved.researchInbox[0]?.query, '雨停之后徽章会怎样反光')
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-materialized').length, 1)
   assert.equal(session.events.find(event => event.type === 'agent-rp/story-stage-request')?.data.stage, 'continuity')
 

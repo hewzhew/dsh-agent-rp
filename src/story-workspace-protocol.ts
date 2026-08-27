@@ -133,6 +133,25 @@ export interface StorySource {
   readonly kind: StorySourceKind
   readonly enabled: boolean
   readonly content: string
+  readonly origin?: StorySourceOrigin
+}
+
+/** Network provenance retained when an inbox result becomes a durable source. */
+export interface StorySourceOrigin {
+  readonly kind: 'web'
+  readonly url: string
+  readonly query: string
+  readonly sessionId: string
+  readonly turn: number
+  readonly resultEventSeq: number
+}
+
+/** One network result waiting for the player to keep or dismiss it. */
+export interface StoryResearchItem extends StorySourceOrigin {
+  readonly id: string
+  readonly title: string
+  readonly snippet: string
+  readonly publishedAt?: string
 }
 
 /** Story object supported by one exact source excerpt. */
@@ -166,6 +185,7 @@ export interface StoryWorkspaceSnapshot {
   readonly outputs: readonly StoryOutput[]
   readonly sources: readonly StorySource[]
   readonly citations: readonly StoryCitation[]
+  readonly researchInbox: readonly StoryResearchItem[]
 }
 
 /** Lightweight workspace list item. */
@@ -197,6 +217,7 @@ export interface StoryWorkspaceSaveRequest {
   readonly outputs: readonly StoryOutput[]
   readonly sources: readonly StorySource[]
   readonly citations: readonly StoryCitation[]
+  readonly researchInbox: readonly StoryResearchItem[]
 }
 
 /** One completed visible turn materialized into events, facts, and suggestions. */
@@ -213,4 +234,5 @@ export interface StoryTurnMaterialization {
   }[]
   readonly plotSuggestions: readonly string[]
   readonly foreshadowSuggestions: readonly string[]
+  readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }

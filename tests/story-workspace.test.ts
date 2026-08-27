@@ -35,6 +35,7 @@ function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
     outputs: snapshot.outputs,
     sources: snapshot.sources,
     citations: snapshot.citations,
+    researchInbox: snapshot.researchInbox,
   }
 }
 
@@ -116,6 +117,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
         target: { kind: 'fact', factId },
       },
     ],
+    researchInbox: [],
   })
 
   assert.equal(saved.revision, 1)
@@ -422,6 +424,25 @@ test('materializes one visible turn into an event, observed facts, and suggested
     observations: [{ characterId: aliceId, text: '阿梨看见门廊外已经停雨。' }],
     plotSuggestions: ['下一幕让柏舟认出徽章。'],
     foreshadowSuggestions: ['后续可以回收徽章来历。'],
+    webResearch: [{
+      kind: 'web',
+      url: 'https://example.test/badge',
+      query: '徽章来历',
+      sessionId: 'session-1',
+      turn: 1,
+      resultEventSeq: 24,
+      title: '旧站徽章档案',
+      snippet: '徽章背面刻着旧站编号。',
+    }, {
+      kind: 'web',
+      url: 'https://example.test/badge',
+      query: '重复结果',
+      sessionId: 'session-1',
+      turn: 1,
+      resultEventSeq: 25,
+      title: '同一个 URL 不重复进入收件箱',
+      snippet: '重复摘要。',
+    }],
   })
 
   assert.equal(materialized.revision, workspace.revision + 1)
@@ -433,6 +454,32 @@ test('materializes one visible turn into an event, observed facts, and suggested
   assert.equal(observed?.source.kind, 'event')
   assert.equal(materialized.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
   assert.equal(materialized.graph.nodes.find(node => node.kind === 'secret' && node.lifecycle === 'suggested')?.sourceEventId, materialized.events[0]?.id)
+  assert.equal(materialized.researchInbox[0]?.url, 'https://example.test/badge')
+  assert.equal(materialized.researchInbox.length, 1)
+
+  const researchItem = materialized.researchInbox[0]!
+  const acceptedSourceId = createStorySourceId()
+  const accepted = store.save({
+    ...editable(materialized),
+    sources: [...materialized.sources, {
+      id: acceptedSourceId,
+      name: researchItem.title,
+      kind: 'research',
+      enabled: true,
+      content: researchItem.snippet,
+      origin: {
+        kind: 'web',
+        url: researchItem.url,
+        query: researchItem.query,
+        sessionId: researchItem.sessionId,
+        turn: researchItem.turn,
+        resultEventSeq: researchItem.resultEventSeq,
+      },
+    }],
+    researchInbox: [],
+  })
+  assert.equal(accepted.sources[0]?.origin?.url, 'https://example.test/badge')
+  assert.equal(accepted.researchInbox.length, 0)
 
   const replayed = store.materializeTurn(workspace.id, {
     key: 'session-1:turn-1',
@@ -444,8 +491,9 @@ test('materializes one visible turn into an event, observed facts, and suggested
     observations: [{ characterId: aliceId, text: '不应重复追加。' }],
     plotSuggestions: ['不应重复追加。'],
     foreshadowSuggestions: ['不应重复追加。'],
+    webResearch: [],
   })
-  assert.equal(replayed.revision, materialized.revision)
+  assert.equal(replayed.revision, accepted.revision)
   assert.equal(replayed.events.length, 1)
   assert.equal(replayed.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
 })
@@ -505,4 +553,26 @@ test('retrieves the most relevant bounded original excerpts before model researc
   assert.match(result, /第三章 · 第 2 段/u)
   assert.match(result, /旧车票藏进怀表/u)
   assert.equal(result.length <= 120, true)
+
+  const contextWorkspace = store.save({
+    ...editable(workspace),
+    sources: [...workspace.sources, {
+      id: createStorySourceId(),
+      name: '钟楼章节',
+      kind: 'original',
+      enabled: true,
+      content: '# 第七章\n\n守门人先熄灭门灯。\n\n钟楼暗号只在午夜出现。\n\n随后北门会短暂开启。',
+    }, {
+      id: createStorySourceId(),
+      name: '网络查询范围',
+      kind: 'web',
+      enabled: true,
+      content: '仅查询不会成为本地证据的紫色彗星。',
+    }],
+  })
+  const expanded = searchStoryWorkspaceSources(contextWorkspace, '钟楼暗号', 500)
+  assert.match(expanded, /守门人先熄灭门灯/u)
+  assert.match(expanded, /钟楼暗号只在午夜出现/u)
+  assert.match(expanded, /随后北门会短暂开启/u)
+  assert.equal(searchStoryWorkspaceSources(contextWorkspace, '紫色彗星', 500), '')
 })

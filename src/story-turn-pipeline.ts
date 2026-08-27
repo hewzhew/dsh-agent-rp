@@ -19,7 +19,7 @@ import {
   storyPublicHistory,
   StoryWorkspaceStore,
 } from './story-workspace.ts'
-import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
+import type { StoryTurnMaterialization, StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSources } from './story-research.ts'
 
 /** Ordered model responsibilities before the visible character request. */
@@ -291,6 +291,56 @@ function webSearchText(result: Extract<StoryWebSearchResultRecord['result'], { r
       source.publishedAt === undefined ? '' : `发布时间：${source.publishedAt}`,
     ].filter(Boolean).join('\n')),
   ].filter(Boolean).join('\n\n')
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  const characters: string[] = []
+  let bytes = 0
+  for (const character of value.trim()) {
+    const size = Buffer.byteLength(character, 'utf8')
+    if (bytes + size > maxBytes) break
+    characters.push(character)
+    bytes += size
+  }
+  return characters.join('')
+}
+
+function materializedWebResearch(
+  events: readonly SessionEvent[],
+  resultEventSeqs: readonly number[],
+  sessionId: string,
+  turn: number,
+): StoryTurnMaterialization['webResearch'] {
+  const included = new Set(resultEventSeqs)
+  const requests = new Map(events.flatMap(event => event.type === 'agent-rp/story-web-search-request'
+    ? [[event.seq, event.data] as const] : []))
+  return events.flatMap(event => {
+    if (event.type !== 'agent-rp/story-web-search-result' || !included.has(event.seq)
+      || event.data.result.kind !== 'success') return []
+    const request = requests.get(event.data.requestSeq)
+    if (request === undefined) return []
+    return event.data.result.sources.flatMap(source => {
+      if (source.url.length > 4_096) return []
+      let url: URL
+      try {
+        url = new URL(source.url)
+      } catch {
+        return []
+      }
+      if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username !== '' || url.password !== '') return []
+      return [{
+        kind: 'web' as const,
+        url: url.href,
+        query: utf8Prefix(request.query, 2_500),
+        sessionId,
+        turn,
+        resultEventSeq: event.seq,
+        title: (source.title?.trim() || url.hostname).slice(0, 240),
+        snippet: utf8Prefix(source.snippet ?? '', 32 * 1_024),
+        ...(source.publishedAt === undefined ? {} : { publishedAt: source.publishedAt.trim().slice(0, 120) }),
+      }]
+    })
+  })
 }
 
 async function searchWeb(
@@ -691,6 +741,12 @@ export async function materializeStoryTurn(input: {
     observations: update.observations,
     plotSuggestions: update.outlineProposals,
     foreshadowSuggestions: update.foreshadowingProposals,
+    webResearch: materializedWebResearch(
+      input.agent.session.events,
+      briefEvent.data.resultEventSeqs,
+      String(input.agent.session.id),
+      input.turn,
+    ),
   })
   const record: StoryTurnMaterializedRecord = {
     format: 1,

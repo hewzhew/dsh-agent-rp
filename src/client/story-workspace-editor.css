@@ -224,6 +224,34 @@
 .story-studio-card-meta { color: var(--studio-muted); display: flex; flex-wrap: wrap; font-size: 10px; gap: 8px; margin-top: 8px; }
 .story-studio-empty { color: var(--studio-muted); display: grid; font-size: 12px; gap: 10px; justify-items: center; padding: 70px 20px; text-align: center; }
 
+.story-research-inbox {
+  background: color-mix(in srgb, var(--story-accent) 5%, var(--studio-panel));
+  border: 1px solid color-mix(in srgb, var(--story-accent) 24%, var(--studio-border));
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  margin: 0 auto 22px;
+  max-width: 900px;
+  padding: 14px;
+}
+.story-research-heading,
+.story-research-card-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.story-research-heading strong { display: block; font-size: 13px; }
+.story-research-heading span { color: var(--studio-muted); font-size: 10px; line-height: 1.5; }
+.story-research-heading > span { flex: 0 0 auto; }
+.story-research-grid { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.story-research-card { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 11px; padding: 12px; }
+.story-research-card h3 { font-size: 12px; line-height: 1.4; margin: 3px 0 0; }
+.story-research-card-heading span,
+.story-research-card-heading a,
+.story-research-query { color: var(--studio-muted); font-size: 9px; }
+.story-research-card-heading a { color: var(--story-accent); flex: 0 0 auto; text-decoration: none; }
+.story-research-card p { font-size: 11px; line-height: 1.55; margin: 10px 0; white-space: pre-wrap; }
+.story-research-query { line-height: 1.45; max-height: 2.9em; overflow: hidden; }
+.story-source-origin { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 8px; display: grid; font-size: 10px; gap: 4px; margin: 0 0 14px; padding: 8px 9px; }
+.story-source-origin span { color: var(--studio-muted); }
+.story-source-origin a { color: var(--story-accent); text-decoration: none; }
+
 .story-source-reader { height: 100%; overflow: auto; padding: 24px clamp(18px, 3vw, 42px) 54px; }
 .story-source-back {
   background: transparent;

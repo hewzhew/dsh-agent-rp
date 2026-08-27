@@ -43,13 +43,13 @@ function parseCreateRequest(value: unknown): StoryWorkspaceCreateRequest {
 
 function parseSaveRequest(value: unknown, id: string): StoryWorkspaceSaveRequest {
   const record = requestRecord(value)
-  const keys = new Set(['format', 'id', 'revision', 'name', 'pipeline', 'graph', 'characters', 'facts', 'events', 'outputs', 'sources', 'citations'])
+  const keys = new Set(['format', 'id', 'revision', 'name', 'pipeline', 'graph', 'characters', 'facts', 'events', 'outputs', 'sources', 'citations', 'researchInbox'])
   if (record.format !== 1 || record.id !== id || typeof record.revision !== 'number'
     || typeof record.name !== 'string' || typeof record.pipeline !== 'object' || record.pipeline === null
     || Array.isArray(record.pipeline) || typeof record.graph !== 'object' || record.graph === null
     || Array.isArray(record.graph) || !Array.isArray(record.characters) || !Array.isArray(record.facts)
     || !Array.isArray(record.events) || !Array.isArray(record.outputs) || !Array.isArray(record.sources)
-    || !Array.isArray(record.citations)
+    || !Array.isArray(record.citations) || !Array.isArray(record.researchInbox)
     || Object.keys(record).some(key => !keys.has(key))) {
     throw new Error('故事工作区保存请求字段无效')
   }

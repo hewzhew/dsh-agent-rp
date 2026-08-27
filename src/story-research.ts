@@ -6,6 +6,7 @@ import { splitStorySourcePassages } from './story-source.ts'
 interface RankedExcerpt {
   readonly sourceIndex: number
   readonly chunkIndex: number
+  readonly sourceId: string
   readonly sourceName: string
   readonly locator: string
   readonly text: string
@@ -33,25 +34,52 @@ export function searchStoryWorkspaceSources(
 ): string {
   if (!Number.isSafeInteger(maxCharacters) || maxCharacters < 1) throw new Error('故事资料检索上限无效')
   const terms = queryTerms(query)
+  const passagesBySource = new Map(workspace.sources.map(source => [source.id, splitStorySourcePassages(source)]))
   const ranked = workspace.sources.flatMap((source, sourceIndex) => {
-    if (!source.enabled) return []
+    if (!source.enabled || source.kind === 'web') return []
     return splitStorySourcePassages(source).map((passage, chunkIndex): RankedExcerpt => ({
       sourceIndex,
       chunkIndex,
+      sourceId: source.id,
       sourceName: source.name,
       locator: passage.locator,
       text: passage.text,
       score: relevance(passage.text, terms),
     }))
-  }).sort((left, right) => right.score - left.score
+  }).filter(excerpt => excerpt.score > 0).sort((left, right) => right.score - left.score
     || left.sourceIndex - right.sourceIndex || left.chunkIndex - right.chunkIndex)
   const selected: string[] = []
+  const selectedKeys = new Set<string>()
   let characters = 0
-  for (const excerpt of ranked) {
+  const append = (excerpt: RankedExcerpt): boolean => {
+    const key = `${excerpt.sourceId}:${String(excerpt.chunkIndex)}`
+    if (selectedKeys.has(key)) return true
     const rendered = `### ${excerpt.sourceName} · ${excerpt.locator}\n${excerpt.text}`
-    if (selected.length > 0 && characters + rendered.length + 2 > maxCharacters) continue
-    selected.push(rendered.slice(0, Math.max(0, maxCharacters - characters)))
-    characters += rendered.length + 2
+    const separatorLength = selected.length === 0 ? 0 : 2
+    const remaining = maxCharacters - characters - separatorLength
+    if (remaining <= 0 || (selected.length > 0 && rendered.length > remaining)) return false
+    const value = rendered.slice(0, remaining)
+    selected.push(value)
+    selectedKeys.add(key)
+    characters += value.length + separatorLength
+    return true
+  }
+  for (const excerpt of ranked) {
+    if (!append(excerpt)) continue
+    const passages = passagesBySource.get(excerpt.sourceId) ?? []
+    for (const chunkIndex of [excerpt.chunkIndex - 1, excerpt.chunkIndex + 1]) {
+      const passage = passages[chunkIndex]
+      if (passage === undefined) continue
+      append({
+        sourceIndex: excerpt.sourceIndex,
+        chunkIndex,
+        sourceId: excerpt.sourceId,
+        sourceName: excerpt.sourceName,
+        locator: passage.locator,
+        text: passage.text,
+        score: excerpt.score,
+      })
+    }
     if (characters >= maxCharacters) break
   }
   return selected.join('\n\n')
