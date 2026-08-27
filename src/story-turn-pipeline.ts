@@ -1934,6 +1934,7 @@ export async function materializeStoryTurn(input: {
     summary: update.history,
     evidence: visibleReply,
     participantIds: participants.map(character => character.id),
+    worldEventSequences: briefEvent.data.worldEventSequences ?? [],
     changes: update.changes,
     webResearch: materializedWebResearch(
       input.agent.session.events,

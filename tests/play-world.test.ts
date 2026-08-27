@@ -171,6 +171,17 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.match(characterContext.worldContext, /禁止自行掷骰、移动棋子、切换回合/u)
   assert.match(characterContext.text, /此人物可见的世界状态/u)
   assert.match(compileStoryDirectorWorldContext(movedAgain, worlds), /雾雨魔理沙/u)
+  assert.throws(() => store.materializeTurn(movedAgain.id, {
+    key: 'invalid-world-event-reference',
+    turn: 1,
+    title: '无效引用',
+    summary: '不应保存。',
+    evidence: '不应保存。',
+    participantIds: [reimuId],
+    worldEventSequences: [999],
+    changes: { characters: [], facts: [], nodes: [], edges: [] },
+    webResearch: [],
+  }), /引用未知、重复或过多的世界事件/u)
   const firstTurn = store.materializeTurn(movedAgain.id, {
     key: 'session-play:turn-1',
     turn: 1,
@@ -178,6 +189,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
     summary: '灵梦掷骰并移动棋子。',
     evidence: '棋盘记录了灵梦的行动。',
     participantIds: [reimuId, marisaId],
+    worldEventSequences: [2, 3],
     changes: {
       characters: [{ characterId: reimuId, location: '棋盘旁', objective: '率先让飞机到达终点' }],
       facts: [{ text: '魔理沙看见灵梦移动了棋子。', knownBy: [marisaId] }],
@@ -196,6 +208,18 @@ test('advances a host-owned flying-chess world only through typed actions', (con
     webResearch: [],
   })
   const firstEventId = firstTurn.events[0]!.id
+  assert.deepEqual(firstTurn.events[0]?.worldEventSequences, [2, 3])
+  assert.throws(() => store.materializeTurn(firstTurn.id, {
+    key: 'duplicate-world-event-reference',
+    turn: 2,
+    title: '重复引用',
+    summary: '不应保存。',
+    evidence: '不应保存。',
+    participantIds: [reimuId],
+    worldEventSequences: [2],
+    changes: { characters: [], facts: [], nodes: [], edges: [] },
+    webResearch: [],
+  }), /引用未知、重复或过多的世界事件/u)
   const accepted = acceptStorySuggestionBatch(firstTurn, firstEventId)
   const withAcceptedDirection = store.save({ ...editable(firstTurn), graph: accepted.graph })
   const secondTurn = store.materializeTurn(withAcceptedDirection.id, {
@@ -480,6 +504,7 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   assert.deepEqual(materialized?.changes.characters, [])
   assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
+  assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [2, 3])
   assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
     { location: '', condition: '', objective: '', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },

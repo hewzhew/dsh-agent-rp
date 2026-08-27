@@ -428,7 +428,12 @@ function normalizeEdge(value: unknown, nodeIds: ReadonlySet<string>): StoryEdge 
   }
 }
 
-function normalizeEvent(value: unknown, characterIds: ReadonlySet<string>, nodeIds: ReadonlySet<string>): StoryEvent {
+function normalizeEvent(
+  value: unknown,
+  characterIds: ReadonlySet<string>,
+  nodeIds: ReadonlySet<string>,
+  worldEventSequences: ReadonlySet<number>,
+): StoryEvent {
   if (!isRecord(value)) throw new Error('故事事件不是对象')
   assertId(value.id, EVENT_ID_PATTERN, '故事事件')
   const participantIds = stringArray(value.participantIds, '故事事件参与人物')
@@ -439,6 +444,17 @@ function normalizeEvent(value: unknown, characterIds: ReadonlySet<string>, nodeI
     assertId(value.nodeId, NODE_ID_PATTERN, '故事事件剧情节点')
     if (!nodeIds.has(value.nodeId)) throw new Error('故事事件引用未知剧情节点')
   }
+  const referencedWorldEvents = value.worldEventSequences === undefined
+    ? []
+    : Array.isArray(value.worldEventSequences)
+      ? value.worldEventSequences.map(sequence => safeInteger(sequence, '故事事件世界事件序号'))
+      : (() => { throw new Error('故事事件世界事件序号字段无效') })()
+  if (referencedWorldEvents.length > 64 || new Set(referencedWorldEvents).size !== referencedWorldEvents.length) {
+    throw new Error('故事事件引用了过多或重复的世界事件')
+  }
+  if (referencedWorldEvents.some(sequence => !worldEventSequences.has(sequence))) {
+    throw new Error('故事事件引用未知世界事件')
+  }
   return {
     id: value.id,
     key: cleanLabel(value.key, '故事事件幂等键'),
@@ -448,6 +464,7 @@ function normalizeEvent(value: unknown, characterIds: ReadonlySet<string>, nodeI
     evidence: cleanDocument(value.evidence, '故事事件证据'),
     participantIds,
     ...(value.nodeId === undefined ? {} : { nodeId: value.nodeId }),
+    ...(referencedWorldEvents.length === 0 ? {} : { worldEventSequences: referencedWorldEvents }),
   }
 }
 
@@ -677,9 +694,14 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   }
   const edges = value.graph.edges.map(edge => normalizeEdge(edge, nodeIds))
   assertUnique(edges.map(edge => edge.id), '故事关系')
-  const events = value.events.map(event => normalizeEvent(event, characterIds, nodeIds))
+  const worldEventSequences = new Set(world?.events.map(event => event.sequence) ?? [])
+  const events = value.events.map(event => normalizeEvent(event, characterIds, nodeIds, worldEventSequences))
   assertUnique(events.map(event => event.id), '故事事件')
   assertUnique(events.map(event => event.key), '故事事件幂等键')
+  const representedWorldEvents = events.flatMap(event => event.worldEventSequences ?? [])
+  if (new Set(representedWorldEvents).size !== representedWorldEvents.length) {
+    throw new Error('一个世界事件不能归属多个故事事件')
+  }
   const eventIds = new Set(events.map(event => event.id))
   const facts = value.facts.map(fact => normalizeFact(fact, characterIds, eventIds, nodeIds))
   assertUnique(facts.map(fact => fact.id), '人物事实')
@@ -1364,6 +1386,15 @@ export class StoryWorkspaceStore {
     }
     const eventId = createStoryEventId()
     const activeNode = current.graph.nodes.find(node => node.id === current.graph.activeNodeId)
+    const worldEventSequences = [...new Set(materialization.worldEventSequences ?? [])]
+    const representedWorldEvents = new Set(current.events.flatMap(event => event.worldEventSequences ?? []))
+    if (worldEventSequences.length !== (materialization.worldEventSequences?.length ?? 0)
+      || worldEventSequences.length > 64
+      || worldEventSequences.some(sequence => !Number.isSafeInteger(sequence)
+        || current.world?.events.some(event => event.sequence === sequence) !== true
+        || representedWorldEvents.has(sequence))) {
+      throw new Error('故事事件引用未知、重复或过多的世界事件')
+    }
     const event: StoryEvent = {
       id: eventId,
       key: materialization.key,
@@ -1373,6 +1404,7 @@ export class StoryWorkspaceStore {
       evidence: cleanDocument(materialization.evidence, '故事事件证据'),
       participantIds: [...new Set(materialization.participantIds)],
       ...(activeNode === undefined ? {} : { nodeId: activeNode.id }),
+      ...(worldEventSequences.length === 0 ? {} : { worldEventSequences }),
     }
     const stateChanges = new Map(materialization.changes.characters.map(change => [change.characterId, change]))
     if (stateChanges.size !== materialization.changes.characters.length

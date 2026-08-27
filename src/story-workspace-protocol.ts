@@ -164,6 +164,8 @@ export interface StoryEvent {
   readonly evidence: string
   readonly participantIds: readonly string[]
   readonly nodeId?: string
+  /** Authoritative executable-world events represented by this visible story turn. */
+  readonly worldEventSequences?: readonly number[]
 }
 
 /** One ordered card compiled into a section Worker request. */
@@ -344,6 +346,8 @@ export interface StoryTurnMaterialization {
   readonly summary: string
   readonly evidence: string
   readonly participantIds: readonly string[]
+  /** Executable-world events that the visible reply was required to represent. */
+  readonly worldEventSequences?: readonly number[]
   readonly changes: StoryChangeSet
   readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }
