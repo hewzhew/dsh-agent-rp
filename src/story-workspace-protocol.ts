@@ -19,7 +19,7 @@ export type StoryNodeLifecycle = 'canonical' | 'suggested'
 export type StoryNodeStatus = 'planned' | 'active' | 'completed' | 'dropped'
 
 /** Typed relationship between story-map nodes. */
-export type StoryEdgeKind = 'precedes' | 'causes' | 'contains' | 'foreshadows'
+export type StoryEdgeKind = 'precedes' | 'causes' | 'foreshadows'
 
 /** Progress state carried only by foreshadowing relationships. */
 export type StoryForeshadowStatus = 'unplanted' | 'planted' | 'triggered' | 'resolved' | 'dropped'
@@ -247,9 +247,12 @@ export type StorySuggestionEndpoint =
 export interface StoryNodeSuggestion {
   readonly ref: string
   readonly kind: StoryNodeKind
+  readonly parent?: StorySuggestionEndpoint
   readonly title: string
+  readonly summary: string
   readonly content: string
   readonly participantIds: readonly string[]
+  readonly knowledge: StoryKnowledgePolicy
 }
 
 /** One typed relationship proposed between canonical or same-batch nodes. */
@@ -261,7 +264,20 @@ export interface StoryEdgeSuggestion {
   readonly foreshadowStatus?: StoryForeshadowStatus
 }
 
-/** One completed visible turn materialized into events, facts, and suggestions. */
+/** One observed fact and the complete set of characters who perceived it. */
+export interface StoryFactChange {
+  readonly text: string
+  readonly knownBy: readonly string[]
+}
+
+/** One atomic typed change set proposed from a completed visible turn. */
+export interface StoryChangeSet {
+  readonly facts: readonly StoryFactChange[]
+  readonly nodes: readonly StoryNodeSuggestion[]
+  readonly edges: readonly StoryEdgeSuggestion[]
+}
+
+/** One completed visible turn materialized into an event and one typed change set. */
 export interface StoryTurnMaterialization {
   readonly key: string
   readonly turn: number
@@ -269,11 +285,6 @@ export interface StoryTurnMaterialization {
   readonly summary: string
   readonly evidence: string
   readonly participantIds: readonly string[]
-  readonly observations: readonly {
-    readonly characterId: string
-    readonly text: string
-  }[]
-  readonly nodeSuggestions: readonly StoryNodeSuggestion[]
-  readonly edgeSuggestions: readonly StoryEdgeSuggestion[]
+  readonly changes: StoryChangeSet
   readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }

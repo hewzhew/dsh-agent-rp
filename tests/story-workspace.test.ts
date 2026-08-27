@@ -316,7 +316,23 @@ test('migrates format 1 clusters and fact visibility into format 2 inheritance',
   assert.equal(migrated.graph.nodes.find(node => node.id === arcId)?.summary, '第一幕总览。')
   assert.equal(migrated.facts[0]?.nodeId, sceneId)
   assert.equal(migrated.facts[0]?.knowledgeMode, 'override')
-  assert.equal((JSON.parse(readFileSync(join(workspaceRoot, 'story.json'), 'utf8')) as { format?: unknown }).format, 2)
+  const persisted = JSON.parse(readFileSync(join(workspaceRoot, 'story.json'), 'utf8')) as {
+    format?: unknown
+    graph: { edges: unknown[] }
+  }
+  assert.equal(persisted.format, 2)
+  assert.deepEqual(persisted.graph.edges, [])
+  persisted.graph.edges = [{
+    id: 'edge-00000000-0000-4000-8000-000000000021',
+    kind: 'contains',
+    source: arcId,
+    target: sceneId,
+    label: '',
+    lifecycle: 'canonical',
+    audience: 'director',
+  }]
+  writeFileSync(join(workspaceRoot, 'story.json'), `${JSON.stringify(persisted, null, 2)}\n`)
+  assert.deepEqual(new StoryWorkspaceStore({ root }).get(workspaceId).graph.edges, [])
 })
 
 test('rejects cyclic story-cluster hierarchy', (context) => {
@@ -345,6 +361,34 @@ test('rejects cyclic story-cluster hierarchy', (context) => {
     ...editable(created),
     graph: { nodes: [node(firstId, secondId, '甲'), node(secondId, firstId, '乙')], edges: [] },
   }), /故事节点层级不能形成循环/u)
+})
+
+test('requires a suggested parent cluster to be accepted before its child', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-parent-lifecycle-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '候选父级' })
+  const parentId = createStoryNodeId()
+  const childId = createStoryNodeId()
+  const base = {
+    status: 'planned' as const,
+    audience: 'director' as const,
+    position: { x: 0, y: 0 },
+    participantIds: [],
+    knowledge: { mode: 'none' as const, characterIds: [] },
+  }
+
+  assert.throws(() => store.save({
+    ...editable(created),
+    graph: {
+      nodes: [{
+        ...base, id: parentId, kind: 'arc', title: '候选篇章', summary: '候选篇章', content: '', lifecycle: 'suggested',
+      }, {
+        ...base, id: childId, parentId, kind: 'beat', title: '正式场景', summary: '正式场景', content: '', lifecycle: 'canonical',
+      }],
+      edges: [],
+    },
+  }), /正式故事节点不能属于候选故事簇/u)
 })
 
 test('compiles inherited scene knowledge while preserving private fact overrides', (context) => {
@@ -579,38 +623,49 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     summary: '阿梨在门廊举起徽章。',
     evidence: '阿梨举起徽章，门外的雨声停了。',
     participantIds: [aliceId, bobId],
-    observations: [{ characterId: aliceId, text: '阿梨看见门廊外已经停雨。' }],
-    nodeSuggestions: [
-      {
-        ref: 'next-scene',
-        kind: 'beat',
-        title: '柏舟认出徽章',
-        content: '下一幕让柏舟认出徽章。',
-        participantIds: [bobId],
-      },
-      {
-        ref: 'badge-secret',
-        kind: 'secret',
-        title: '徽章来历',
-        content: '后续可以回收徽章来历。',
-        participantIds: [],
-      },
-    ],
-    edgeSuggestions: [
-      {
-        kind: 'precedes',
-        source: { kind: 'node', nodeId: activeNodeId },
-        target: { kind: 'proposal', ref: 'next-scene' },
-        label: '下一场',
-      },
-      {
-        kind: 'foreshadows',
-        source: { kind: 'node', nodeId: activeNodeId },
-        target: { kind: 'proposal', ref: 'badge-secret' },
-        label: '雨后徽章埋下线索',
-        foreshadowStatus: 'planted',
-      },
-    ],
+    changes: {
+      facts: [
+        { text: '阿梨和柏舟都看见门廊外已经停雨。', knownBy: [aliceId] },
+        { text: '阿梨和柏舟都看见门廊外已经停雨。', knownBy: [bobId] },
+      ],
+      nodes: [
+        {
+          ref: 'next-scene',
+          kind: 'beat',
+          parent: { kind: 'node', nodeId: activeNodeId },
+          title: '柏舟认出徽章',
+          summary: '柏舟在下一幕认出徽章。',
+          content: '下一幕让柏舟认出徽章。',
+          participantIds: [bobId],
+          knowledge: { mode: 'participants', characterIds: [] },
+        },
+        {
+          ref: 'badge-secret',
+          kind: 'secret',
+          parent: { kind: 'proposal', ref: 'next-scene' },
+          title: '徽章来历',
+          summary: '徽章来历等待回收。',
+          content: '后续可以回收徽章来历。',
+          participantIds: [],
+          knowledge: { mode: 'inherit', characterIds: [] },
+        },
+      ],
+      edges: [
+        {
+          kind: 'precedes',
+          source: { kind: 'node', nodeId: activeNodeId },
+          target: { kind: 'proposal', ref: 'next-scene' },
+          label: '下一场',
+        },
+        {
+          kind: 'foreshadows',
+          source: { kind: 'node', nodeId: activeNodeId },
+          target: { kind: 'proposal', ref: 'badge-secret' },
+          label: '雨后徽章埋下线索',
+          foreshadowStatus: 'planted',
+        },
+      ],
+    },
     webResearch: [{
       kind: 'web',
       url: 'https://example.test/badge',
@@ -637,13 +692,17 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   assert.equal(materialized.events[0]?.evidence, '阿梨举起徽章，门外的雨声停了。')
   assert.equal(materialized.events[0]?.nodeId, activeNodeId)
   const observed = materialized.facts.find(fact => fact.text.includes('门廊外已经停雨'))
-  assert.deepEqual(observed?.knownBy, [aliceId])
+  assert.deepEqual(observed?.knownBy, [aliceId, bobId])
   assert.equal(observed?.source.kind, 'event')
   assert.equal(materialized.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
   assert.equal(materialized.graph.nodes.find(node => node.kind === 'secret' && node.lifecycle === 'suggested')?.sourceEventId, materialized.events[0]?.id)
   assert.equal(materialized.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
   const nextScene = materialized.graph.nodes.find(node => node.title === '柏舟认出徽章')
   const badgeSecret = materialized.graph.nodes.find(node => node.title === '徽章来历')
+  assert.equal(nextScene?.parentId, activeNodeId)
+  assert.equal(badgeSecret?.parentId, nextScene?.id)
+  assert.deepEqual(nextScene?.knowledge, { mode: 'participants', characterIds: [] })
+  assert.deepEqual(badgeSecret?.knowledge, { mode: 'inherit', characterIds: [] })
   assert.equal(materialized.graph.edges.find(edge => edge.kind === 'precedes')?.target, nextScene?.id)
   assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.target, badgeSecret?.id)
   assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.foreshadowStatus, 'planted')
@@ -682,11 +741,14 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     summary: '不应重复追加。',
     evidence: '不应重复追加。',
     participantIds: [aliceId],
-    observations: [{ characterId: aliceId, text: '不应重复追加。' }],
-    nodeSuggestions: [{
-      ref: 'duplicate', kind: 'beat', title: '不应重复追加', content: '不应重复追加。', participantIds: [aliceId],
-    }],
-    edgeSuggestions: [],
+    changes: {
+      facts: [{ text: '不应重复追加。', knownBy: [aliceId] }],
+      nodes: [{
+        ref: 'duplicate', kind: 'beat', title: '不应重复追加', summary: '不应重复追加。',
+        content: '不应重复追加。', participantIds: [aliceId], knowledge: { mode: 'participants', characterIds: [] },
+      }],
+      edges: [],
+    },
     webResearch: [],
   })
   assert.equal(replayed.revision, accepted.revision)

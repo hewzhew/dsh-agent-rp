@@ -117,7 +117,6 @@ const nodeStatusLabels: Readonly<Record<StoryNode['status'], string>> = {
 const edgeKindLabels: Readonly<Record<StoryEdgeKind, string>> = {
   precedes: '先于',
   causes: '导致',
-  contains: '属于',
   foreshadows: '埋设 → 回收',
 }
 
@@ -376,12 +375,15 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
   const parentCandidates = workspace.graph.nodes.filter(candidate => !descendants.has(candidate.id)
     && candidate.lifecycle === 'canonical' && candidate.status !== 'dropped'
     && (candidate.kind === 'arc' || candidate.kind === 'beat'))
+  const parent = node.parentId === undefined ? undefined : workspace.graph.nodes.find(candidate => candidate.id === node.parentId)
+  const canAccept = parent === undefined || parent.lifecycle === 'canonical'
   return <>
     <h2>{node.title}</h2>
     <div className="story-studio-inspector-subtitle">{nodeKindLabels[node.kind]} · {node.lifecycle === 'suggested' ? '候选变更' : '正式故事数据'}</div>
     {node.lifecycle === 'suggested' && <div className="story-studio-actions" style={{ marginBottom: 14 }}>
       <button className="story-studio-button story-studio-button-primary" type="button"
-        onClick={() => { patch(value => ({ ...value, lifecycle: 'canonical' })) }}>接受建议</button>
+        disabled={!canAccept} onClick={() => { patch(value => ({ ...value, lifecycle: 'canonical' })) }}>
+        {canAccept ? '接受建议' : '先接受上级故事簇'}</button>
       <button className="story-studio-button" type="button" onClick={onDelete}>拒绝</button>
     </div>}
     <TextField label="标题" rows={1} value={node.title} onChange={value => { patch(current => ({ ...current, title: value })) }} />

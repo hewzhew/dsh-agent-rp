@@ -83,17 +83,7 @@ function workspace(): StoryWorkspaceSnapshot {
           knowledge: { mode: 'none', characterIds: [] },
         },
       ],
-      edges: [
-        {
-          id: 'edge-00000000-0000-4000-8000-000000000001',
-          kind: 'contains',
-          source: arcId,
-          target: activeNodeId,
-          label: '',
-          lifecycle: 'canonical',
-          audience: 'director',
-        },
-      ],
+      edges: [],
     },
     characters: [
       { id: aliceId, name: '阿梨', persona: '阿梨谨慎。' },
@@ -460,38 +450,49 @@ test('materializes continuity from the actually visible reply instead of the pre
         requestBody = JSON.stringify(options.messages)
         const text = JSON.stringify({
           history: '阿梨在车站看见雨停。',
-          observations: [{ characterId, text: '阿梨亲眼看见雨停。' }],
-          nodeSuggestions: [
-            {
-              ref: 'next-scene',
-              kind: 'beat',
-              title: '雨后检查徽章',
-              content: '下一场让阿梨检查徽章刻痕。',
-              participantIds: [characterId],
-            },
-            {
-              ref: 'badge-secret',
-              kind: 'secret',
-              title: '徽章刻痕',
-              content: '后续揭示刻痕与旧站编号的联系。',
-              participantIds: [],
-            },
-          ],
-          edgeSuggestions: [
-            {
-              kind: 'precedes',
-              source: { kind: 'node', nodeId },
-              target: { kind: 'proposal', ref: 'next-scene' },
-              label: '雨停后的下一场',
-            },
-            {
-              kind: 'foreshadows',
-              source: { kind: 'proposal', ref: 'next-scene' },
-              target: { kind: 'proposal', ref: 'badge-secret' },
-              label: '检查时埋下刻痕线索',
-              foreshadowStatus: 'planted',
-            },
-          ],
+          changes: {
+            facts: [
+              { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
+              { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
+            ],
+            nodes: [
+              {
+                ref: 'next-scene',
+                kind: 'beat',
+                parent: { kind: 'node', nodeId },
+                title: '雨后检查徽章',
+                summary: '阿梨在雨后检查徽章刻痕。',
+                content: '下一场让阿梨检查徽章刻痕。',
+                participantIds: [characterId],
+                knowledge: { mode: 'participants', characterIds: [] },
+              },
+              {
+                ref: 'badge-secret',
+                kind: 'secret',
+                parent: { kind: 'proposal', ref: 'next-scene' },
+                title: '徽章刻痕',
+                summary: '刻痕与旧站编号有关。',
+                content: '后续揭示刻痕与旧站编号的联系。',
+                participantIds: [],
+                knowledge: { mode: 'inherit', characterIds: [] },
+              },
+            ],
+            edges: [
+              {
+                kind: 'precedes',
+                source: { kind: 'node', nodeId },
+                target: { kind: 'proposal', ref: 'next-scene' },
+                label: '雨停后的下一场',
+              },
+              {
+                kind: 'foreshadows',
+                source: { kind: 'proposal', ref: 'next-scene' },
+                target: { kind: 'proposal', ref: 'badge-secret' },
+                label: '检查时埋下刻痕线索',
+                foreshadowStatus: 'planted',
+              },
+            ],
+          },
         })
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -516,10 +517,10 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.match(requestBody, /实际展示时，阿梨只看见雨停了/u)
   assert.doesNotMatch(requestBody, /流水线准备稿/u)
   assert.match(requestBody, new RegExp(nodeId, 'u'))
-  assert.equal(result?.observations[0]?.characterId, characterId)
-  assert.equal(result?.format, 2)
-  assert.equal(result?.nodeSuggestions.length, 2)
-  assert.equal(result?.edgeSuggestions.length, 2)
+  assert.deepEqual(result?.changes.facts[0]?.knownBy, [characterId])
+  assert.equal(result?.format, 3)
+  assert.equal(result?.changes.nodes.length, 2)
+  assert.equal(result?.changes.edges.length, 2)
   const saved = store.get(workspace.id)
   assert.match(saved.events[0]?.summary ?? '', /阿梨在车站看见雨停/u)
   assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
@@ -528,6 +529,9 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.equal(saved.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
   const nextScene = saved.graph.nodes.find(node => node.title === '雨后检查徽章')
   const badgeSecret = saved.graph.nodes.find(node => node.title === '徽章刻痕')
+  assert.equal(nextScene?.parentId, nodeId)
+  assert.equal(badgeSecret?.parentId, nextScene?.id)
+  assert.deepEqual(nextScene?.knowledge, { mode: 'participants', characterIds: [] })
   assert.equal(saved.graph.edges.find(edge => edge.kind === 'precedes')?.target, nextScene?.id)
   const foreshadow = saved.graph.edges.find(edge => edge.kind === 'foreshadows')
   assert.equal(foreshadow?.source, nextScene?.id)

@@ -20,7 +20,10 @@ import {
   StoryWorkspaceStore,
 } from './story-workspace.ts'
 import type {
+  StoryChangeSet,
   StoryEdgeSuggestion,
+  StoryFactChange,
+  StoryKnowledgePolicy,
   StoryNodeSuggestion,
   StorySuggestionEndpoint,
   StoryTurnMaterialization,
@@ -71,7 +74,7 @@ export interface StoryTurnBriefRecord {
 
 /** Exact editable story-document update committed after the visible reply. */
 export interface StoryTurnMaterializedRecord {
-  readonly format: 2
+  readonly format: 3
   readonly sessionId: string
   readonly workspaceId: string
   readonly workspaceRevision: number
@@ -79,12 +82,7 @@ export interface StoryTurnMaterializedRecord {
   readonly step: number
   readonly continuityResultEventSeq: number
   readonly eventSummary: string
-  readonly observations: readonly {
-    readonly characterId: string
-    readonly text: string
-  }[]
-  readonly nodeSuggestions: readonly StoryNodeSuggestion[]
-  readonly edgeSuggestions: readonly StoryEdgeSuggestion[]
+  readonly changes: StoryChangeSet
 }
 
 /** Logged network-search request generated from an enabled Web source. */
@@ -165,12 +163,7 @@ interface StoryResearchDecision {
 
 interface ContinuityUpdate {
   readonly history: string
-  readonly observations: readonly {
-    readonly characterId: string
-    readonly text: string
-  }[]
-  readonly nodeSuggestions: readonly StoryNodeSuggestion[]
-  readonly edgeSuggestions: readonly StoryEdgeSuggestion[]
+  readonly changes: StoryChangeSet
 }
 
 interface StorySectionDraft {
@@ -313,7 +306,8 @@ function renderResearchFindings(findings: readonly StoryResearchFinding[]): stri
 
 const SUGGESTION_REF_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/u
 const SUGGESTION_NODE_KINDS = new Set<StoryNodeSuggestion['kind']>(['arc', 'beat', 'secret'])
-const SUGGESTION_EDGE_KINDS = new Set<StoryEdgeSuggestion['kind']>(['precedes', 'causes', 'contains', 'foreshadows'])
+const SUGGESTION_EDGE_KINDS = new Set<StoryEdgeSuggestion['kind']>(['precedes', 'causes', 'foreshadows'])
+const SUGGESTION_KNOWLEDGE_MODES = new Set<StoryKnowledgePolicy['mode']>(['inherit', 'none', 'participants', 'characters'])
 const SUGGESTION_FORESHADOW_STATUSES = new Set<NonNullable<StoryEdgeSuggestion['foreshadowStatus']>>([
   'unplanted', 'planted', 'triggered', 'resolved', 'dropped',
 ])
@@ -341,57 +335,109 @@ function suggestionEndpointKey(endpoint: StorySuggestionEndpoint): string {
   return endpoint.kind === 'node' ? `node:${endpoint.nodeId}` : `proposal:${endpoint.ref}`
 }
 
+function parseSuggestionKnowledge(
+  value: unknown,
+  subject: string,
+  characterIds: ReadonlySet<string>,
+): StoryKnowledgePolicy {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${subject}不是对象`)
+  const knowledge = value as Record<string, unknown>
+  if (Object.keys(knowledge).some(key => key !== 'mode' && key !== 'characterIds')
+    || !SUGGESTION_KNOWLEDGE_MODES.has(knowledge.mode as StoryKnowledgePolicy['mode'])
+    || !Array.isArray(knowledge.characterIds)
+    || knowledge.characterIds.some(id => typeof id !== 'string' || !characterIds.has(id))) {
+    throw new Error(`${subject}字段无效`)
+  }
+  const selected = [...new Set(knowledge.characterIds as string[])]
+  if (knowledge.mode !== 'characters' && selected.length > 0) throw new Error(`${subject}只有指定人物模式可以列出人物`)
+  return { mode: knowledge.mode as StoryKnowledgePolicy['mode'], characterIds: selected }
+}
+
 function parseContinuityUpdate(
   text: string,
   characterIds: ReadonlySet<string>,
   nodeIds: ReadonlySet<string>,
 ): ContinuityUpdate {
   const record = jsonObject(text, '连续性记录')
-  if (Object.keys(record).some(key => !['history', 'observations', 'nodeSuggestions', 'edgeSuggestions'].includes(key))
-    || !Array.isArray(record.observations) || !Array.isArray(record.nodeSuggestions)
-    || !Array.isArray(record.edgeSuggestions)) throw new Error('连续性记录字段无效')
-  const observations = record.observations.map((value, index) => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw new Error(`人物观察[${String(index)}]不是对象`)
-    }
-    const observation = value as Record<string, unknown>
-    if (Object.keys(observation).some(key => key !== 'characterId' && key !== 'text')
-      || typeof observation.characterId !== 'string' || !characterIds.has(observation.characterId)) {
-      throw new Error(`人物观察[${String(index)}]字段无效`)
-    }
-    return {
-      characterId: observation.characterId,
-      text: boundedString(observation.text, `人物观察[${String(index)}].text`, 16 * 1_024),
-    }
-  }).filter(observation => observation.text !== '')
-  if (new Set(observations.map(observation => observation.characterId)).size !== observations.length) {
-    throw new Error('人物观察包含重复人物')
+  if (Object.keys(record).some(key => key !== 'history' && key !== 'changes')
+    || typeof record.changes !== 'object' || record.changes === null || Array.isArray(record.changes)) {
+    throw new Error('连续性记录字段无效')
   }
-  const nodeSuggestions = record.nodeSuggestions.slice(0, 16).map((value, index): StoryNodeSuggestion => {
+  const changes = record.changes as Record<string, unknown>
+  if (Object.keys(changes).some(key => key !== 'facts' && key !== 'nodes' && key !== 'edges')
+    || !Array.isArray(changes.facts) || !Array.isArray(changes.nodes) || !Array.isArray(changes.edges)) {
+    throw new Error('连续性变更集字段无效')
+  }
+  const parsedFacts = changes.facts.slice(0, 32).map((value, index): StoryFactChange => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`事实变更[${String(index)}]不是对象`)
+    }
+    const fact = value as Record<string, unknown>
+    if (Object.keys(fact).some(key => key !== 'text' && key !== 'knownBy')
+      || !Array.isArray(fact.knownBy)
+      || fact.knownBy.some(id => typeof id !== 'string' || !characterIds.has(id))) {
+      throw new Error(`事实变更[${String(index)}]字段无效`)
+    }
+    const factText = boundedString(fact.text, `事实变更[${String(index)}].text`, 16 * 1_024)
+    const knownBy = [...new Set(fact.knownBy as string[])]
+    if (factText === '' || knownBy.length === 0) throw new Error(`事实变更[${String(index)}]不能为空`)
+    return {
+      text: factText,
+      knownBy,
+    }
+  })
+  const factGroups = new Map<string, Set<string>>()
+  for (const fact of parsedFacts) {
+    const knownBy = factGroups.get(fact.text) ?? new Set<string>()
+    for (const characterId of fact.knownBy) knownBy.add(characterId)
+    factGroups.set(fact.text, knownBy)
+  }
+  const facts = [...factGroups].map(([factText, knownBy]): StoryFactChange => ({ text: factText, knownBy: [...knownBy] }))
+  const nodeRecords = changes.nodes.slice(0, 16).map((value, index): Record<string, unknown> => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`候选节点[${String(index)}]不是对象`)
     }
     const node = value as Record<string, unknown>
-    if (Object.keys(node).some(key => !['ref', 'kind', 'title', 'content', 'participantIds'].includes(key))
+    if (Object.keys(node).some(key => !['ref', 'kind', 'parent', 'title', 'summary', 'content', 'participantIds', 'knowledge'].includes(key))
       || typeof node.ref !== 'string' || !SUGGESTION_REF_PATTERN.test(node.ref)
       || !SUGGESTION_NODE_KINDS.has(node.kind as StoryNodeSuggestion['kind'])
       || !Array.isArray(node.participantIds)
       || node.participantIds.some(id => typeof id !== 'string' || !characterIds.has(id))) {
       throw new Error(`候选节点[${String(index)}]字段无效`)
     }
+    return node
+  })
+  const proposalRefs = new Set(nodeRecords.map(node => node.ref as string))
+  if (proposalRefs.size !== nodeRecords.length) throw new Error('候选节点 ref 重复')
+  const nodes = nodeRecords.map((node, index): StoryNodeSuggestion => {
     const title = boundedString(node.title, `候选节点[${String(index)}].title`, 120)
     if (title === '') throw new Error(`候选节点[${String(index)}]标题为空`)
+    const parent = node.parent === undefined
+      ? undefined
+      : parseSuggestionEndpoint(node.parent, `候选节点[${String(index)}].parent`, nodeIds, proposalRefs)
+    if (parent?.kind === 'proposal' && parent.ref === node.ref) throw new Error(`候选节点[${String(index)}]不能以自身为父级`)
     return {
-      ref: node.ref,
+      ref: node.ref as string,
       kind: node.kind as StoryNodeSuggestion['kind'],
+      ...(parent === undefined ? {} : { parent }),
       title,
+      summary: boundedString(node.summary, `候选节点[${String(index)}].summary`, 280),
       content: boundedString(node.content, `候选节点[${String(index)}].content`, 32 * 1_024),
       participantIds: [...new Set(node.participantIds as string[])],
+      knowledge: parseSuggestionKnowledge(node.knowledge, `候选节点[${String(index)}].knowledge`, characterIds),
     }
   })
-  const proposalRefs = new Set(nodeSuggestions.map(node => node.ref))
-  if (proposalRefs.size !== nodeSuggestions.length) throw new Error('候选节点 ref 重复')
-  const edgeSuggestions = record.edgeSuggestions.slice(0, 24).map((value, index): StoryEdgeSuggestion => {
+  const nodeByRef = new Map(nodes.map(node => [node.ref, node]))
+  for (const node of nodes) {
+    const visited = new Set<string>([node.ref])
+    let parent = node.parent
+    while (parent?.kind === 'proposal') {
+      if (visited.has(parent.ref)) throw new Error('候选节点父级不能形成循环')
+      visited.add(parent.ref)
+      parent = nodeByRef.get(parent.ref)?.parent
+    }
+  }
+  const edges = changes.edges.slice(0, 24).map((value, index): StoryEdgeSuggestion => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`候选关系[${String(index)}]不是对象`)
     }
@@ -424,13 +470,11 @@ function parseContinuityUpdate(
       label: boundedString(edge.label, `候选关系[${String(index)}].label`, 240),
     }
   })
-  const edgeKeys = edgeSuggestions.map(edge => `${edge.kind}:${suggestionEndpointKey(edge.source)}:${suggestionEndpointKey(edge.target)}`)
+  const edgeKeys = edges.map(edge => `${edge.kind}:${suggestionEndpointKey(edge.source)}:${suggestionEndpointKey(edge.target)}`)
   if (new Set(edgeKeys).size !== edgeKeys.length) throw new Error('候选关系重复')
   return {
     history: boundedString(record.history, '连续性公开历史'),
-    observations,
-    nodeSuggestions,
-    edgeSuggestions,
+    changes: { facts, nodes, edges },
   }
 }
 
@@ -976,7 +1020,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   return record
 }
 
-/** Materialize the actually visible reply into global history and character-scoped observations. */
+/** Materialize the actually visible reply into global history and one typed story change set. */
 export async function materializeStoryTurn(input: {
   readonly ctx: Context
   readonly agent: Agent
@@ -986,7 +1030,7 @@ export async function materializeStoryTurn(input: {
   readonly signal: AbortSignal
 }): Promise<StoryTurnMaterializedRecord | undefined> {
   const previous = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-materialized'> =>
-    event.type === 'agent-rp/story-turn-materialized' && event.data.format === 2 && event.data.turn === input.turn
+    event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3 && event.data.turn === input.turn
       && event.data.workspaceId === input.workspaceId)
   if (previous !== undefined) return previous.data
   const briefEvent = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
@@ -1013,14 +1057,14 @@ export async function materializeStoryTurn(input: {
     [
       '你是剧情连续性记录 Worker。正文已经完成；不要续写、改写或评价正文。',
       'history 只概括正文中已经发生、可供导演维持连续性的事件，不记录创作过程。',
-      'observations 只为列出的当前场景参与人物记录其在正文中明确亲历或可感知的事实；不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。没有可靠观察就省略该人物。',
-      'nodeSuggestions 与 edgeSuggestions 是供玩家审查的未来故事建议，不能把建议写进 history 或 observations。节点 ref 只在本批建议内使用；关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。',
-      '节点 kind 只能是 arc、beat、secret；关系 kind 只能是 precedes、causes、contains、foreshadows。只有 foreshadows 可以携带 foreshadowStatus。人物 id 必须来自 participants。',
-      '只返回 JSON，例如：{"history":"...","observations":[{"characterId":"...","text":"..."}],"nodeSuggestions":[{"ref":"next_scene","kind":"beat","title":"下一场","content":"...","participantIds":[]}],"edgeSuggestions":[{"kind":"causes","source":{"kind":"node","nodeId":"..."},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}。不要使用 Markdown 围栏。',
+      'changes.facts 只记录当前场景参与人物在正文中明确亲历或可感知的事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。',
+      'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
+      '节点 kind 只能是 arc、beat、secret，必须同时给出折叠 summary、content、participantIds 和 knowledge。knowledge.mode 只能是 inherit、none、participants、characters；只有 characters 可以列出 characterIds。关系 kind 只能是 precedes、causes、foreshadows，只有 foreshadows 可以携带 foreshadowStatus。所有人物 id 必须来自 participants。',
+      '只返回 JSON，例如：{"history":"...","changes":{"facts":[{"text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"participants","characterIds":[]}}],"edges":[{"kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
     ].join('\n'),
     [
       '<participants>', participants.map(character => `${character.id}\t${character.name}`).join('\n'), '</participants>',
-      '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.title}`).join('\n'), '</canonical_nodes>',
+      '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.parentId ?? '-'}\t${node.title}`).join('\n'), '</canonical_nodes>',
       '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
       '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
       '<visible_reply>', visibleReply, '</visible_reply>',
@@ -1038,9 +1082,7 @@ export async function materializeStoryTurn(input: {
   } catch {
     update = {
       history: visibleReply,
-      observations: [],
-      nodeSuggestions: [],
-      edgeSuggestions: [],
+      changes: { facts: [], nodes: [], edges: [] },
     }
   }
   const materialized = input.store.materializeTurn(input.workspaceId, {
@@ -1050,9 +1092,7 @@ export async function materializeStoryTurn(input: {
     summary: update.history,
     evidence: visibleReply,
     participantIds: participants.map(character => character.id),
-    observations: update.observations,
-    nodeSuggestions: update.nodeSuggestions,
-    edgeSuggestions: update.edgeSuggestions,
+    changes: update.changes,
     webResearch: materializedWebResearch(
       input.agent.session.events,
       briefEvent.data.resultEventSeqs,
@@ -1061,7 +1101,7 @@ export async function materializeStoryTurn(input: {
     ),
   })
   const record: StoryTurnMaterializedRecord = {
-    format: 2,
+    format: 3,
     sessionId: String(input.agent.session.id),
     workspaceId: input.workspaceId,
     workspaceRevision: materialized.revision,
@@ -1069,9 +1109,7 @@ export async function materializeStoryTurn(input: {
     step: briefEvent.data.step,
     continuityResultEventSeq: continuity.resultEventSeq,
     eventSummary: update.history,
-    observations: update.observations,
-    nodeSuggestions: update.nodeSuggestions,
-    edgeSuggestions: update.edgeSuggestions,
+    changes: update.changes,
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-materialized', record)
   await input.ctx.sessions.flush(input.agent.session)
