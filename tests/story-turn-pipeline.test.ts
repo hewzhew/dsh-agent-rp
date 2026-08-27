@@ -332,14 +332,22 @@ test('runs logged story stages while keeping each character request privately sc
             ? JSON.stringify({
               observation: '看见玩家举起徽章。',
               action: '先观察徽章刻痕。',
-              speechIntent: '提醒对方先确认眼前事实再下结论。',
+              speech: {
+                respondsTo: '对方准备在没有看清徽章刻痕时就下结论。',
+                move: 'warn',
+                content: '要求对方先确认眼前的刻痕再作判断。',
+              },
               voiceEvidence: [evidence, conversationEvidence, voiceNotesEvidence, 'character:invented:example-dialogue'],
               insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
             })
             : JSON.stringify({
               observation: '注意到阿梨正在观察徽章。',
               action: '',
-              speechIntent: '纠正阿梨“已经看清”的前提。',
+              speech: {
+                respondsTo: '阿梨表现得像是已经看清徽章刻痕。',
+                move: 'correct',
+                content: '指出刻痕仍然模糊，现在不能当作已经看清。',
+              },
               voiceEvidence: [evidence],
               insights: [],
             })
@@ -502,10 +510,13 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterBodies[0]!, /先把眼前的事说清楚/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
-  assert.match(characterSystems[0]!, /若开口只是为了让场面热闹/u)
+  assert.match(characterSystems[0]!, /为了让场面热闹.*speech 必须为 null/u)
+  assert.match(characterSystems[0]!, /respondsTo.*move.*content/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
-  assert.match(directorBody, /说话意图：提醒对方先确认眼前事实再下结论/u)
+  assert.match(directorBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
+  assert.match(directorBody, /对话动作：warn/u)
+  assert.match(directorBody, /传达内容：要求对方先确认眼前的刻痕再作判断/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
   assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
@@ -524,7 +535,9 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(sectionBodies.join('\n'), /<voice_evidence>|先把眼前的事说清楚/u)
   assert.match(voiceBody, new RegExp(`speech:${sectionId}:1`, 'u'))
   assert.ok(voiceBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
-  assert.match(voiceBody, /提醒对方先确认眼前事实再下结论/u)
+  assert.match(voiceBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
+  assert.match(voiceBody, /对话动作：warn/u)
+  assert.match(voiceBody, /传达内容：要求对方先确认眼前的刻痕再作判断/u)
   assert.match(voiceBody, /先把眼前的事说清楚/u)
   assert.match(voiceBody, /熟到省略礼貌和背景说明/u)
   assert.match(voiceBody, /<voice_exchange>[\s\S]*\[目标人物\]\[示例\] 阿梨｜先把眼前的事说清楚。/u)

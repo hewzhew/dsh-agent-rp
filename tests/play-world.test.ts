@@ -451,7 +451,7 @@ test('keeps the exact world outcome while preserving only private-section charac
               ? JSON.stringify({
                 observation: '看见刚发生的结果。',
                 action: '',
-                speechIntent: '',
+                speech: null,
                 voiceEvidence: [],
                 insights: body.includes('# 人物：博丽灵梦')
                   ? [{ kind: 'decision', text: '灵梦决定继续当前棋局，不再要求作废已结算回合。' }]
