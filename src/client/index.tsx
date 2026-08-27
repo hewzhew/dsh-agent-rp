@@ -3062,9 +3062,9 @@ function SidebarRoleplayDestination({
           }}>
             <span aria-hidden="true" style={{ color, fontSize: '20px', lineHeight: 1 }}>✎</span>
             <span style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ display: 'block', fontSize: '13px' }}>故事工程</strong>
+              <strong style={{ display: 'block', fontSize: '13px' }}>故事工作室</strong>
               <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '3px', opacity: .52 }}>
-                多人物认知、大纲、伏笔、分区正文与原著资料
+                故事地图、人物认知、事件时间线、资料与输出布局
               </span>
             </span>
             <span aria-hidden="true" style={{ fontSize: '16px', opacity: .38 }}>›</span>

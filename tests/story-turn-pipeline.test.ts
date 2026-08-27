@@ -9,7 +9,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { appendAgentRpSessionEvent } from '../src/session-event-compat.ts'
-import { createStoryCharacterId, StoryWorkspaceStore } from '../src/story-workspace.ts'
+import { createStoryCharacterId, createStoryNodeId, StoryWorkspaceStore } from '../src/story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
 import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
 
@@ -17,48 +17,113 @@ installIgnorableSessionEventFixture()
 
 const aliceId = 'character-00000000-0000-4000-8000-000000000001'
 const bobId = 'character-00000000-0000-4000-8000-000000000002'
-const sectionId = 'section-00000000-0000-4000-8000-000000000001'
-const characterSectionId = 'section-00000000-0000-4000-8000-000000000002'
-const historySectionId = 'section-00000000-0000-4000-8000-000000000003'
+const arcId = 'node-00000000-0000-4000-8000-000000000001'
+const activeNodeId = 'node-00000000-0000-4000-8000-000000000002'
+const secretId = 'node-00000000-0000-4000-8000-000000000003'
+const aliceFactId = 'fact-00000000-0000-4000-8000-000000000001'
+const bobFactId = 'fact-00000000-0000-4000-8000-000000000002'
+const historyEventId = 'event-00000000-0000-4000-8000-000000000001'
+const sectionId = 'output-00000000-0000-4000-8000-000000000001'
+const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
+const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 
 function workspace(): StoryWorkspaceSnapshot {
   return {
-    manifest: {
-      format: 0,
-      id: 'story-00000000-0000-4000-8000-000000000001',
-      name: '隔离流水线',
-      revision: 3,
-      createdAt: 1,
-      updatedAt: 2,
-      pipeline: { maxParallel: 2, workerModel: { provider: 'worker-fixture', model: 'worker-model' } },
-      characters: [
-        { id: aliceId, name: '阿梨', enabled: true },
-        { id: bobId, name: '柏舟', enabled: true },
+    format: 1,
+    id: 'story-00000000-0000-4000-8000-000000000001',
+    name: '隔离流水线',
+    revision: 3,
+    createdAt: 1,
+    updatedAt: 2,
+    pipeline: { maxParallel: 2, workerModel: { provider: 'worker-fixture', model: 'worker-model' } },
+    graph: {
+      activeNodeId,
+      nodes: [
+        {
+          id: arcId,
+          kind: 'arc',
+          title: '第一幕',
+          status: 'active',
+          lifecycle: 'canonical',
+          audience: 'director',
+          position: { x: 0, y: 0 },
+          content: '导演知道下一幕会停电。',
+          participantIds: [],
+        },
+        {
+          id: activeNodeId,
+          kind: 'beat',
+          title: '雨后的车站',
+          status: 'active',
+          lifecycle: 'canonical',
+          audience: 'public',
+          position: { x: 320, y: 0 },
+          content: '玩家在车站举起徽章。',
+          participantIds: [aliceId, bobId],
+        },
+        {
+          id: secretId,
+          kind: 'secret',
+          title: '怀表',
+          status: 'planned',
+          lifecycle: 'canonical',
+          audience: 'director',
+          position: { x: 320, y: 220 },
+          content: '怀表将在第三幕打开。',
+          participantIds: [],
+        },
       ],
-      sections: [
-        { id: sectionId, name: '正文', kind: 'prose', enabled: true },
-        { id: characterSectionId, name: '阿梨视角', kind: 'character', enabled: true, characterId: aliceId },
-        { id: historySectionId, name: '公开档案', kind: 'history', enabled: true },
+      edges: [
+        {
+          id: 'edge-00000000-0000-4000-8000-000000000001',
+          kind: 'contains',
+          source: arcId,
+          target: activeNodeId,
+          label: '',
+          lifecycle: 'canonical',
+          audience: 'director',
+        },
       ],
-      sources: [{ id: sourceId, name: '检索原著设定', kind: 'web', enabled: true }],
     },
-    documents: {
-      outline: '导演知道下一幕会停电。',
-      foreshadowing: '怀表将在第三幕打开。',
-      proposals: '',
-      history: '两人都看见雨停了。',
-      characters: [
-        { id: aliceId, persona: '阿梨谨慎。', knowledge: '阿梨知道徽章的主人。' },
-        { id: bobId, persona: '柏舟果断。', knowledge: '柏舟藏起了车票。' },
-      ],
-      sections: [
-        { id: sectionId, content: '保持第三人称。' },
-        { id: characterSectionId, content: '只写阿梨能表现出的内容。' },
-        { id: historySectionId, content: '使用简短时间线。' },
-      ],
-      sources: [{ id: sourceId, content: '只查询作品官方设定与原著章节' }],
-    },
+    characters: [
+      { id: aliceId, name: '阿梨', persona: '阿梨谨慎。' },
+      { id: bobId, name: '柏舟', persona: '柏舟果断。' },
+    ],
+    facts: [
+      {
+        id: aliceFactId,
+        text: '阿梨知道徽章的主人。',
+        status: 'asserted',
+        audience: 'director',
+        knownBy: [aliceId],
+        source: { kind: 'manual' },
+      },
+      {
+        id: bobFactId,
+        text: '柏舟藏起了车票。',
+        status: 'asserted',
+        audience: 'director',
+        knownBy: [bobId],
+        source: { kind: 'manual' },
+      },
+    ],
+    events: [{
+      id: historyEventId,
+      key: 'fixture-history',
+      turn: 0,
+      title: '雨停',
+      summary: '两人都看见雨停了。',
+      evidence: '雨声停了。',
+      participantIds: [aliceId, bobId],
+      nodeId: activeNodeId,
+    }],
+    outputs: [
+      { id: sectionId, name: '正文', kind: 'prose', enabled: true, instructions: '保持第三人称。' },
+      { id: characterSectionId, name: '阿梨视角', kind: 'character', enabled: true, characterId: aliceId, instructions: '只写阿梨能表现出的内容。' },
+      { id: historySectionId, name: '公开档案', kind: 'history', enabled: true, instructions: '使用简短时间线。' },
+    ],
+    sources: [{ id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' }],
   }
 }
 
@@ -188,21 +253,35 @@ test('materializes continuity from the actually visible reply instead of the pre
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-continuity-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
-  const created = store.create({ format: 0, name: '实际正文沉淀' })
+  const created = store.create({ format: 1, name: '实际正文沉淀' })
   const characterId = createStoryCharacterId()
+  const nodeId = createStoryNodeId()
   const workspace = store.save({
-    format: 0,
-    id: created.manifest.id,
+    format: 1,
+    id: created.id,
     revision: 0,
     name: '实际正文沉淀',
     pipeline: { maxParallel: 2 },
-    characters: [{ id: characterId, name: '阿梨', enabled: true }],
-    sections: [],
-    sources: [],
-    documents: {
-      outline: '在车站重逢。', foreshadowing: '徽章尚未揭晓。', proposals: '', history: '',
-      characters: [{ id: characterId, persona: '谨慎。', knowledge: '' }], sections: [], sources: [],
+    graph: {
+      activeNodeId: nodeId,
+      nodes: [{
+        id: nodeId,
+        kind: 'beat',
+        title: '车站重逢',
+        status: 'active',
+        lifecycle: 'canonical',
+        audience: 'public',
+        position: { x: 0, y: 0 },
+        content: '在车站重逢。',
+        participantIds: [characterId],
+      }],
+      edges: [],
     },
+    characters: [{ id: characterId, name: '阿梨', persona: '谨慎。' }],
+    facts: [],
+    events: [],
+    outputs: [],
+    sources: [],
   })
   const session = Session.create(SessionId('story-continuity'))
   session.append('request/header', {
@@ -214,8 +293,8 @@ test('materializes continuity from the actually visible reply instead of the pre
   appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
     format: 0,
     sessionId: String(session.id),
-    workspaceId: workspace.manifest.id,
-    workspaceRevision: workspace.manifest.revision,
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
     turn: 1,
     step: 1,
     resultEventSeqs: [],
@@ -259,7 +338,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     ctx: fake,
     agent,
     store,
-    workspaceId: workspace.manifest.id,
+    workspaceId: workspace.id,
     turn: 1,
     signal: new AbortController().signal,
   })
@@ -267,10 +346,11 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.match(requestBody, /实际展示时，阿梨只看见雨停了/u)
   assert.doesNotMatch(requestBody, /流水线准备稿/u)
   assert.equal(result?.observations[0]?.characterId, characterId)
-  const saved = store.get(workspace.manifest.id)
-  assert.match(saved.documents.history, /阿梨在车站看见雨停/u)
-  assert.match(saved.documents.characters[0]!.knowledge, /阿梨亲眼看见雨停/u)
-  assert.match(saved.documents.proposals, /徽章在雨后反光/u)
+  const saved = store.get(workspace.id)
+  assert.match(saved.events[0]?.summary ?? '', /阿梨在车站看见雨停/u)
+  assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
+  assert.equal(saved.facts.find(fact => fact.text.includes('阿梨亲眼看见雨停'))?.knownBy[0], characterId)
+  assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /徽章在雨后反光/u)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-materialized').length, 1)
   assert.equal(session.events.find(event => event.type === 'agent-rp/story-stage-request')?.data.stage, 'continuity')
 
@@ -278,9 +358,9 @@ test('materializes continuity from the actually visible reply instead of the pre
     ctx: fake,
     agent,
     store,
-    workspaceId: workspace.manifest.id,
+    workspaceId: workspace.id,
     turn: 1,
     signal: new AbortController().signal,
   }), result)
-  assert.equal(store.get(workspace.manifest.id).manifest.revision, saved.manifest.revision)
+  assert.equal(store.get(workspace.id).revision, saved.revision)
 })

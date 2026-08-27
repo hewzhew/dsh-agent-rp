@@ -44,11 +44,9 @@ export function searchStoryWorkspaceSources(
 ): string {
   if (!Number.isSafeInteger(maxCharacters) || maxCharacters < 1) throw new Error('故事资料检索上限无效')
   const terms = queryTerms(query)
-  const ranked = workspace.manifest.sources.flatMap((source, sourceIndex) => {
+  const ranked = workspace.sources.flatMap((source, sourceIndex) => {
     if (!source.enabled) return []
-    const document = workspace.documents.sources.find(candidate => candidate.id === source.id)
-    if (document === undefined) return []
-    return chunks(document.content).map((text, chunkIndex): RankedExcerpt => ({
+    return chunks(source.content).map((text, chunkIndex): RankedExcerpt => ({
       sourceIndex,
       chunkIndex,
       sourceName: source.name,

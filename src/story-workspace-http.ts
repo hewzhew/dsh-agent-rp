@@ -34,7 +34,7 @@ function requestRecord(value: unknown): Record<string, unknown> {
 
 function parseCreateRequest(value: unknown): StoryWorkspaceCreateRequest {
   const record = requestRecord(value)
-  if (record.format !== 0 || typeof record.name !== 'string'
+  if (record.format !== 1 || typeof record.name !== 'string'
     || Object.keys(record).some(key => key !== 'format' && key !== 'name')) {
     throw new Error('故事工作区创建请求字段无效')
   }
@@ -43,12 +43,12 @@ function parseCreateRequest(value: unknown): StoryWorkspaceCreateRequest {
 
 function parseSaveRequest(value: unknown, id: string): StoryWorkspaceSaveRequest {
   const record = requestRecord(value)
-  const keys = new Set(['format', 'id', 'revision', 'name', 'pipeline', 'characters', 'sections', 'sources', 'documents'])
-  if (record.format !== 0 || record.id !== id || typeof record.revision !== 'number'
+  const keys = new Set(['format', 'id', 'revision', 'name', 'pipeline', 'graph', 'characters', 'facts', 'events', 'outputs', 'sources'])
+  if (record.format !== 1 || record.id !== id || typeof record.revision !== 'number'
     || typeof record.name !== 'string' || typeof record.pipeline !== 'object' || record.pipeline === null
-    || Array.isArray(record.pipeline) || !Array.isArray(record.characters)
-    || !Array.isArray(record.sections) || !Array.isArray(record.sources)
-    || typeof record.documents !== 'object' || record.documents === null || Array.isArray(record.documents)
+    || Array.isArray(record.pipeline) || typeof record.graph !== 'object' || record.graph === null
+    || Array.isArray(record.graph) || !Array.isArray(record.characters) || !Array.isArray(record.facts)
+    || !Array.isArray(record.events) || !Array.isArray(record.outputs) || !Array.isArray(record.sources)
     || Object.keys(record).some(key => !keys.has(key))) {
     throw new Error('故事工作区保存请求字段无效')
   }
@@ -77,23 +77,23 @@ export function installStoryWorkspaceHttp(ctx: Context, store: StoryWorkspaceSto
       const id = suffix === '' || suffix.includes('/') ? undefined : decodeURIComponent(suffix)
       try {
         if (request.method === 'GET' && suffix === '') {
-          json(response, 200, { format: 0, workspaces: store.list() })
+          json(response, 200, { format: 1, workspaces: store.list() })
           return
         }
         if (request.method === 'POST' && suffix === '') {
-          json(response, 201, { format: 0, workspace: store.create(parseCreateRequest(await readJson(request))) })
+          json(response, 201, { format: 1, workspace: store.create(parseCreateRequest(await readJson(request))) })
           return
         }
         if (request.method === 'GET' && id !== undefined) {
-          json(response, 200, { format: 0, workspace: store.get(id) })
+          json(response, 200, { format: 1, workspace: store.get(id) })
           return
         }
         if (request.method === 'PUT' && id !== undefined) {
-          json(response, 200, { format: 0, workspace: store.save(parseSaveRequest(await readJson(request), id)) })
+          json(response, 200, { format: 1, workspace: store.save(parseSaveRequest(await readJson(request), id)) })
           return
         }
         if (request.method === 'DELETE' && id !== undefined) {
-          json(response, 200, { format: 0, workspace: store.remove(id) })
+          json(response, 200, { format: 1, workspace: store.remove(id) })
           return
         }
         response.setHeader('allow', 'GET, POST, PUT, DELETE')

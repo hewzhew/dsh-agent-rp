@@ -11,7 +11,14 @@ import {
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
 import { appendAgentRpSessionEvent } from './session-event-compat.ts'
-import { compileStoryCharacterContext, StoryWorkspaceStore } from './story-workspace.ts'
+import {
+  compileStoryCharacterContext,
+  storyDirectorMap,
+  storyOpenForeshadowing,
+  storyParticipantCharacters,
+  storyPublicHistory,
+  StoryWorkspaceStore,
+} from './story-workspace.ts'
 import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSources } from './story-research.ts'
 
@@ -58,19 +65,20 @@ export interface StoryTurnBriefRecord {
 
 /** Exact editable story-document update committed after the visible reply. */
 export interface StoryTurnMaterializedRecord {
-  readonly format: 0
+  readonly format: 1
   readonly sessionId: string
   readonly workspaceId: string
   readonly workspaceRevision: number
   readonly turn: number
   readonly step: number
   readonly continuityResultEventSeq: number
-  readonly history: string
+  readonly eventSummary: string
   readonly observations: readonly {
     readonly characterId: string
     readonly text: string
   }[]
-  readonly proposals: string
+  readonly plotSuggestions: readonly string[]
+  readonly foreshadowSuggestions: readonly string[]
 }
 
 /** Logged network-search request generated from an enabled Web source. */
@@ -233,14 +241,7 @@ function parseContinuityUpdate(text: string, characterIds: ReadonlySet<string>):
   }
 }
 
-function proposalText(update: ContinuityUpdate): string {
-  return [
-    update.outlineProposals.length === 0 ? '' : `### 大纲提案\n\n${update.outlineProposals.map(item => `- ${item}`).join('\n')}`,
-    update.foreshadowingProposals.length === 0 ? '' : `### 伏笔提案\n\n${update.foreshadowingProposals.map(item => `- ${item}`).join('\n')}`,
-  ].filter(Boolean).join('\n\n')
-}
-
-function sectionPurpose(input: RunStoryTurnPipelineInput, section: StoryWorkspaceSnapshot['manifest']['sections'][number]): string {
+function sectionPurpose(input: RunStoryTurnPipelineInput, section: StoryWorkspaceSnapshot['outputs'][number]): string {
   if (section.kind === 'prose') {
     return '写叙事正文、环境、行动与对白。只呈现导演方案允许公开的内容，不解释创作过程。'
   }
@@ -249,7 +250,7 @@ function sectionPurpose(input: RunStoryTurnPipelineInput, section: StoryWorkspac
   }
   const target = section.characterId === undefined
     ? undefined
-    : input.workspace.manifest.characters.find(character => character.id === section.characterId)
+    : input.workspace.characters.find(character => character.id === section.characterId)
   return target === undefined
     ? '聚焦所有参与人物的外显行动、对白与正文允许呈现的内心。不得让人物表现出其私有认知之外的知识。'
     : `聚焦人物“${target.name}”的外显行动、对白与正文允许呈现的内心。不得让该人物表现出其私有认知之外的知识。`
@@ -297,18 +298,17 @@ async function searchWeb(
   playerInput: string,
   resultEventSeqs: number[],
 ): Promise<string> {
-  const webSources = input.workspace.manifest.sources.filter(source => source.enabled && source.kind === 'web')
+  const webSources = input.workspace.sources.filter(source => source.enabled && source.kind === 'web')
   if (webSources.length === 0) return ''
   const scope = webSources.map(source => {
-    const content = input.workspace.documents.sources.find(document => document.id === source.id)?.content ?? ''
-    return `${source.name}: ${content}`
+    return `${source.name}: ${source.content}`
   }).join('\n').slice(0, 2_000)
   const query = `${scope}\n${playerInput}`.trim().slice(0, 2_500)
   const requestEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-web-search-request', {
     format: 0,
     sessionId: String(input.agent.session.id),
-    workspaceId: input.workspace.manifest.id,
-    workspaceRevision: input.workspace.manifest.revision,
+    workspaceId: input.workspace.id,
+    workspaceRevision: input.workspace.revision,
     turn: input.turn,
     step: input.step,
     query,
@@ -339,7 +339,7 @@ async function searchWeb(
 
 function baseGenerateOptions(input: RunStoryTurnPipelineInput): Pick<GenerateOptions, 'provider' | 'model' | 'maxTokens'> {
   const config = input.agent.session.requestHeader()?.config
-  const workerModel = input.workspace.manifest.pipeline.workerModel
+  const workerModel = input.workspace.pipeline.workerModel
   const provider = workerModel?.provider ?? config?.provider ?? input.agent.options.provider
   const model = workerModel?.model ?? config?.model ?? input.agent.options.model
   if (provider === undefined || provider.trim() === '' || model === undefined || model.trim() === '') {
@@ -406,8 +406,8 @@ async function runStage(
     format: 0,
     requestId,
     sessionId: String(input.agent.session.id),
-    workspaceId: input.workspace.manifest.id,
-    workspaceRevision: input.workspace.manifest.revision,
+    workspaceId: input.workspace.id,
+    workspaceRevision: input.workspace.revision,
     turn: input.turn,
     step: input.step,
     stage,
@@ -458,8 +458,8 @@ function existingBrief(
 ): SessionEvent<'agent-rp/story-turn-brief'> | undefined {
   return events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
     event.type === 'agent-rp/story-turn-brief' && event.data.turn === input.turn && event.data.step === input.step
-      && event.data.workspaceId === input.workspace.manifest.id
-      && event.data.workspaceRevision === input.workspace.manifest.revision)
+      && event.data.workspaceId === input.workspace.id
+      && event.data.workspaceRevision === input.workspace.revision)
 }
 
 function directorFallback(
@@ -470,9 +470,9 @@ function directorFallback(
 ): string {
   return [
     '# 本轮剧情目标',
-    input.workspace.documents.outline,
+    storyDirectorMap(input.workspace),
     '# 尚未回收的伏笔',
-    input.workspace.documents.foreshadowing,
+    storyOpenForeshadowing(input.workspace),
     '# 与本轮相关的资料',
     research,
     '# 各人物独立决策',
@@ -504,7 +504,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const resultEventSeqs: number[] = []
   const webResearch = await searchWeb(input, playerInput, resultEventSeqs)
   const researchBody = [
-    '<public_history>', input.workspace.documents.history, '</public_history>',
+    '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
     '<recent_transcript>', recentTranscript, '</recent_transcript>',
     '<source_excerpts>', sourceExcerpts, '</source_excerpts>',
     '<web_research>', webResearch, '</web_research>',
@@ -519,10 +519,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   ), resultEventSeqs)
   const researchText = research.text ?? [sourceExcerpts, webResearch].filter(Boolean).join('\n\n')
 
-  const enabledCharacters = input.workspace.manifest.characters.filter(candidate => candidate.enabled)
+  const enabledCharacters = storyParticipantCharacters(input.workspace)
   const characterDecisions = (await mapStoryPeers(
     enabledCharacters,
-    input.workspace.manifest.pipeline.maxParallel,
+    input.workspace.pipeline.maxParallel,
     async character => {
       input.signal.throwIfAborted()
       const context = compileStoryCharacterContext(input.workspace, character.id, {
@@ -544,16 +544,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     input,
     '你是剧情导演 Worker。依据大纲、伏笔、研究简报和各人物独立行动提案，为本轮设计具体正文方案。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。明确每个启用正文分区应写什么。不要直接向玩家解释内部资料。',
     [
-      '<outline>', input.workspace.documents.outline, '</outline>',
-      '<foreshadowing>', input.workspace.documents.foreshadowing, '</foreshadowing>',
-      '<public_history>', input.workspace.documents.history, '</public_history>',
+      '<story_map>', storyDirectorMap(input.workspace), '</story_map>',
+      '<foreshadowing>', storyOpenForeshadowing(input.workspace), '</foreshadowing>',
+      '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
       '<research>', researchText, '</research>',
       '<character_decisions>', characterDecisions.join('\n\n'), '</character_decisions>',
-      '<sections>', input.workspace.manifest.sections.filter(section => section.enabled)
+      '<sections>', input.workspace.outputs.filter(section => section.enabled)
         .map(section => {
           const target = section.characterId === undefined
             ? ''
-            : input.workspace.manifest.characters.find(character => character.id === section.characterId)?.name ?? ''
+            : input.workspace.characters.find(character => character.id === section.characterId)?.name ?? ''
           return `${section.id}\t${section.kind}\t${section.name}\t${target}`
         }).join('\n'), '</sections>',
       '<player_input>', playerInput, '</player_input>',
@@ -563,17 +563,17 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   ), resultEventSeqs)
   const directorBrief = director.text ?? fallback
 
-  const enabledSections = input.workspace.manifest.sections.filter(section => section.enabled)
+  const enabledSections = input.workspace.outputs.filter(section => section.enabled)
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0) {
     sectionDrafts = [{ id: 'director-fallback', name: '正文', kind: 'prose', text: directorBrief }]
   } else {
     sectionDrafts = (await mapStoryPeers(
       enabledSections,
-      input.workspace.manifest.pipeline.maxParallel,
+      input.workspace.pipeline.maxParallel,
       async section => {
         input.signal.throwIfAborted()
-        const existing = input.workspace.documents.sections.find(document => document.id === section.id)?.content ?? ''
+        const existing = section.instructions
         const draft = await runStage(input, 'section', generateOptions(
           input,
           `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性，只返回这个分区可直接展示的内容。`,
@@ -607,8 +607,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const record: StoryTurnBriefRecord = {
     format: 0,
     sessionId: String(input.agent.session.id),
-    workspaceId: input.workspace.manifest.id,
-    workspaceRevision: input.workspace.manifest.revision,
+    workspaceId: input.workspace.id,
+    workspaceRevision: input.workspace.revision,
     turn: input.turn,
     step: input.step,
     resultEventSeqs,
@@ -641,7 +641,7 @@ export async function materializeStoryTurn(input: {
   const visibleReply = visibleReplyText(input.agent.session.events, input.turn)
   if (visibleReply === '') return undefined
   const workspace = input.store.get(input.workspaceId)
-  const participants = workspace.manifest.characters.filter(character => character.enabled)
+  const participants = storyParticipantCharacters(workspace)
   const stageInput: RunStoryTurnPipelineInput = {
     ctx: input.ctx,
     agent: input.agent,
@@ -663,8 +663,8 @@ export async function materializeStoryTurn(input: {
     ].join('\n'),
     [
       '<participants>', participants.map(character => `${character.id}\t${character.name}`).join('\n'), '</participants>',
-      '<current_outline>', workspace.documents.outline, '</current_outline>',
-      '<current_foreshadowing>', workspace.documents.foreshadowing, '</current_foreshadowing>',
+      '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
+      '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
       '<visible_reply>', visibleReply, '</visible_reply>',
     ].join('\n'),
     4_096,
@@ -681,25 +681,29 @@ export async function materializeStoryTurn(input: {
       foreshadowingProposals: [],
     }
   }
-  const proposals = proposalText(update)
   const materialized = input.store.materializeTurn(input.workspaceId, {
     key: `turn-${String(input.turn)}-brief-${String(briefEvent.seq)}`,
-    heading: `回合 ${String(input.turn)}`,
-    history: update.history,
+    turn: input.turn,
+    title: `回合 ${String(input.turn)}`,
+    summary: update.history,
+    evidence: visibleReply,
+    participantIds: participants.map(character => character.id),
     observations: update.observations,
-    proposals,
+    plotSuggestions: update.outlineProposals,
+    foreshadowSuggestions: update.foreshadowingProposals,
   })
   const record: StoryTurnMaterializedRecord = {
-    format: 0,
+    format: 1,
     sessionId: String(input.agent.session.id),
     workspaceId: input.workspaceId,
-    workspaceRevision: materialized.manifest.revision,
+    workspaceRevision: materialized.revision,
     turn: input.turn,
     step: briefEvent.data.step,
     continuityResultEventSeq: continuity.resultEventSeq,
-    history: update.history,
+    eventSummary: update.history,
     observations: update.observations,
-    proposals,
+    plotSuggestions: update.outlineProposals,
+    foreshadowSuggestions: update.foreshadowingProposals,
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-materialized', record)
   await input.ctx.sessions.flush(input.agent.session)
