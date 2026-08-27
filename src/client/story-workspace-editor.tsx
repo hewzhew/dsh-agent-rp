@@ -41,6 +41,11 @@ import {
   type StoryWorkspaceSnapshot,
   type StoryWorkspaceSummary,
 } from '../story-workspace-protocol.ts'
+import {
+  acceptStorySuggestionBatch,
+  rejectStorySuggestionBatch,
+  storySuggestionBatch,
+} from '../story-suggestion-batch.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
@@ -630,14 +635,19 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
   </div>
 }
 
-function EventInspector({ workspace, event, update, onOpenKnowledge, onDelete }: {
+function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, onDelete }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly event: StoryEvent
   readonly update: UpdateWorkspace
   readonly onOpenKnowledge: () => void
+  readonly onSelect: (selection: StudioSelection) => void
   readonly onDelete: () => void
 }) {
   const observations = workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id)
+  const suggestionBatch = storySuggestionBatch(workspace, event.id)
+  const suggestedNodes = workspace.graph.nodes.filter(node => suggestionBatch.nodeIds.includes(node.id))
+  const suggestedEdges = workspace.graph.edges.filter(edge => suggestionBatch.edgeIds.includes(edge.id))
+  const suggestionCount = suggestedNodes.length + suggestedEdges.length
   const patch = (transform: (value: StoryEvent) => StoryEvent): void => {
     update(current => ({ ...current, events: current.events.map(item => item.id === event.id ? transform(item) : item) }))
   }
@@ -666,6 +676,26 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onDelete }:
       {observations.length === 0 && <p>这次事件还没有形成可供人物使用的观察。</p>}
       <button className="story-studio-button" type="button" onClick={onOpenKnowledge}>在认知矩阵中核对</button>
     </div>
+    {suggestionCount > 0 && <>
+      <hr className="story-studio-divider" />
+      <div className="story-event-change-set"><div className="story-event-change-set-heading"><div>
+        <strong>本回合候选变更</strong><span>{suggestedNodes.length} 个故事节点 · {suggestedEdges.length} 条关系</span>
+      </div><span>{suggestionCount} 项待审</span></div>
+      <div className="story-event-change-list">
+        {suggestedNodes.map(node => <button type="button" key={node.id} onClick={() => { onSelect({ kind: 'node', id: node.id }) }}>
+          <span>{nodeKindLabels[node.kind]}</span><strong>{node.title}</strong><small>查看并修改</small>
+        </button>)}
+        {suggestedEdges.map(edge => <button type="button" key={edge.id} onClick={() => { onSelect({ kind: 'edge', id: edge.id }) }}>
+          <span>{edgeKindLabels[edge.kind]}</span><strong>{edge.label || '未命名关系'}</strong><small>查看并修改</small>
+        </button>)}
+      </div>
+      <div className="story-studio-actions">
+        <button className="story-studio-button story-studio-button-primary" type="button"
+          onClick={() => { update(current => acceptStorySuggestionBatch(current, event.id)) }}>整组接受</button>
+        <button className="story-studio-button" type="button"
+          onClick={() => { update(current => rejectStorySuggestionBatch(current, event.id)) }}>整组拒绝</button>
+      </div></div>
+    </>}
     <hr className="story-studio-divider" />
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除事件与其派生事实</button>
   </>
@@ -1426,7 +1456,8 @@ export function StoryWorkspaceEditor({ accent, sessionId, onClose }: StoryWorksp
           perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
           onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
           : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update}
-            onOpenKnowledge={() => { setView('characters'); setSelection(undefined) }} onDelete={() => { deleteEvent(selectedEvent.id) }} />
+            onOpenKnowledge={() => { setView('characters'); setSelection(undefined) }} onSelect={setSelection}
+            onDelete={() => { deleteEvent(selectedEvent.id) }} />
             : selectedSource !== undefined ? <SourceInspector source={selectedSource} update={update} onDelete={() => {
               update(current => ({
                 ...current,

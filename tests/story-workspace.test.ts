@@ -7,6 +7,11 @@ import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/s
 import { searchStoryWorkspaceSources } from '../src/story-research.ts'
 import { splitStorySourcePassages } from '../src/story-source.ts'
 import {
+  acceptStorySuggestionBatch,
+  rejectStorySuggestionBatch,
+  storySuggestionBatch,
+} from '../src/story-suggestion-batch.ts'
+import {
   compileStoryCharacterContext,
   createStoryCharacterId,
   createStoryCitationId,
@@ -707,6 +712,29 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.target, badgeSecret?.id)
   assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.foreshadowStatus, 'planted')
   assert.equal(materialized.graph.edges.every(edge => edge.sourceEventId === materialized.events[0]?.id), true)
+  const eventId = materialized.events[0]!.id
+  assert.deepEqual(storySuggestionBatch(materialized, eventId), {
+    nodeIds: [nextScene!.id, badgeSecret!.id],
+    edgeIds: materialized.graph.edges.map(edge => edge.id),
+  })
+  const acceptedBatch = acceptStorySuggestionBatch(materialized, eventId)
+  assert.equal(acceptedBatch.graph.nodes.every(node => node.lifecycle === 'canonical'), true)
+  assert.equal(acceptedBatch.graph.edges.every(edge => edge.lifecycle === 'canonical'), true)
+  const splitBatch = {
+    ...materialized,
+    graph: {
+      ...materialized.graph,
+      nodes: materialized.graph.nodes.map(node => node.id === nextScene?.id
+        ? { ...node, sourceEventId: 'event-99999999-9999-4999-8999-999999999999' }
+        : node),
+    },
+  }
+  assert.throws(() => acceptStorySuggestionBatch(splitBatch, eventId), /依赖另一个尚未接受的故事簇/u)
+  const rejectedBatch = rejectStorySuggestionBatch(materialized, eventId)
+  assert.equal(rejectedBatch.graph.nodes.some(node => node.lifecycle === 'suggested'), false)
+  assert.equal(rejectedBatch.graph.edges.length, 0)
+  assert.equal(rejectedBatch.events.length, 1)
+  assert.equal(rejectedBatch.facts.some(fact => fact.source.kind === 'event' && fact.source.eventId === eventId), true)
   assert.equal(materialized.researchInbox[0]?.url, 'https://example.test/badge')
   assert.equal(materialized.researchInbox.length, 1)
 
