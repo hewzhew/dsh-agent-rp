@@ -389,6 +389,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
   assert.match(characterSystems[0]!, /若开口只是为了让场面热闹/u)
+  assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(directorBody, /说话意图：提醒对方先确认眼前事实再下结论/u)
   assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
   assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)

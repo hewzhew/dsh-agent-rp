@@ -44,6 +44,8 @@ export interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection
+  /** Render selected authoritative events as the immutable first paragraph of story prose. */
+  renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string
 }
 
 /** Installed world modules keyed by stable module id. */

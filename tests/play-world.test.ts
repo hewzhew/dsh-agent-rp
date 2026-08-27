@@ -144,6 +144,11 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(afterMove.pieces.find(piece => piece.id === pieceId)?.status, 'track')
   assert.equal(afterMove.currentPlayerId, reimuId)
   assert.deepEqual(moved.worldActionReceipts?.map(receipt => receipt.actionId), ['roll', moveAction!.id])
+  assert.equal(worlds.get(FLYING_CHESS_WORLD_MODULE_ID).renderEventNarrative(
+    moved.world!,
+    [2, 3],
+    { characters: moved.characters },
+  ), '博丽灵梦掷出 6。博丽灵梦把 1 号飞机推进到航线第 1 步。')
 
   const rolledAgain = store.dispatchWorldAction(moved.id, {
     format: 0,
@@ -486,11 +491,12 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   assert.match(researchDispatch, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
+  assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
   assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'section').length, 2)
+  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'section' ? [event.data.subjectId] : []), [characterId])
   session.append('assistant/message', {
     turn: 2,
     step: 1,

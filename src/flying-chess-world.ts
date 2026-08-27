@@ -170,6 +170,35 @@ function playerName(context: PlayWorldContext, id: string): string {
   return characterMap(context).get(id) ?? id
 }
 
+function eventActor(event: PlayWorldEvent, context: PlayWorldContext): string | undefined {
+  return event.actorId === undefined ? undefined : playerName(context, event.actorId)
+}
+
+function eventNarrative(event: PlayWorldEvent, context: PlayWorldContext): string {
+  const actor = eventActor(event, context)
+  if (event.type === 'die.rolled' && actor !== undefined) {
+    const value = event.summary.match(/结果为 ([1-6])。/u)?.[1]
+    if (value !== undefined) return `${actor}掷出 ${value}。`
+  }
+  if (event.type === 'turn.passed' && actor !== undefined) {
+    return `${actor}没有可移动的飞机，本回合结束。`
+  }
+  if (event.type === 'piece.moved' && actor !== undefined) {
+    const piece = event.title.match(/移动 (\d+) 号飞机/u)?.[1]
+    if (piece !== undefined && event.summary === '飞机抵达终点。') return `${actor}的 ${piece} 号飞机抵达终点。`
+    const step = event.summary.match(/航线第 (\d+) 步/u)?.[1]
+    if (piece !== undefined && step !== undefined) return `${actor}把 ${piece} 号飞机推进到航线第 ${step} 步。`
+  }
+  if (event.type === 'piece.captured' && actor !== undefined) {
+    const count = event.summary.match(/^(\d+) 架/u)?.[1]
+    if (count !== undefined) return `${actor}撞回 ${count} 架对方飞机。`
+  }
+  if (event.type === 'game.finished' && actor !== undefined) {
+    return `${actor}的四架飞机全部抵达终点，赢得棋局。`
+  }
+  return `${event.title}：${event.summary}`
+}
+
 function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
   const names = characterMap(context)
   const lines = state.playerOrder.map(playerId => {
@@ -347,6 +376,13 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
     projectForDirector(snapshot, context) {
       const normalized = this.normalize(snapshot, context)
       return { title: normalized.title, text: renderState(normalized.state as FlyingChessWorldState, normalized.events, context) }
+    },
+    renderEventNarrative(snapshot, eventSequences, context) {
+      const normalized = this.normalize(snapshot, context)
+      const selected = new Set(eventSequences)
+      const events = normalized.events.filter(item => selected.has(item.sequence))
+      if (events.length !== selected.size) throw new Error('飞行棋叙事引用了不存在的世界事件')
+      return events.map(item => eventNarrative(item, context)).join('')
     },
   }
 }
