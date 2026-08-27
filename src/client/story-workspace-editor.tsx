@@ -62,6 +62,7 @@ import {
   storySuggestionBatch,
 } from '../story-suggestion-batch.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
+import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
 import storyStudioCss from './story-workspace-editor.css?raw'
@@ -71,7 +72,8 @@ interface StoryWorkspaceEditorProps {
   readonly initialWorkspaceId?: string
   readonly sessionId?: string
   readonly launchSourceSessionId?: string
-  readonly onStartSession?: (sourceSessionId: string, workspaceId: string) => Promise<void>
+  readonly onStartSession?: (sourceSessionId: string, workspaceId: string, request: string) => Promise<void>
+  readonly onContinueSession?: (sessionId: string, workspaceId: string, request: string) => Promise<void>
   readonly onClose: () => void
 }
 
@@ -1367,19 +1369,21 @@ function flyingChessPieceCell(state: FlyingChessWorldState, piece: FlyingChessPi
   return (playerIndex * Math.floor(24 / state.playerOrder.length) + piece.steps - 1) % 24
 }
 
-function FlyingChessPlayView({ workspace, state, busy, dirty, canStartSession, onStartSession, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onAdvanceSession, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly busy: boolean
   readonly dirty: boolean
-  readonly canStartSession: boolean
-  readonly onStartSession: () => void
+  readonly sessionAction: 'start' | 'continue' | undefined
+  readonly onAdvanceSession: (request: string) => void
   readonly onRestart: () => void
   readonly onAction: (action: FlyingChessWorldAction) => void
 }) {
   const [restartArmed, setRestartArmed] = useState(false)
+  const [turnDirection, setTurnDirection] = useState('')
   const name = (id: string): string => workspace.characters.find(character => character.id === id)?.name ?? id
   const currentName = name(state.currentPlayerId)
+  const latestEvent = workspace.world?.events.at(-1)
   return <div className="story-play-view">
     <div className="story-play-heading"><div><span>可执行世界 · 第 {state.turn} 回合</span><h1>幻想乡飞行棋</h1>
       <p>棋盘是权威状态；正文和 Agent 只能读取投影，不能靠叙述改写棋子位置。</p></div>
@@ -1399,8 +1403,17 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, canStartSession, o
         </div>
       </div>
     </div>
-    {canStartSession && <div className="story-play-session-action"><span>让人物 Worker、导演和正文流水线从这个权威棋局开始。</span>
-      <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || dirty} onClick={onStartSession}>开始新会话</button></div>}
+    {sessionAction !== undefined && <section className="story-play-session-action">
+      <div className="story-play-session-copy"><strong>{sessionAction === 'start' ? '开始第一回合' : '继续这一回合'}</strong>
+        <span>{latestEvent === undefined ? '人物会依据各自掌握的信息行动，结果会写入正文与故事记录。' : `最近发生：${latestEvent.title}`}</span></div>
+      <label className="story-play-session-input"><span>这一回合想怎样继续？</span><textarea value={turnDirection} maxLength={4_000}
+        placeholder="可以留空，让人物从最近的世界事件自然行动；也可以写一句方向。"
+        onChange={event => { setTurnDirection(event.target.value) }} /></label>
+      <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || dirty}
+        onClick={() => { onAdvanceSession(resolveStoryTurnRequest(workspace, turnDirection)) }}>
+        {sessionAction === 'start' ? '开始第一回合' : '继续这一回合'}
+      </button>
+    </section>}
     {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进棋局。</div>}
     <div className="story-flying-layout">
       <div className="story-flying-board" aria-label="24 格飞行棋棋盘">
@@ -1440,13 +1453,13 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, canStartSession, o
   </div>
 }
 
-function PlayWorldView({ workspace, modules, busy, dirty, canStartSession, onStartSession, onInstall, onRestart, onAction }: {
+function PlayWorldView({ workspace, modules, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly modules: readonly PlayWorldModuleDescriptor[]
   readonly busy: boolean
   readonly dirty: boolean
-  readonly canStartSession: boolean
-  readonly onStartSession: () => void
+  readonly sessionAction: 'start' | 'continue' | undefined
+  readonly onAdvanceSession: (request: string) => void
   readonly onInstall: (moduleId: string) => void
   readonly onRestart: () => void
   readonly onAction: (action: FlyingChessWorldAction) => void
@@ -1465,13 +1478,13 @@ function PlayWorldView({ workspace, modules, busy, dirty, canStartSession, onSta
   }
   if (workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID && isFlyingChessWorldState(workspace.world.state)) {
     return <FlyingChessPlayView workspace={workspace} state={workspace.world.state} busy={busy} dirty={dirty}
-      canStartSession={canStartSession} onStartSession={onStartSession} onRestart={onRestart} onAction={onAction} />
+      sessionAction={sessionAction} onAdvanceSession={onAdvanceSession} onRestart={onRestart} onAction={onAction} />
   }
   return <div className="story-studio-empty"><strong>{workspace.world.title}</strong><span>这个世界模块尚未提供原生场地视图。</span></div>
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
-export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, launchSourceSessionId, onStartSession, onClose }: StoryWorkspaceEditorProps) {
+export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, launchSourceSessionId, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
   const [worldModules, setWorldModules] = useState<readonly PlayWorldModuleDescriptor[]>([])
   const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
@@ -1620,11 +1633,20 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       setNotice(actorId === undefined ? '人物已经改为手写档案' : '角色卡已经绑定到本局人物')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
-  const startSession = (): void => {
-    if (workspace === undefined || launchSourceSessionId === undefined || onStartSession === undefined || dirty) return
+  const advanceSession = (request: string): void => {
+    if (workspace === undefined || dirty) return
     setSaving(true)
     setError(undefined)
-    void onStartSession(launchSourceSessionId, workspace.id).then(() => {
+    const pending = launchSourceSessionId !== undefined && onStartSession !== undefined
+      ? onStartSession(launchSourceSessionId, workspace.id, request)
+      : sessionId !== undefined && onContinueSession !== undefined
+        ? onContinueSession(sessionId, workspace.id, request)
+        : undefined
+    if (pending === undefined) {
+      setSaving(false)
+      return
+    }
+    void pending.then(() => {
       onClose()
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
@@ -1859,7 +1881,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建场地</button></div>
   } else if (view === 'world') {
     main = <PlayWorldView workspace={workspace} modules={worldModules} busy={saving} dirty={dirty}
-      canStartSession={launchSourceSessionId !== undefined && onStartSession !== undefined} onStartSession={startSession}
+      sessionAction={launchSourceSessionId !== undefined && onStartSession !== undefined
+        ? 'start'
+        : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}
+      onAdvanceSession={advanceSession}
       onInstall={installWorld} onRestart={() => {
         if (workspace.world !== undefined) installWorld(workspace.world.moduleId, true)
       }} onAction={runWorldAction} />
@@ -1979,7 +2004,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       </aside>
     </div>
     <footer className="story-studio-statusbar">
-      <strong>游玩流水线</strong><span>世界 → 研究 → 人物 → 导演 → 分区 → 编辑</span><span>{sessionId === undefined ? '打开角色会话后可连接' : '当前会话可连接'}</span>
+      <strong>回合写作</strong><span>查找资料 → 人物行动 → 整理场面 → 写作 → 润色</span><span>{sessionId === undefined ? '从空白会话开始游玩' : '可以在当前会话继续'}</span>
       {error !== undefined ? <span className="story-studio-status-error" role="alert">{error}</span>
         : notice !== undefined ? <span className="story-studio-status-message" role="status">{notice}</span>
           : dirty ? <span className="story-studio-status-message">有未保存修改</span> : undefined}

@@ -149,6 +149,7 @@ test('runs logged story stages while keeping each character request privately sc
     header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
   })
   const characterBodies: string[] = []
+  const characterSystems: string[] = []
   const sectionSystems: string[] = []
   const researchBodies: string[] = []
   let directorBody = ''
@@ -211,6 +212,7 @@ test('runs logged story stages while keeping each character request privately sc
           }
         }
         else if (system.includes('指定人物认知')) {
+          characterSystems.push(system)
           characterBodies.push(body)
           text = body.includes('阿梨知道徽章') ? '阿梨先观察徽章。' : '柏舟避开车票话题。'
         } else if (system.includes('剧情导演 Worker')) {
@@ -245,13 +247,17 @@ test('runs logged story stages while keeping each character request privately sc
     session,
   } as Agent
   const message = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '玩家举起徽章。' }] })
+  const runtimeContext = createUserMessage({
+    source: { kind: 'plugin', plugin: 'dsh-agent-rp-runtime' },
+    content: [{ type: 'text', text: 'Current runtime context: 这不是玩家要求。' }],
+  })
   const input = {
     ctx: fake,
     agent,
     workspace: workspace(),
     turn: 1,
     step: 1,
-    messages: [message],
+    messages: [message, runtimeContext],
     signal: new AbortController().signal,
   }
 
@@ -264,6 +270,9 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(webQuery, /官方设定与原著章节/u)
   assert.match(webQuery, /旧车站徽章 原著设定/u)
   assert.equal(researchBodies.length, 2)
+  assert.doesNotMatch(researchBodies.join('\n'), /这不是玩家要求/u)
+  assert.doesNotMatch(characterBodies.join('\n'), /这不是玩家要求/u)
+  assert.doesNotMatch(directorBody, /这不是玩家要求/u)
   assert.match(researchBodies[0]!, /story:public-history/u)
   assert.doesNotMatch(researchBodies[0]!, /鸦青印记只在列车终章显现/u)
   assert.match(researchBodies[1]!, /徽章属于旧车站/u)
@@ -273,15 +282,18 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /不确定.*无法核验的徽章传闻.*无可核验依据/u)
   assert.doesNotMatch(webQuery, /超过轮数上限/u)
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
+  assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
   assert.doesNotMatch(characterBodies[1]!, /阿梨知道徽章|下一幕会停电|第三幕打开/u)
   assert.equal(sectionSystems.length, 3)
   assert.match(sectionSystems[0]!, /叙事正文、环境、行动与对白/u)
+  assert.match(sectionSystems[0]!, /可执行世界严格只读/u)
   assert.match(sectionSystems[1]!, /聚焦人物“阿梨”/u)
   assert.match(sectionSystems[2]!, /时间线、前情或档案/u)
   assert.ok(editorBody.indexOf('## 正文') < editorBody.indexOf('## 阿梨视角'))
   assert.ok(editorBody.indexOf('## 阿梨视角') < editorBody.indexOf('## 公开档案'))
+  assert.match(editorBody, /<world_state>/u)
   assert.match(result.finalDraft, /阿梨看向徽章/u)
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)

@@ -180,6 +180,7 @@ function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEve
   })
   const recent = events.slice(-8).map(item => `- ${item.title}：${item.summary}`).join('\n')
   return [
+    '执行约束：棋局状态与世界事件只能由场地程序写入。只能描写下列已记录事件及人物反应；禁止自行掷骰、移动棋子、切换回合、决定胜负或声称任何未记录的棋局变化。',
     `当前第 ${String(state.turn)} 回合，轮到 ${names.get(state.currentPlayerId) ?? state.currentPlayerId}。`,
     state.pendingRoll === undefined ? '尚未掷骰。' : `已掷出 ${String(state.pendingRoll.value)}，等待选择合法棋子。`,
     ...lines,

@@ -2757,7 +2757,8 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
     agentPresetId?: string,
     regexPackIds?: readonly string[],
   ) => Promise<void>
-  readonly startStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string) => Promise<void>
+  readonly startStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
+  readonly continueStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
   readonly renamePreset: (id: string, name: string) => Promise<PresetLibrarySummary>
   readonly deletePreset: (id: string) => Promise<void>
   readonly workspaceSettings: WorkspaceSettingsSource
@@ -2842,7 +2843,7 @@ function SidebarRoleplayDestination({
   listPresets, listRegexPacks, importRegexPackFile, deleteRegexPack,
   listAgentCapabilityPresets, importPresetFile, listPersonas, savePersona, deletePersona,
   listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo, renamePreset, deletePreset,
-  startWorldInfoSession, startStoryWorkspaceSession,
+  startWorldInfoSession, startStoryWorkspaceSession, continueStoryWorkspaceSession,
   workspaceSettings, workspaceList,
   storyWorkspaceNavigation,
 }: SidebarRoleplayDestinationProps) {
@@ -3164,11 +3165,16 @@ function SidebarRoleplayDestination({
       {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
       {...(storyWorkspaceLaunchReady && currentSessionId !== undefined ? {
         launchSourceSessionId: String(currentSessionId),
-        onStartSession: (sourceSessionId: string, workspaceId: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId),
+        onStartSession: (sourceSessionId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId, request),
       } : {})}
       {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)
         ? {}
-        : { sessionId: String(currentSessionId) })}
+        : {
+            sessionId: String(currentSessionId),
+            onContinueSession: (targetSessionId: string, workspaceId: string, request: string) => continueStoryWorkspaceSession(
+              targetSessionId as SessionId, workspaceId, request,
+            ),
+          })}
       onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined) }}
     />, document.body)}
     {worldInfoLaunch !== undefined && launchSessionId !== undefined && createPortal(<WorldInfoLaunchDialog
@@ -12981,16 +12987,26 @@ export function apply(ctx: ClientContext): void {
     )
     await archiveConsumedBlankSession(sessionId)
   }
-  const startStoryWorkspaceFromBlankSession = async (sessionId: SessionId, workspaceId: string): Promise<void> => {
+  const sendStoryWorkspaceTurn = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
+    const selected = await executeAgentRpCommand(sessionId, `/rp-story-workspace ${JSON.stringify({ format: 0, workspaceId })}`)
+    if (!selected.matched) throw new Error('当前角色会话没有游玩场地命令')
+    const conversation = ctx.sessions.scope(sessionId)?.get('conversation') as IConversation | undefined
+    if (conversation === undefined) throw new Error('角色会话已经打开，但暂时还不能发送这一回合；请稍后重试')
+    await conversation.send(request)
+  }
+  const startStoryWorkspaceFromBlankSession = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
     const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
     if (summary === undefined || !summary.blank) throw new Error('只能从尚未开始的会话进入游玩场地')
-    await launchRoleplaySession({
+    const launchedSessionId = await launchRoleplaySession({
       format: 0,
       sourceSessionId: String(sessionId),
       kind: 'story-workspace',
       workspaceId,
     })
     await archiveConsumedBlankSession(sessionId)
+    const conversation = ctx.sessions.scope(launchedSessionId)?.get('conversation') as IConversation | undefined
+    if (conversation === undefined) throw new Error('游玩会话已经创建，但暂时还不能发送第一回合；请稍后重试')
+    await conversation.send(request)
   }
   const startCharacterFromCurrentSession = async (
     sessionId: SessionId,
@@ -13413,6 +13429,7 @@ export function apply(ctx: ClientContext): void {
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
     startStoryWorkspaceSession: startStoryWorkspaceFromBlankSession,
+    continueStoryWorkspaceSession: sendStoryWorkspaceTurn,
     storyWorkspaceNavigation,
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({

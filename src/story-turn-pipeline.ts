@@ -60,7 +60,7 @@ export interface StoryTurnStageResultRecord {
     | { readonly kind: 'failure'; readonly failure: RoleplayActModelFailureKind }
 }
 
-/** Final draft and provenance made visible to the top-level character Agent. */
+/** Final draft and provenance used for the authoritative visible reply. */
 export interface StoryTurnBriefRecord {
   readonly format: 0
   readonly sessionId: string
@@ -200,7 +200,8 @@ export interface RunStoryTurnPipelineInput {
 }
 
 function messageText(messages: readonly UserMessage[]): string {
-  return messages.flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
+  return messages.filter(message => message.source.kind === 'user')
+    .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
     .join('\n').trim()
 }
 
@@ -953,7 +954,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       })
       const decision = await runStage(input, 'character', generateOptions(
         input,
-        '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、想做什么以及可能说什么。不能使用未出现在输入中的知识。不要写完整正文，只返回给导演的行动提案。',
+        '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、想做什么以及可能说什么。不能使用未出现在输入中的知识。可执行世界中的状态和事件已经由程序决定：只能提议人物对已记录事件的反应，不得自行掷骰、移动棋子、切换回合、决定胜负或虚构新的世界状态。不要写完整正文，只返回给导演的行动提案。',
         context.text,
         2_048,
         0.5,
@@ -965,7 +966,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const fallback = directorFallback(input, playerInput, researchText, characterDecisions)
   const director = await runStage(input, 'director', generateOptions(
     input,
-    '你是剧情导演 Worker。依据大纲、伏笔、研究简报和各人物独立行动提案，为本轮设计具体正文方案。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。明确每个启用正文分区应写什么。不要直接向玩家解释内部资料。',
+    '你是剧情导演 Worker。依据大纲、伏笔、研究简报和各人物独立行动提案，为本轮设计具体正文方案。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。可执行世界严格只读：正文只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。明确每个启用正文分区应写什么。不要直接向玩家解释内部资料。',
     [
       '<story_map>', storyDirectorMap(input.workspace), '</story_map>',
       '<foreshadowing>', storyOpenForeshadowing(input.workspace), '</foreshadowing>',
@@ -1000,9 +1001,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const existing = section.instructions
         const draft = await runStage(input, 'section', generateOptions(
           input,
-          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性，只返回这个分区可直接展示的内容。`,
+          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。只返回这个分区可直接展示的内容。`,
           [
             `<section_reference kind="${section.kind}">`, existing, '</section_reference>',
+            '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
             '<director_brief>', directorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
           ].join('\n'),
@@ -1021,8 +1023,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim() || directorBrief
   const edited = await runStage(input, 'editor', generateOptions(
     input,
-    '你是最终正文编辑 Worker。删除复读、八股句式、空泛总结、机械排比和正文外解释；保留全部事实、行动、对白归属、因果、叙事视角与必要格式。不要增加事件，不要改变人物认知。输入含多个二级标题时必须保留标题、顺序与分区职责，不得合并分区。只返回可直接展示的完整正文。',
-    `<ordered_sections>\n${uneditedDraft}\n</ordered_sections>`,
+    '你是最终正文编辑 Worker。删除复读、八股句式、空泛总结、机械排比和正文外解释；保留全部事实、行动、对白归属、因果、叙事视角与必要格式。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。输入含多个二级标题时必须保留标题、顺序与分区职责，不得合并分区。只返回可直接展示的完整正文。',
+    [
+      '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+      '<ordered_sections>', uneditedDraft, '</ordered_sections>',
+    ].join('\n'),
     8_192,
     0.2,
   ), resultEventSeqs)

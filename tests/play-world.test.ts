@@ -120,6 +120,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
 
   const characterContext = compileStoryCharacterContext(movedAgain, reimuId, { playerInput: '继续。' }, worlds)
   assert.match(characterContext.worldContext, /当前第 3 回合/u)
+  assert.match(characterContext.worldContext, /禁止自行掷骰、移动棋子、切换回合/u)
   assert.match(characterContext.text, /此人物可见的世界状态/u)
   assert.match(compileStoryDirectorWorldContext(movedAgain, worlds), /雾雨魔理沙/u)
   const restarted = store.installWorld(movedAgain.id, {
