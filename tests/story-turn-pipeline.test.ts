@@ -9,7 +9,13 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { StoryCharacter, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { appendAgentRpSessionEvent } from '../src/session-event-compat.ts'
-import { createStoryCharacterId, createStoryNodeId, StoryWorkspaceStore } from '../src/story-workspace.ts'
+import {
+  compileStoryCharacterContext,
+  createStoryCharacterId,
+  createStoryNodeId,
+  createStoryOutputId,
+  StoryWorkspaceStore,
+} from '../src/story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
 import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
 
@@ -342,7 +348,16 @@ test('runs logged story stages while keeping each character request privately sc
         } else {
           editorBody = body
           editorSystem = system
-          text = '雨停后，阿梨看向徽章，柏舟移开视线。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“编辑器新增的台词。”'
+          text = JSON.stringify({
+            sections: [
+              {
+                sectionId,
+                text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“编辑器新增的台词。”',
+              },
+              { sectionId: characterSectionId, text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
+              { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
+            ],
+          })
         }
         return (async function* () {
           try {
@@ -406,7 +421,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
   assert.match(characterSystems[0]!, /若开口只是为了让场面热闹/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
-  assert.match(characterSystems[0]!, /insights 只记录本轮新获得且未公开/u)
+  assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(directorBody, /说话意图：提醒对方先确认眼前事实再下结论/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
@@ -470,12 +485,12 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
   assert.doesNotMatch(sectionBodies[0]!, /对白收束/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
-  assert.ok(editorBody.indexOf('## 正文') < editorBody.indexOf('## 阿梨视角'))
-  assert.ok(editorBody.indexOf('## 阿梨视角') < editorBody.indexOf('## 公开档案'))
-  assert.match(editorBody, /## 阿梨视角[\s\S]*自己的旧站记忆/u)
+  assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(characterSectionId))
+  assert.ok(editorBody.indexOf(characterSectionId) < editorBody.indexOf(historySectionId))
+  assert.match(editorBody, new RegExp(`${characterSectionId}[\\s\\S]*自己的旧站记忆`, 'u'))
   assert.match(editorBody, /先看徽章，别忙着猜/u)
   assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
-  assert.match(editorBody, /## 公开档案[\s\S]*## 雨停[\s\S]*两人都看见雨停了/u)
+  assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
   assert.doesNotMatch(editorBody, /<voice_evidence>/u)
   assert.match(editorSystem, /不得新增、恢复、拆分或重写任何对白/u)
@@ -485,6 +500,15 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(result.finalDraft, /阿梨看向徽章/u)
   assert.match(result.finalDraft, /先看徽章，别忙着猜/u)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
+  assert.deepEqual(result.finalSections.map(section => ({
+    sectionId: section.sectionId,
+    kind: section.kind,
+    characterId: section.characterId,
+  })), [
+    { sectionId, kind: 'prose', characterId: undefined },
+    { sectionId: characterSectionId, kind: 'character', characterId: aliceId },
+    { sectionId: historySectionId, kind: 'history', characterId: undefined },
+  ])
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
@@ -571,8 +595,12 @@ test('materializes continuity from the actually visible reply instead of the pre
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
   const created = store.create({ format: 2, name: '实际正文沉淀' })
-  const characterId = createStoryCharacterId()
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
+  const proseSectionId = createStoryOutputId()
+  const privateSectionId = createStoryOutputId()
+  const historySectionId = createStoryOutputId()
   const workspace = store.save({
     format: 2,
     id: created.id,
@@ -591,15 +619,19 @@ test('materializes continuity from the actually visible reply instead of the pre
         audience: 'public',
         position: { x: 0, y: 0 },
         content: '在车站重逢。',
-        participantIds: [characterId],
+        participantIds: [reimuId, marisaId],
         knowledge: { mode: 'participants', characterIds: [] },
       }],
       edges: [],
     },
-    characters: [character(characterId, '阿梨', '谨慎。')],
+    characters: [character(reimuId, '博丽灵梦', '直率。'), character(marisaId, '雾雨魔理沙', '好胜。')],
     facts: [],
     events: [],
-    outputs: [],
+    outputs: [
+      { id: proseSectionId, name: '对局正文', kind: 'prose', enabled: true, instructions: '' },
+      { id: privateSectionId, name: '魔理沙视角', kind: 'character', enabled: true, characterId: marisaId, instructions: '' },
+      { id: historySectionId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '' },
+    ],
     sources: [],
     citations: [],
     researchInbox: [],
@@ -634,7 +666,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     },
   })
   appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
-    format: 0,
+    format: 1,
     sessionId: String(session.id),
     workspaceId: workspace.id,
     workspaceRevision: workspace.revision,
@@ -642,7 +674,19 @@ test('materializes continuity from the actually visible reply instead of the pre
     step: 1,
     resultEventSeqs: [webResult.seq],
     directorBrief: '内部导演方案。',
-    finalDraft: '流水线准备稿。',
+    finalSections: [
+      { sectionId: proseSectionId, name: '对局正文', kind: 'prose', text: '流水线准备稿里的公开正文。' },
+      {
+        sectionId: privateSectionId,
+        name: '魔理沙视角',
+        kind: 'character',
+        characterId: marisaId,
+        privateInsights: [{ kind: 'decision', text: '流水线准备稿里的私人决定。' }],
+        text: '流水线准备稿里的私人决定。',
+      },
+      { sectionId: historySectionId, name: '公开回合记录', kind: 'history', text: '流水线准备稿里的公开记录。' },
+    ],
+    finalDraft: '## 对局正文\n\n流水线准备稿里的公开正文。\n\n## 魔理沙视角\n\n流水线准备稿里的私人决定。\n\n## 公开回合记录\n\n流水线准备稿里的公开记录。',
     modelContext: '准备上下文。',
   })
   session.append('assistant/message', {
@@ -650,7 +694,10 @@ test('materializes continuity from the actually visible reply instead of the pre
     step: 1,
     message: createAssistantMessage({
       source: { provider: 'fixture', model: 'fixture' },
-      content: [{ type: 'text', text: '实际展示时，阿梨只看见雨停了。' }],
+      content: [{
+        type: 'text',
+        text: '## 对局正文\n\n实际展示时，两人都看见雨停了。\n\n## 魔理沙视角\n\n魔理沙决定继续当前棋局。\n\n## 公开回合记录\n\n雨停了。',
+      }],
     }),
   }, { surfaceOp: 'append' })
   session.append('step/end', { turn: 1, step: 1 })
@@ -661,25 +708,40 @@ test('materializes continuity from the actually visible reply instead of the pre
       stream(options: { readonly messages: readonly unknown[] }) {
         requestBody = JSON.stringify(options.messages)
         const text = JSON.stringify({
-          history: '阿梨在车站看见雨停。',
+          history: { text: '灵梦与魔理沙都看见雨停。', sourceSectionIds: [proseSectionId, historySectionId] },
           changes: {
-            characters: [{ characterId, location: '雨后的车站', objective: '检查徽章刻痕' }],
+            characters: [{
+              sourceSectionId: privateSectionId,
+              characterId: marisaId,
+              location: '雨后的车站',
+              objective: '继续当前棋局',
+            }],
             facts: [
-              { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
-              { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
+              {
+                sourceSectionId: privateSectionId,
+                text: '魔理沙决定继续当前棋局。',
+                knownBy: [reimuId, marisaId],
+              },
+              {
+                sourceSectionId: proseSectionId,
+                text: '灵梦与魔理沙都看见雨停。',
+                knownBy: [reimuId, marisaId],
+              },
             ],
             nodes: [
               {
+                sourceSectionId: privateSectionId,
                 ref: 'next-scene',
                 kind: 'beat',
                 parent: { kind: 'node', nodeId },
-                title: '雨后检查徽章',
-                summary: '阿梨在雨后检查徽章刻痕。',
-                content: '下一场让阿梨检查徽章刻痕。',
-                participantIds: [characterId],
+                title: '继续当前棋局',
+                summary: '魔理沙不接受作废重来。',
+                content: '下一场让魔理沙继续当前棋局。',
+                participantIds: [marisaId],
                 knowledge: { mode: 'participants', characterIds: [] },
               },
               {
+                sourceSectionId: proseSectionId,
                 ref: 'badge-secret',
                 kind: 'secret',
                 parent: { kind: 'proposal', ref: 'next-scene' },
@@ -692,12 +754,14 @@ test('materializes continuity from the actually visible reply instead of the pre
             ],
             edges: [
               {
+                sourceSectionId: proseSectionId,
                 kind: 'precedes',
                 source: { kind: 'node', nodeId },
                 target: { kind: 'proposal', ref: 'next-scene' },
                 label: '雨停后的下一场',
               },
               {
+                sourceSectionId: proseSectionId,
                 kind: 'foreshadows',
                 source: { kind: 'proposal', ref: 'next-scene' },
                 target: { kind: 'proposal', ref: 'badge-secret' },
@@ -727,26 +791,36 @@ test('materializes continuity from the actually visible reply instead of the pre
     signal: new AbortController().signal,
   })
 
-  assert.match(requestBody, /实际展示时，阿梨只看见雨停了/u)
+  assert.match(requestBody, /实际展示时，两人都看见雨停了/u)
+  assert.match(requestBody, /<visible_sections>/u)
+  assert.ok(requestBody.includes(privateSectionId))
+  assert.ok(requestBody.includes(marisaId))
   assert.doesNotMatch(requestBody, /流水线准备稿/u)
   assert.match(requestBody, new RegExp(nodeId, 'u'))
-  assert.deepEqual(result?.changes.facts[0]?.knownBy, [characterId])
+  assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('继续当前棋局'))?.knownBy, [marisaId])
+  assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('都看见雨停'))?.knownBy, [reimuId, marisaId])
   assert.equal(result?.format, 3)
   assert.equal(result?.changes.nodes.length, 2)
   assert.equal(result?.changes.edges.length, 2)
   const saved = store.get(workspace.id)
-  assert.match(saved.events[0]?.summary ?? '', /阿梨在车站看见雨停/u)
-  assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
-  assert.equal(saved.characters.find(character => character.id === characterId)?.state.location, '雨后的车站')
-  assert.equal(saved.characters.find(character => character.id === characterId)?.state.objective, '检查徽章刻痕')
-  assert.equal(saved.facts.find(fact => fact.text.includes('阿梨亲眼看见雨停'))?.knownBy[0], characterId)
-  assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /检查徽章刻痕/u)
+  assert.match(saved.events[0]?.summary ?? '', /灵梦与魔理沙都看见雨停/u)
+  assert.match(saved.events[0]?.evidence ?? '', /魔理沙决定继续当前棋局/u)
+  assert.equal(saved.characters.find(character => character.id === marisaId)?.state.location, '雨后的车站')
+  assert.equal(saved.characters.find(character => character.id === marisaId)?.state.objective, '继续当前棋局')
+  assert.deepEqual(saved.facts.find(fact => fact.text.includes('魔理沙决定继续当前棋局'))?.knownBy, [marisaId])
+  assert.deepEqual(saved.facts.find(fact => fact.text.includes('灵梦与魔理沙都看见雨停'))?.knownBy, [reimuId, marisaId])
+  assert.equal(saved.facts.some(fact => fact.text.includes('流水线准备稿里的私人决定')), false)
+  const reimuContext = compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' })
+  const marisaContext = compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' })
+  assert.doesNotMatch(reimuContext.privateKnowledge, /继续当前棋局/u)
+  assert.match(marisaContext.privateKnowledge, /继续当前棋局/u)
+  assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /继续当前棋局/u)
   assert.equal(saved.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
-  const nextScene = saved.graph.nodes.find(node => node.title === '雨后检查徽章')
+  const nextScene = saved.graph.nodes.find(node => node.title === '继续当前棋局')
   const badgeSecret = saved.graph.nodes.find(node => node.title === '徽章刻痕')
   assert.equal(nextScene?.parentId, nodeId)
   assert.equal(badgeSecret?.parentId, nextScene?.id)
-  assert.deepEqual(nextScene?.knowledge, { mode: 'participants', characterIds: [] })
+  assert.deepEqual(nextScene?.knowledge, { mode: 'characters', characterIds: [marisaId] })
   assert.equal(saved.graph.edges.find(edge => edge.kind === 'precedes')?.target, nextScene?.id)
   const foreshadow = saved.graph.edges.find(edge => edge.kind === 'foreshadows')
   assert.equal(foreshadow?.source, nextScene?.id)

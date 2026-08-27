@@ -399,7 +399,7 @@ test('lets the current private character Worker complete one world turn exactly 
   assert.equal(bodies.length, 2)
 })
 
-test('keeps the exact world outcome in visible history and drops the next actor rule intention', async (context) => {
+test('keeps the exact world outcome while preserving only private-section character state', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-grounded-world-turn-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
@@ -416,7 +416,7 @@ test('keeps the exact world outcome in visible history and drops the next actor 
     characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
     outputs: [
       { id: proseId, name: '对局正文', kind: 'prose', enabled: true, instructions: '只写本轮。' },
-      { id: characterId, name: '魔理沙视角', kind: 'character', enabled: true, characterId: marisaId, instructions: '只写持久内容。' },
+      { id: characterId, name: '灵梦视角', kind: 'character', enabled: true, characterId: reimuId, instructions: '只写持久内容。' },
       { id: historyId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '只写规则事实。' },
     ],
   })
@@ -435,14 +435,23 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   const fake = {
     sessions: { flush: async () => true },
     llm: {
-      stream(options: { readonly system?: string }) {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
         const text = system.includes('结构化世界行动 Worker')
           ? JSON.stringify({ actionId: 'roll' })
           : system.includes('剧情研究 Worker')
             ? JSON.stringify({ findings: [], followUps: [] })
             : system.includes('指定人物认知')
-              ? JSON.stringify({ observation: '看见刚发生的结果。', action: '', speechIntent: '', voiceEvidence: [], insights: [] })
+              ? JSON.stringify({
+                observation: '看见刚发生的结果。',
+                action: '',
+                speechIntent: '',
+                voiceEvidence: [],
+                insights: body.includes('# 人物：博丽灵梦')
+                  ? [{ kind: 'decision', text: '灵梦决定继续当前棋局，不再要求作废已结算回合。' }]
+                  : [],
+              })
               : system.includes('剧情导演 Worker')
                 ? JSON.stringify({ sections: [
                   { sectionId: proseId, beats: ['表现刚发生的掷骰结果。'], speech: [] },
@@ -451,17 +460,25 @@ test('keeps the exact world outcome in visible history and drops the next actor 
                 ] })
                 : system.includes('剧情连续性记录 Worker')
                   ? JSON.stringify({
-                    history: '错误的模型概括。',
+                    history: { text: '错误的模型概括。', sourceSectionIds: [proseId] },
                     changes: {
-                      characters: [{ characterId: marisaId, objective: '准备掷骰' }],
+                      characters: [
+                        { sourceSectionId: characterId, characterId: reimuId, objective: '继续当前棋局' },
+                        { sourceSectionId: proseId, characterId: marisaId, objective: '准备掷骰' },
+                      ],
                       facts: [], nodes: [], edges: [],
                     },
                   })
-                  : system.includes('分区的 prose Worker')
+                : system.includes('分区的 prose Worker')
                   ? '正文故意遗漏刚发生的掷骰结果。'
                   : system.includes('分区的 character Worker')
-                    ? JSON.stringify({ insights: [{ kind: 'intention', text: '魔理沙准备在下一回合掷骰。' }] })
-                    : '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。'
+                    ? JSON.stringify({ insights: [{ kind: 'world-action', text: '魔理沙准备在下一回合掷骰。' }] })
+                    : system.includes('最终正文编辑 Worker')
+                      ? JSON.stringify({ sections: [
+                        { sectionId: proseId, text: '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。' },
+                        { sectionId: historyId, text: '错误记录。' },
+                      ] })
+                      : '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。'
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
           yield { type: 'text-delta', index: 0, text }
@@ -490,13 +507,22 @@ test('keeps the exact world outcome in visible history and drops the next actor 
   assert.match(researchDispatch, /story:current-world-outcome/u)
   assert.match(researchDispatch, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
+  const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+  const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
+  const marisaRequest = characterRequests.find(request => request.subjectId === marisaId)
+  assert.match(JSON.stringify(reimuRequest?.dispatch), /thisCharacterRole=actor/u)
+  assert.match(JSON.stringify(marisaRequest?.dispatch), /thisCharacterRole=observer/u)
+  assert.match(JSON.stringify(marisaRequest?.dispatch), /只能由 actor 采用对应要求/u)
+  assert.match(JSON.stringify(marisaRequest?.dispatch), /玩家本轮没有点名此人物/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
-  assert.equal(result.hostOnlyWorldDraft, true)
+  assert.equal(result.hostOnlyWorldDraft, undefined)
   assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
   assert.equal(result.finalDraft.match(/博丽灵梦没有可移动的飞机，本回合结束。/gu)?.length, 1)
   assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
+  assert.match(result.finalDraft, /## 灵梦视角[\s\S]*继续当前棋局/u)
   assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'section' ? [event.data.subjectId] : []), [])
@@ -517,18 +543,26 @@ test('keeps the exact world outcome in visible history and drops the next actor 
     turn: 2,
     signal: new AbortController().signal,
   })
-  assert.deepEqual(materialized?.changes.characters, [])
-  assert.deepEqual(materialized?.changes.facts, [])
+  assert.deepEqual(materialized?.changes.characters, [{ characterId: reimuId, objective: '继续当前棋局' }])
+  assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '继续当前棋局')
+  assert.equal(store.get(installed.id).characters.find(character => character.id === marisaId)?.state.objective, '')
+  assert.deepEqual(materialized?.changes.facts, [{
+    text: '灵梦决定继续当前棋局，不再要求作废已结算回合。',
+    knownBy: [reimuId],
+  }])
   assert.deepEqual(materialized?.changes.nodes, [])
   assert.deepEqual(materialized?.changes.edges, [])
-  assert.equal(materialized?.continuityResultEventSeq, undefined)
+  assert.equal(typeof materialized?.continuityResultEventSeq, 'number')
   assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
   assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [2, 3])
   assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
-    { location: '', condition: '', objective: '', notes: '' },
+    { location: '', condition: '', objective: '继续当前棋局', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
   ])
+  const saved = store.get(installed.id)
+  assert.match(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /不再要求作废/u)
+  assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /不再要求作废/u)
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'continuity'), false)
+    && event.data.stage === 'continuity'), true)
 })
