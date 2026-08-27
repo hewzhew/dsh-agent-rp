@@ -596,11 +596,6 @@ function withoutLegacyTurnMarkers(value: string): string {
     .trim()
 }
 
-function suggestionTitle(text: string, fallback: string): string {
-  const first = text.split(/\r?\n/u).map(line => line.replace(/^[-#*\s]+/u, '').trim()).find(Boolean) ?? fallback
-  return first.slice(0, 80)
-}
-
 function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
   return {
     format: 1,
@@ -791,7 +786,7 @@ export function storyDirectorMap(workspace: StoryWorkspaceSnapshot): string {
   const nodeText = nodes.map(node => {
     const citations = workspace.citations.filter(citation => citation.target?.kind === 'node' && citation.target.nodeId === node.id)
     return [
-      `## [${node.kind}] ${node.title} (${node.status})`,
+      `## [${node.kind}] ${node.title} (${node.status})\nid: ${node.id}`,
       node.content,
       citations.length === 0 ? '' : `资料依据：\n${citations.map(citation => renderStoryCitation(workspace, citation)).join('\n')}`,
     ].filter(Boolean).join('\n')
@@ -901,7 +896,7 @@ export class StoryWorkspaceStore {
     return this.get(snapshot.id)
   }
 
-  /** Idempotently append one visible turn as an event, character facts, and suggested nodes. */
+  /** Idempotently append one visible turn as an event, character facts, and a typed suggestion batch. */
   materializeTurn(id: string, materialization: StoryTurnMaterialization): StoryWorkspaceSnapshot {
     if (!/^[A-Za-z0-9:_-]{1,240}$/u.test(materialization.key)) throw new Error('故事事件 key 无效')
     const current = this.get(id)
@@ -933,32 +928,59 @@ export class StoryWorkspaceStore {
         source: { kind: 'event' as const, eventId, evidence: event.evidence },
       }
     }).filter(fact => fact.text.trim() !== '')
-    const suggested = [
-      ...materialization.plotSuggestions.map((content, index): StoryNode => ({
-        id: createStoryNodeId(),
-        kind: 'beat',
-        title: suggestionTitle(content, '剧情建议'),
+    const suggestionIds = new Map<string, string>()
+    const suggestedNodes = materialization.nodeSuggestions.map((suggestion, index): StoryNode => {
+      if (suggestionIds.has(suggestion.ref)) throw new Error('候选节点 ref 重复')
+      for (const participantId of suggestion.participantIds) {
+        if (!characterIds.has(participantId)) throw new Error('候选节点包含未知参与人物')
+      }
+      const nodeId = createStoryNodeId()
+      suggestionIds.set(suggestion.ref, nodeId)
+      return {
+        id: nodeId,
+        kind: suggestion.kind,
+        title: suggestion.title,
         status: 'planned',
         lifecycle: 'suggested',
         audience: 'director',
-        position: { x: (activeNode?.position.x ?? 0) + 360, y: (activeNode?.position.y ?? 0) + index * 180 },
-        content,
-        participantIds: event.participantIds,
+        position: {
+          x: (activeNode?.position.x ?? 0) + 360 + (index % 2) * 360,
+          y: (activeNode?.position.y ?? 0) + Math.floor(index / 2) * 180,
+        },
+        content: suggestion.content,
+        participantIds: [...new Set(suggestion.participantIds)],
         sourceEventId: eventId,
-      })),
-      ...materialization.foreshadowSuggestions.map((content, index): StoryNode => ({
-        id: createStoryNodeId(),
-        kind: 'secret',
-        title: suggestionTitle(content, '伏笔建议'),
-        status: 'planned',
-        lifecycle: 'suggested',
-        audience: 'director',
-        position: { x: (activeNode?.position.x ?? 0) + 720, y: (activeNode?.position.y ?? 0) + index * 180 },
-        content,
-        participantIds: [],
+      }
+    })
+    const canonicalNodeIds = new Set(current.graph.nodes
+      .filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped').map(node => node.id))
+    const resolveEndpoint = (endpoint: StoryTurnMaterialization['edgeSuggestions'][number]['source']): string => {
+      if (endpoint.kind === 'proposal') {
+        const nodeId = suggestionIds.get(endpoint.ref)
+        if (nodeId === undefined) throw new Error('候选关系指向未知候选节点')
+        return nodeId
+      }
+      if (!canonicalNodeIds.has(endpoint.nodeId)) throw new Error('候选关系指向未知正式节点')
+      return endpoint.nodeId
+    }
+    const suggestedEdges = materialization.edgeSuggestions.map(suggestion => {
+      if (suggestion.kind !== 'foreshadows' && suggestion.foreshadowStatus !== undefined) {
+        throw new Error('只有伏笔候选关系可以携带伏笔状态')
+      }
+      return {
+        id: createStoryEdgeId(),
+        kind: suggestion.kind,
+        source: resolveEndpoint(suggestion.source),
+        target: resolveEndpoint(suggestion.target),
+        label: suggestion.label,
+        lifecycle: 'suggested' as const,
+        audience: 'director' as const,
+        ...(suggestion.kind === 'foreshadows'
+          ? { foreshadowStatus: suggestion.foreshadowStatus ?? 'unplanted' as const }
+          : {}),
         sourceEventId: eventId,
-      })),
-    ]
+      }
+    })
     const knownResearchUrls = new Set([
       ...current.researchInbox.map(item => item.url),
       ...current.sources.flatMap(source => source.origin?.kind === 'web' ? [source.origin.url] : []),
@@ -977,7 +999,11 @@ export class StoryWorkspaceStore {
       revision: current.revision,
       name: current.name,
       pipeline: current.pipeline,
-      graph: { ...current.graph, nodes: [...current.graph.nodes, ...suggested] },
+      graph: {
+        ...current.graph,
+        nodes: [...current.graph.nodes, ...suggestedNodes],
+        edges: [...current.graph.edges, ...suggestedEdges],
+      },
       characters: current.characters,
       facts: [...current.facts, ...observations],
       events: [...current.events, event],

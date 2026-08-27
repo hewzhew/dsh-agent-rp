@@ -449,8 +449,37 @@ test('materializes continuity from the actually visible reply instead of the pre
         const text = JSON.stringify({
           history: '阿梨在车站看见雨停。',
           observations: [{ characterId, text: '阿梨亲眼看见雨停。' }],
-          outlineProposals: [],
-          foreshadowingProposals: ['后续可以让徽章在雨后反光。'],
+          nodeSuggestions: [
+            {
+              ref: 'next-scene',
+              kind: 'beat',
+              title: '雨后检查徽章',
+              content: '下一场让阿梨检查徽章刻痕。',
+              participantIds: [characterId],
+            },
+            {
+              ref: 'badge-secret',
+              kind: 'secret',
+              title: '徽章刻痕',
+              content: '后续揭示刻痕与旧站编号的联系。',
+              participantIds: [],
+            },
+          ],
+          edgeSuggestions: [
+            {
+              kind: 'precedes',
+              source: { kind: 'node', nodeId },
+              target: { kind: 'proposal', ref: 'next-scene' },
+              label: '雨停后的下一场',
+            },
+            {
+              kind: 'foreshadows',
+              source: { kind: 'proposal', ref: 'next-scene' },
+              target: { kind: 'proposal', ref: 'badge-secret' },
+              label: '检查时埋下刻痕线索',
+              foreshadowStatus: 'planted',
+            },
+          ],
         })
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -474,12 +503,23 @@ test('materializes continuity from the actually visible reply instead of the pre
 
   assert.match(requestBody, /实际展示时，阿梨只看见雨停了/u)
   assert.doesNotMatch(requestBody, /流水线准备稿/u)
+  assert.match(requestBody, new RegExp(nodeId, 'u'))
   assert.equal(result?.observations[0]?.characterId, characterId)
+  assert.equal(result?.format, 2)
+  assert.equal(result?.nodeSuggestions.length, 2)
+  assert.equal(result?.edgeSuggestions.length, 2)
   const saved = store.get(workspace.id)
   assert.match(saved.events[0]?.summary ?? '', /阿梨在车站看见雨停/u)
   assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
   assert.equal(saved.facts.find(fact => fact.text.includes('阿梨亲眼看见雨停'))?.knownBy[0], characterId)
-  assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /徽章在雨后反光/u)
+  assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /检查徽章刻痕/u)
+  assert.equal(saved.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
+  const nextScene = saved.graph.nodes.find(node => node.title === '雨后检查徽章')
+  const badgeSecret = saved.graph.nodes.find(node => node.title === '徽章刻痕')
+  assert.equal(saved.graph.edges.find(edge => edge.kind === 'precedes')?.target, nextScene?.id)
+  const foreshadow = saved.graph.edges.find(edge => edge.kind === 'foreshadows')
+  assert.equal(foreshadow?.source, nextScene?.id)
+  assert.equal(foreshadow?.target, badgeSecret?.id)
   assert.deepEqual(saved.researchInbox.map(item => ({ title: item.title, url: item.url, snippet: item.snippet })), [{
     title: '徽章设定资料',
     url: 'https://example.test/badge',

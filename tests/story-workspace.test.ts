@@ -381,7 +381,7 @@ test('keeps suggested graph objects out of formal director and current-scene inp
   }), /当前剧情节点必须是未放弃的正式剧情节点/u)
 })
 
-test('materializes one visible turn into an event, observed facts, and suggested story nodes exactly once', (context) => {
+test('materializes one visible turn into an event, observed facts, and a suggested story graph exactly once', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-materialization-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const store = new StoryWorkspaceStore({ root })
@@ -428,8 +428,37 @@ test('materializes one visible turn into an event, observed facts, and suggested
     evidence: '阿梨举起徽章，门外的雨声停了。',
     participantIds: [aliceId, bobId],
     observations: [{ characterId: aliceId, text: '阿梨看见门廊外已经停雨。' }],
-    plotSuggestions: ['下一幕让柏舟认出徽章。'],
-    foreshadowSuggestions: ['后续可以回收徽章来历。'],
+    nodeSuggestions: [
+      {
+        ref: 'next-scene',
+        kind: 'beat',
+        title: '柏舟认出徽章',
+        content: '下一幕让柏舟认出徽章。',
+        participantIds: [bobId],
+      },
+      {
+        ref: 'badge-secret',
+        kind: 'secret',
+        title: '徽章来历',
+        content: '后续可以回收徽章来历。',
+        participantIds: [],
+      },
+    ],
+    edgeSuggestions: [
+      {
+        kind: 'precedes',
+        source: { kind: 'node', nodeId: activeNodeId },
+        target: { kind: 'proposal', ref: 'next-scene' },
+        label: '下一场',
+      },
+      {
+        kind: 'foreshadows',
+        source: { kind: 'node', nodeId: activeNodeId },
+        target: { kind: 'proposal', ref: 'badge-secret' },
+        label: '雨后徽章埋下线索',
+        foreshadowStatus: 'planted',
+      },
+    ],
     webResearch: [{
       kind: 'web',
       url: 'https://example.test/badge',
@@ -460,6 +489,13 @@ test('materializes one visible turn into an event, observed facts, and suggested
   assert.equal(observed?.source.kind, 'event')
   assert.equal(materialized.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
   assert.equal(materialized.graph.nodes.find(node => node.kind === 'secret' && node.lifecycle === 'suggested')?.sourceEventId, materialized.events[0]?.id)
+  assert.equal(materialized.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
+  const nextScene = materialized.graph.nodes.find(node => node.title === '柏舟认出徽章')
+  const badgeSecret = materialized.graph.nodes.find(node => node.title === '徽章来历')
+  assert.equal(materialized.graph.edges.find(edge => edge.kind === 'precedes')?.target, nextScene?.id)
+  assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.target, badgeSecret?.id)
+  assert.equal(materialized.graph.edges.find(edge => edge.kind === 'foreshadows')?.foreshadowStatus, 'planted')
+  assert.equal(materialized.graph.edges.every(edge => edge.sourceEventId === materialized.events[0]?.id), true)
   assert.equal(materialized.researchInbox[0]?.url, 'https://example.test/badge')
   assert.equal(materialized.researchInbox.length, 1)
 
@@ -495,13 +531,16 @@ test('materializes one visible turn into an event, observed facts, and suggested
     evidence: '不应重复追加。',
     participantIds: [aliceId],
     observations: [{ characterId: aliceId, text: '不应重复追加。' }],
-    plotSuggestions: ['不应重复追加。'],
-    foreshadowSuggestions: ['不应重复追加。'],
+    nodeSuggestions: [{
+      ref: 'duplicate', kind: 'beat', title: '不应重复追加', content: '不应重复追加。', participantIds: [aliceId],
+    }],
+    edgeSuggestions: [],
     webResearch: [],
   })
   assert.equal(replayed.revision, accepted.revision)
   assert.equal(replayed.events.length, 1)
   assert.equal(replayed.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
+  assert.equal(replayed.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
 })
 
 test('opaque ids prevent workspace and child paths from escaping the configured root', (context) => {

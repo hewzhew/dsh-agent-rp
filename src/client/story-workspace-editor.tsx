@@ -332,7 +332,8 @@ function NodeInspector({ workspace, node, update, onSelect, onDelete }: {
             ? '接受后可设为当前剧情'
             : node.status === 'dropped' ? '已放弃节点' : '设为当前剧情'}
       </button>}
-      <button className="story-studio-button story-studio-danger" type="button" onClick={() => { onSelect(undefined); onDelete() }}>删除节点</button>
+      {node.lifecycle === 'canonical' && <button className="story-studio-button story-studio-danger" type="button"
+        onClick={() => { onSelect(undefined); onDelete() }}>删除节点</button>}
     </div>
   </>
 }
@@ -364,10 +365,13 @@ function EdgeInspector({ workspace, edge, update, onDelete }: {
   return <>
     <h2>{edgeKindLabels[edge.kind]}</h2>
     <div className="story-studio-inspector-subtitle">{source} → {target}</div>
-    {edge.lifecycle === 'suggested' && <button className="story-studio-button story-studio-button-primary" type="button"
-      disabled={!endpointsCanonical} onClick={() => { patch(value => ({ ...value, lifecycle: 'canonical' })) }}>
-      {endpointsCanonical ? '接受关系' : '先接受两端节点'}
-    </button>}
+    {edge.lifecycle === 'suggested' && <div className="story-studio-actions" style={{ marginBottom: 14 }}>
+      <button className="story-studio-button story-studio-button-primary" type="button"
+        disabled={!endpointsCanonical} onClick={() => { patch(value => ({ ...value, lifecycle: 'canonical' })) }}>
+        {endpointsCanonical ? '接受关系' : '先接受两端节点'}
+      </button>
+      <button className="story-studio-button" type="button" onClick={onDelete}>拒绝</button>
+    </div>}
     <Field label="关系类型"><select className="story-studio-input" value={edge.kind}
       onChange={event => { changeKind(event.target.value as StoryEdgeKind) }}>
       {Object.entries(edgeKindLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
@@ -381,7 +385,7 @@ function EdgeInspector({ workspace, edge, update, onDelete }: {
       onChange={event => { patch(current => ({ ...current, audience: event.target.value as StoryEdge['audience'] })) }}>
       <option value="director">导演</option><option value="public">公开</option>
     </select></Field>
-    <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除关系</button>
+    {edge.lifecycle === 'canonical' && <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除关系</button>}
   </>
 }
 
@@ -720,13 +724,15 @@ function StoryMap({ workspace, selection, perspectiveId, update, setSelection, c
     if (selected?.type === 'select') setSelection({ kind: 'edge', id: selected.id })
   }
   const perspective = workspace.characters.find(character => character.id === perspectiveId)
+  const suggestedNodeCount = workspace.graph.nodes.filter(node => node.lifecycle === 'suggested').length
+  const suggestedEdgeCount = workspace.graph.edges.filter(edge => edge.lifecycle === 'suggested').length
   return <div className="story-studio-canvas">
     <div className="story-map-toolbar">
       <button className="story-studio-button" type="button" onClick={() => { addNode('arc') }}>＋ 篇章</button>
       <button className="story-studio-button" type="button" onClick={() => { addNode('beat') }}>＋ 剧情</button>
       <button className="story-studio-button" type="button" onClick={() => { addNode('secret') }}>＋ 秘密</button>
-      {workspace.graph.nodes.some(node => node.lifecycle === 'suggested') && <span style={{ color: 'var(--studio-muted)', fontSize: 10, padding: '0 5px' }}>
-        {workspace.graph.nodes.filter(node => node.lifecycle === 'suggested').length} 条 AI 建议
+      {suggestedNodeCount + suggestedEdgeCount > 0 && <span style={{ color: 'var(--studio-muted)', fontSize: 10, padding: '0 5px' }}>
+        {suggestedNodeCount} 个候选节点 · {suggestedEdgeCount} 条候选关系
       </span>}
     </div>
     <ReactFlow<StoryCanvasNode, StoryCanvasEdge>

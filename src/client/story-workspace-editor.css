@@ -418,6 +418,7 @@
   .story-studio-tabs { display: flex; flex: 1 0 100%; justify-content: flex-start; order: 2; overflow-x: auto; }
   .story-studio-tab { white-space: nowrap; }
   .story-studio-shell { display: block; }
+  .story-studio-main { height: 100%; }
   .story-studio-sidebar { display: none; }
   .story-studio-inspector { background: var(--studio-panel); bottom: 31px; position: absolute; right: 0; top: 98px; width: min(330px, 88vw); z-index: 8; }
   .story-studio-view { padding: 18px 14px 42px; }

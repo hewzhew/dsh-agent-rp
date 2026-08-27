@@ -223,6 +223,29 @@ export interface StoryWorkspaceSaveRequest {
   readonly researchInbox: readonly StoryResearchItem[]
 }
 
+/** Temporary endpoint used while one AI suggestion batch has no durable node ids. */
+export type StorySuggestionEndpoint =
+  | { readonly kind: 'node'; readonly nodeId: string }
+  | { readonly kind: 'proposal'; readonly ref: string }
+
+/** One typed story node proposed from a completed visible turn. */
+export interface StoryNodeSuggestion {
+  readonly ref: string
+  readonly kind: StoryNodeKind
+  readonly title: string
+  readonly content: string
+  readonly participantIds: readonly string[]
+}
+
+/** One typed relationship proposed between canonical or same-batch nodes. */
+export interface StoryEdgeSuggestion {
+  readonly kind: StoryEdgeKind
+  readonly source: StorySuggestionEndpoint
+  readonly target: StorySuggestionEndpoint
+  readonly label: string
+  readonly foreshadowStatus?: StoryForeshadowStatus
+}
+
 /** One completed visible turn materialized into events, facts, and suggestions. */
 export interface StoryTurnMaterialization {
   readonly key: string
@@ -235,7 +258,7 @@ export interface StoryTurnMaterialization {
     readonly characterId: string
     readonly text: string
   }[]
-  readonly plotSuggestions: readonly string[]
-  readonly foreshadowSuggestions: readonly string[]
+  readonly nodeSuggestions: readonly StoryNodeSuggestion[]
+  readonly edgeSuggestions: readonly StoryEdgeSuggestion[]
   readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }
