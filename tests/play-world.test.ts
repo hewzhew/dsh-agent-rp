@@ -724,6 +724,11 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.match(result.finalDraft, /“你自己把两句话接在一起，还问我是哪句？”/u)
   assert.match(result.finalDraft, /## 公开回合记录/u)
   assert.equal(result.hostOnlyWorldDraft, undefined)
+  assert.equal(result.hostOwnedWorldDraft, true)
+  assert.deepEqual(result.publicDialogues, [{
+    characterId: reimuId,
+    dialogue: '“你自己把两句话接在一起，还问我是哪句？”',
+  }])
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
@@ -732,4 +737,32 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
       : []), [])
+  session.append('assistant/message', {
+    turn: 2,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: result.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 2, step: 1 })
+  const materialized = await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: installed.id,
+    turn: 2,
+    signal: new AbortController().signal,
+  })
+  assert.equal(materialized?.continuityResultEventSeq, undefined)
+  assert.match(materialized?.eventSummary ?? '', /博丽灵梦说：“你自己把两句话接在一起，还问我是哪句？”/u)
+  assert.deepEqual(materialized?.changes.facts, [{
+    text: '博丽灵梦说：“你自己把两句话接在一起，还问我是哪句？”',
+    knownBy: [reimuId, marisaId],
+  }])
+  const saved = store.get(installed.id)
+  assert.match(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /博丽灵梦说/u)
+  assert.match(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /博丽灵梦说/u)
+  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'continuity'), false)
 })

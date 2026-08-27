@@ -72,6 +72,12 @@ export interface StoryTurnFinalSection {
   readonly text: string
 }
 
+/** One exact approved utterance rendered into a public prose section. */
+export interface StoryTurnPublicDialogue {
+  readonly characterId: string
+  readonly dialogue: string
+}
+
 /** Final draft and provenance used for the authoritative visible reply. */
 export interface StoryTurnBriefRecord {
   readonly format: 1
@@ -88,8 +94,12 @@ export interface StoryTurnBriefRecord {
   readonly finalSections: readonly StoryTurnFinalSection[]
   readonly finalDraft: string
   readonly modelContext: string
+  /** Exact approved public utterances with their owning character. */
+  readonly publicDialogues?: readonly StoryTurnPublicDialogue[]
   /** The final draft contains only Host-authored world prose and history. */
   readonly hostOnlyWorldDraft?: true
+  /** The final draft contains only Host-authored world prose, approved dialogue, and history. */
+  readonly hostOwnedWorldDraft?: true
 }
 
 /** Exact editable story-document update committed after the visible reply. */
@@ -2818,6 +2828,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const hostOnlyWorldSections = renderHostOnlyWorldSections(enabledSections, worldNarrative, worldOutcome)
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
+  const hostOwnedWorldDraft = hostWorldDialogueSections !== undefined
+    && finalDraft === renderSectionDrafts(hostWorldDialogueSections).trim()
+  const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
+    const dialogue = dialogueByReference.get(speech.reference)
+    return dialogue === undefined || dialogue === '' ? [] : [{ characterId: speech.characterId, dialogue }]
+  })) ?? []
   const context = modelContext(finalDraft)
   const record: StoryTurnBriefRecord = {
     format: 1,
@@ -2832,7 +2848,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     finalSections,
     finalDraft,
     modelContext: context,
+    ...(publicDialogues.length === 0 ? {} : { publicDialogues }),
     ...(hostOnlyWorldDraft ? { hostOnlyWorldDraft: true as const } : {}),
+    ...(hostOwnedWorldDraft ? { hostOwnedWorldDraft: true as const } : {}),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-brief', record)
   await input.ctx.sessions.flush(input.agent.session)
@@ -2874,7 +2892,28 @@ export async function materializeStoryTurn(input: {
   }
   let update: ContinuityUpdate
   let continuityResultEventSeq: number | undefined
-  if (briefEvent.data.hostOnlyWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
+  let hostOwnedMaterialization = false
+  if (briefEvent.data.hostOwnedWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
+    hostOwnedMaterialization = true
+    const characterNameById = new Map(participants.map(character => [character.id, character.name]))
+    const publicDialogues = (briefEvent.data.publicDialogues ?? []).flatMap(item => {
+      const characterName = characterNameById.get(item.characterId)
+      return characterName === undefined ? [] : [{ ...item, characterName }]
+    })
+    const knownBy = participants.map(character => character.id)
+    update = {
+      history: [
+        worldOutcome,
+        ...publicDialogues.map(item => `- ${item.characterName}说：${item.dialogue}`),
+      ].filter(value => value !== '').join('\n'),
+      changes: {
+        characters: [],
+        facts: publicDialogues.map(item => ({ text: `${item.characterName}说：${item.dialogue}`, knownBy })),
+        nodes: [],
+        edges: [],
+      },
+    }
+  } else if (briefEvent.data.hostOnlyWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
     update = {
       history: worldOutcome,
       changes: { characters: [], facts: [], nodes: [], edges: [] },
@@ -2930,7 +2969,7 @@ export async function materializeStoryTurn(input: {
       }
     }
   }
-  if (worldOutcome !== '') {
+  if (worldOutcome !== '' && !hostOwnedMaterialization) {
     update = {
       history: worldOutcome,
       changes: update.changes,
