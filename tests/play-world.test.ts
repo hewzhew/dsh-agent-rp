@@ -9,11 +9,13 @@ import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src
 import { PlayWorldRegistry } from '../src/play-world.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
 import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
+import { acceptStorySuggestionBatch } from '../src/story-suggestion-batch.ts'
 import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,
   createStoryCharacterId,
+  createStoryNodeId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 
@@ -54,8 +56,26 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   const created = store.create({ format: 2, name: '博丽神社飞行棋' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
+  const activeNodeId = createStoryNodeId()
   const withCharacters = store.save({
     ...editable(created),
+    graph: {
+      activeNodeId,
+      nodes: [{
+        id: activeNodeId,
+        kind: 'beat',
+        title: '神社棋局',
+        summary: '灵梦和魔理沙正在博丽神社玩飞行棋。',
+        status: 'active',
+        lifecycle: 'canonical',
+        audience: 'public',
+        position: { x: 0, y: 0 },
+        content: '',
+        participantIds: [reimuId, marisaId],
+        knowledge: { mode: 'participants', characterIds: [] },
+      }],
+      edges: [],
+    },
     characters: [
       character(reimuId, '博丽灵梦', '博丽神社的巫女，负责维护博丽大结界、解决异变与退治造成麻烦的妖怪。'),
       character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使，擅长以光与热为主的华丽高火力魔法。'),
@@ -123,14 +143,73 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.match(characterContext.worldContext, /禁止自行掷骰、移动棋子、切换回合/u)
   assert.match(characterContext.text, /此人物可见的世界状态/u)
   assert.match(compileStoryDirectorWorldContext(movedAgain, worlds), /雾雨魔理沙/u)
-  const restarted = store.installWorld(movedAgain.id, {
+  const firstTurn = store.materializeTurn(movedAgain.id, {
+    key: 'session-play:turn-1',
+    turn: 1,
+    title: '灵梦的第一回合',
+    summary: '灵梦掷骰并移动棋子。',
+    evidence: '棋盘记录了灵梦的行动。',
+    participantIds: [reimuId, marisaId],
+    changes: {
+      characters: [{ characterId: reimuId, location: '棋盘旁', objective: '率先让飞机到达终点' }],
+      facts: [{ text: '魔理沙看见灵梦移动了棋子。', knownBy: [marisaId] }],
+      nodes: [{
+        ref: 'accepted-turn',
+        kind: 'beat',
+        parent: { kind: 'node', nodeId: activeNodeId },
+        title: '已接受的剧情方向',
+        summary: '下一回合继续棋局。',
+        content: '',
+        participantIds: [reimuId, marisaId],
+        knowledge: { mode: 'participants', characterIds: [] },
+      }],
+      edges: [],
+    },
+    webResearch: [],
+  })
+  const firstEventId = firstTurn.events[0]!.id
+  const accepted = acceptStorySuggestionBatch(firstTurn, firstEventId)
+  const withAcceptedDirection = store.save({ ...editable(firstTurn), graph: accepted.graph })
+  const secondTurn = store.materializeTurn(withAcceptedDirection.id, {
+    key: 'session-play:turn-2',
+    turn: 2,
+    title: '魔理沙的第一回合',
+    summary: '魔理沙准备追赶。',
+    evidence: '棋局仍在继续。',
+    participantIds: [reimuId, marisaId],
+    changes: {
+      characters: [],
+      facts: [],
+      nodes: [{
+        ref: 'pending-turn',
+        kind: 'beat',
+        parent: { kind: 'node', nodeId: activeNodeId },
+        title: '尚未接受的剧情方向',
+        summary: '这项候选应随重新开局消失。',
+        content: '',
+        participantIds: [marisaId],
+        knowledge: { mode: 'participants', characterIds: [] },
+      }],
+      edges: [],
+    },
+    webResearch: [],
+  })
+  const restarted = store.restartWorld(secondTurn.id, {
     format: 0,
-    revision: movedAgain.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    revision: secondTurn.revision,
   })
   assert.notEqual(restarted.world?.instanceId, movedAgain.world?.instanceId)
   assert.equal(restarted.world?.events.length, 1)
   assert.equal((restarted.world?.state as FlyingChessWorldState).turn, 1)
+  assert.equal(restarted.events.length, 0)
+  assert.equal(restarted.facts.some(fact => fact.source.kind === 'event'), false)
+  assert.deepEqual(restarted.characters.map(item => item.state), [
+    { location: '', condition: '', objective: '', notes: '' },
+    { location: '', condition: '', objective: '', notes: '' },
+  ])
+  assert.equal(restarted.graph.nodes.some(node => node.title === '尚未接受的剧情方向'), false)
+  assert.equal(restarted.graph.nodes.some(node => node.title === '已接受的剧情方向'), true)
+  assert.equal(restarted.graph.nodes.find(node => node.title === '已接受的剧情方向')?.sourceEventId, undefined)
 })
 
 test('keeps executable world state out of whole-workspace edits', (context) => {

@@ -20,6 +20,7 @@ import {
   PLAY_WORLD_MODULES_PATH,
   type PlayWorldActionRequest,
   type PlayWorldInstallRequest,
+  type PlayWorldRestartRequest,
 } from './play-world-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 
@@ -70,6 +71,15 @@ function parseWorldInstallRequest(value: unknown): PlayWorldInstallRequest {
     throw new Error('游玩世界安装请求字段无效')
   }
   return record as unknown as PlayWorldInstallRequest
+}
+
+function parseWorldRestartRequest(value: unknown): PlayWorldRestartRequest {
+  const record = requestRecord(value)
+  if (record.format !== 0 || typeof record.revision !== 'number'
+    || Object.keys(record).some(key => key !== 'format' && key !== 'revision')) {
+    throw new Error('游玩世界重新开局请求字段无效')
+  }
+  return record as unknown as PlayWorldRestartRequest
 }
 
 function parseWorldActionRequest(value: unknown): PlayWorldActionRequest {
@@ -148,6 +158,10 @@ export function installStoryWorkspaceHttp(
         }
         if (request.method === 'POST' && segments.length === 2 && segments[1] === 'world') {
           json(response, 200, { format: 1, workspace: store.installWorld(segments[0]!, parseWorldInstallRequest(await readJson(request))) })
+          return
+        }
+        if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'restart') {
+          json(response, 200, { format: 1, workspace: store.restartWorld(segments[0]!, parseWorldRestartRequest(await readJson(request))) })
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'actions') {

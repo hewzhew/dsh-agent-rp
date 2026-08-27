@@ -33,7 +33,14 @@ function character(id: string, name: string, description = ''): StoryCharacter {
   return {
     id,
     name,
-    profile: { description, personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
+    profile: {
+      description,
+      personality: `${name}只用短句回应。`,
+      scenario: '',
+      exampleDialogue: `${name}：“先把眼前的事说清楚。”\n${name}：“笨蛋”`,
+      systemPrompt: '',
+      postHistoryInstructions: '',
+    },
     state: { location: '', condition: '', objective: '', notes: '' },
   }
 }
@@ -135,7 +142,13 @@ function workspace(): StoryWorkspaceSnapshot {
     ],
     sources: [
       { id: sourceId, name: '检索原著设定', kind: 'web', enabled: true, content: '只查询作品官方设定与原著章节' },
-      { id: originalSourceId, name: '终章原著', kind: 'original', enabled: true, content: '鸦青印记只在列车终章显现。' },
+      {
+        id: originalSourceId,
+        name: '终章原著',
+        kind: 'original',
+        enabled: true,
+        content: '# 终章设定\n\n鸦青印记只在列车终章显现。\n\n# 人物对白\n\n阿梨：“没看清就别急着下结论。”\n\n柏舟：“那就走近一点看。”\n\n# 语气观察\n\n阿梨常用短反问和理直气壮的断言；柏舟习惯立刻指出她推断里的漏洞，两人熟到省略礼貌和背景说明。',
+      },
     ],
     citations: [],
     researchInbox: [],
@@ -151,9 +164,18 @@ test('runs logged story stages while keeping each character request privately sc
   const characterBodies: string[] = []
   const characterSystems: string[] = []
   const sectionSystems: string[] = []
+  const sectionBodies: string[] = []
   const researchBodies: string[] = []
   let directorBody = ''
+  let voiceBody = ''
+  let voiceSystem = ''
+  let voiceReviewBody = ''
+  let voiceReviewSystem = ''
+  let voiceRetryBody = ''
+  let voiceRetrySystem = ''
+  let voiceReviewCalls = 0
   let editorBody = ''
+  let editorSystem = ''
   let webQuery = ''
   let calls = 0
   let active = 0
@@ -202,7 +224,7 @@ test('runs logged story stages while keeping each character request privately sc
             const localReference = body.match(/local:source-[0-9a-f-]+:1/u)?.[0] ?? 'local:missing'
             text = JSON.stringify({
               findings: [
-                { certainty: 'fact', text: '两人已经看见雨停。', evidence: ['story:public-history'] },
+                { certainty: 'fact', text: '两人已经看见雨停。', evidence: ['[story:public-history]'] },
                 { certainty: 'fact', text: '徽章属于旧车站。', evidence: [webReference] },
                 { certainty: 'fact', text: '鸦青印记只在终章显现。', evidence: [localReference] },
                 { certainty: 'fact', text: '无法核验的徽章传闻。', evidence: ['web:missing:1'] },
@@ -214,18 +236,97 @@ test('runs logged story stages while keeping each character request privately sc
         else if (system.includes('指定人物认知')) {
           characterSystems.push(system)
           characterBodies.push(body)
-          text = body.includes('阿梨知道徽章') ? '阿梨先观察徽章。' : '柏舟避开车票话题。'
+          const evidence = body.match(/character:[^"\\]+:example-dialogue/u)?.[0] ?? 'missing'
+          text = body.includes('阿梨知道徽章')
+            ? JSON.stringify({
+              observation: '看见玩家举起徽章。',
+              action: '先观察徽章刻痕。',
+              speechIntent: '提醒对方先确认眼前事实再下结论。',
+              voiceEvidence: [evidence, 'character:invented:example-dialogue'],
+            })
+            : JSON.stringify({
+              observation: '注意到阿梨正在观察徽章。',
+              action: '“先别问车票。”',
+              speechIntent: '回避车票话题。',
+              voiceEvidence: [evidence],
+            })
         } else if (system.includes('剧情导演 Worker')) {
           directorBody = body
-          text = '导演方案'
+          text = JSON.stringify({
+            sections: [
+              {
+                sectionId,
+                beats: ['阿梨先观察徽章。'],
+                speech: [
+                  {
+                    characterId: aliceId,
+                    intent: '提醒对方先确认眼前事实再下结论。',
+                    voiceEvidence: [`character:${bobId}:example-dialogue`],
+                  },
+                  {
+                    characterId: bobId,
+                    intent: '让阿梨走近一点确认。',
+                    voiceEvidence: [`character:${bobId}:example-dialogue`],
+                  },
+                ],
+              },
+              { sectionId: characterSectionId, characterId: aliceId },
+              { sectionId: historySectionId, beats: ['记录已经发生的公开事实。'] },
+            ],
+          })
+        }
+        else if (system.includes('人物对白审校 Worker')) {
+          voiceReviewCalls += 1
+          if (voiceReviewCalls === 1) {
+            voiceReviewBody = body
+            voiceReviewSystem = system
+            text = JSON.stringify({
+              lines: [
+                { reference: `${sectionId}:1`, move: 'command', dialogue: '' },
+                { reference: `${sectionId}:2`, move: 'correct', dialogue: '' },
+              ],
+            })
+          } else {
+            text = JSON.stringify({
+              lines: [
+                { reference: `${sectionId}:1`, move: 'command', dialogue: '先看徽章，别忙着猜。' },
+              ],
+            })
+          }
+        }
+        else if (system.includes('人物对白合成 Worker')) {
+          if (system.includes('唯一一次退回重写')) {
+            voiceRetryBody = body
+            voiceRetrySystem = system
+            text = JSON.stringify({
+              lines: [
+                { reference: `${sectionId}:1`, move: 'command', dialogue: '先看徽章，别忙着猜。' },
+                { reference: `${sectionId}:2`, move: 'correct', dialogue: '' },
+              ],
+            })
+          } else {
+            voiceBody = body
+            voiceSystem = system
+            text = JSON.stringify({
+              lines: [
+                { reference: `${sectionId}:1`, move: 'command', dialogue: '谁都能说的胜利台词。' },
+                { reference: `${sectionId}:2`, move: 'correct', dialogue: '“谁都能说的胜利台词二。”' },
+              ],
+            })
+          }
         }
         else if (system.includes('分区的 ')) {
           sectionSystems.push(system)
-          text = body.includes('kind=\\"character\\"') ? '阿梨谨慎地观察徽章。'
-            : body.includes('kind=\\"history\\"') ? '零点：站钟停走。' : '尚显重复的粗稿。尚显重复的粗稿。'
+          sectionBodies.push(body)
+          text = body.includes('kind=\\"character\\"')
+            ? JSON.stringify({ insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }] })
+            : body.includes('kind=\\"history\\"')
+              ? '<omit-section />'
+              : '尚显重复的粗稿。尚显重复的粗稿。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“谁都能说的胜利台词。”'
         } else {
           editorBody = body
-          text = '雨停后，阿梨看向徽章，柏舟移开视线。'
+          editorSystem = system
+          text = '雨停后，阿梨看向徽章，柏舟移开视线。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“编辑器新增的台词。”'
         }
         return (async function* () {
           try {
@@ -263,7 +364,7 @@ test('runs logged story stages while keeping each character request privately sc
 
   const result = await runStoryTurnPipeline(input)
 
-  assert.equal(calls, 9)
+  assert.equal(calls, 13)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(characterBodies.length, 2)
@@ -274,6 +375,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(characterBodies.join('\n'), /这不是玩家要求/u)
   assert.doesNotMatch(directorBody, /这不是玩家要求/u)
   assert.match(researchBodies[0]!, /story:public-history/u)
+  assert.doesNotMatch(researchBodies.join('\n'), /story:recent-transcript|近期公开会话/u)
   assert.doesNotMatch(researchBodies[0]!, /鸦青印记只在列车终章显现/u)
   assert.match(researchBodies[1]!, /徽章属于旧车站/u)
   assert.match(researchBodies[1]!, /鸦青印记只在列车终章显现/u)
@@ -282,23 +384,77 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /不确定.*无法核验的徽章传闻.*无可核验依据/u)
   assert.doesNotMatch(webQuery, /超过轮数上限/u)
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
+  assert.match(characterBodies[0]!, /character:character-00000000-0000-4000-8000-000000000001:example-dialogue/u)
+  assert.match(characterBodies[0]!, /先把眼前的事说清楚/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
+  assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
+  assert.match(characterSystems[0]!, /若开口只是为了让场面热闹/u)
+  assert.match(directorBody, /说话意图：提醒对方先确认眼前事实再下结论/u)
+  assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
+  assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
+  assert.match(characterBodies[1]!, /character:character-00000000-0000-4000-8000-000000000002:example-dialogue/u)
   assert.doesNotMatch(characterBodies[1]!, /阿梨知道徽章|下一幕会停电|第三幕打开/u)
   assert.equal(sectionSystems.length, 3)
   assert.match(sectionSystems[0]!, /叙事正文、环境、行动与对白/u)
+  assert.match(sectionSystems[0]!, /同一事件换句话重复/u)
   assert.match(sectionSystems[0]!, /可执行世界严格只读/u)
   assert.match(sectionSystems[1]!, /聚焦人物“阿梨”/u)
+  assert.match(sectionSystems[1]!, /"insights"/u)
+  assert.match(sectionSystems[1]!, /knowledge\|intention\|decision/u)
   assert.match(sectionSystems[2]!, /时间线、前情或档案/u)
+  assert.match(sectionSystems[2]!, /非空内容，不能返回 <omit-section \/>/u)
+  assert.match(sectionBodies[0]!, /获准对白：阿梨｜“先看徽章，别忙着猜。”/u)
+  assert.doesNotMatch(sectionBodies.join('\n'), /<voice_evidence>|先把眼前的事说清楚/u)
+  assert.match(voiceBody, new RegExp(`speech:${sectionId}:1`, 'u'))
+  assert.match(voiceBody, /提醒对方先确认眼前事实再下结论/u)
+  assert.match(voiceBody, /先把眼前的事说清楚/u)
+  assert.match(voiceBody, /熟到省略礼貌和背景说明/u)
+  const firstSpeechPlan = voiceBody.slice(
+    voiceBody.indexOf(`## [speech:${sectionId}:1]`),
+    voiceBody.indexOf(`## [speech:${sectionId}:2]`),
+  )
+  assert.match(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
+  assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
+  assert.match(voiceSystem, /不得照抄、拼接、近似复述/u)
+  assert.match(voiceSystem, /后一句必须直接接住前一句/u)
+  assert.match(voiceSystem, /move 说明句子怎样作用于对方/u)
+  assert.match(voiceSystem, /目标人物自己的台词用于校准/u)
+  assert.match(voiceSystem, /普通问句、纠正句或胜负套话/u)
+  assert.match(voiceReviewBody, /谁都能说的胜利台词/u)
+  assert.match(voiceReviewBody, /先把眼前的事说清楚/u)
+  assert.match(voiceReviewSystem, /匿名替换检验/u)
+  assert.match(voiceReviewSystem, /意图复述检验/u)
+  assert.match(voiceReviewSystem, /你怎么还没/u)
+  assert.match(voiceReviewSystem, /目标人物自己的原句/u)
+  assert.match(voiceReviewSystem, /任意竞争者、朋友或对手/u)
+  assert.match(voiceReviewSystem, /仅复述公开棋盘事实/u)
+  assert.match(voiceReviewSystem, /绝不参与创作/u)
+  assert.match(voiceReviewSystem, /只能逐字返回 draft_dialogue/u)
+  assert.match(voiceRetrySystem, /唯一一次退回重写/u)
+  assert.match(voiceRetryBody, /rejected_draft/u)
+  assert.match(voiceRetryBody, /谁都能说的胜利台词/u)
   assert.ok(editorBody.indexOf('## 正文') < editorBody.indexOf('## 阿梨视角'))
   assert.ok(editorBody.indexOf('## 阿梨视角') < editorBody.indexOf('## 公开档案'))
+  assert.match(editorBody, /## 阿梨视角[\s\S]*自己的旧站记忆/u)
+  assert.match(editorBody, /先看徽章，别忙着猜/u)
+  assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
+  assert.match(editorBody, /## 公开档案[\s\S]*## 雨停[\s\S]*两人都看见雨停了/u)
   assert.match(editorBody, /<world_state>/u)
+  assert.doesNotMatch(editorBody, /<voice_evidence>/u)
+  assert.match(editorSystem, /不得新增、恢复、拆分或重写任何对白/u)
+  assert.match(editorSystem, /history 的简洁事实记录.*不能因此删除/u)
+  assert.match(directorBody, /## 结论所引用的原始证据/u)
+  assert.match(directorBody, /终章原著/u)
   assert.match(result.finalDraft, /阿梨看向徽章/u)
+  assert.match(result.finalDraft, /先看徽章，别忙着猜/u)
+  assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
   assert.match(result.modelContext, /阿梨看向徽章/u)
+  assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 9)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 9)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 13)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 13)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
@@ -307,7 +463,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-') || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 9)
+  assert.equal(calls, 13)
 })
 
 test('stops malformed research output and falls back to exact local evidence', async () => {

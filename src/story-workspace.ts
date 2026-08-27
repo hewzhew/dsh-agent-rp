@@ -19,6 +19,7 @@ import {
 import type {
   PlayWorldActionRequest,
   PlayWorldInstallRequest,
+  PlayWorldRestartRequest,
   PlayWorldSnapshot,
 } from './play-world-protocol.ts'
 import type { RoleplayActorProjection } from './roleplay-resource-catalog.ts'
@@ -1162,6 +1163,55 @@ export class StoryWorkspaceStore {
     if (request.format !== 0 || typeof request.moduleId !== 'string') throw new Error('游玩世界安装请求无效')
     const world = this.worlds.get(request.moduleId).create({ characters: current.characters })
     return this.commitWorld(current, world)
+  }
+
+  /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */
+  restartWorld(id: string, request: PlayWorldRestartRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    if (request.format !== 0 || current.world === undefined) throw new Error('当前游玩场地没有可重新开始的世界')
+    const world = this.worlds.get(current.world.moduleId).create({ characters: current.characters })
+    const removedNodeIds = new Set(current.graph.nodes
+      .filter(node => node.lifecycle === 'suggested' && node.sourceEventId !== undefined)
+      .map(node => node.id))
+    const removedFactIds = new Set(current.facts
+      .filter(fact => fact.source.kind === 'event')
+      .map(fact => fact.id))
+    const nodes = current.graph.nodes.flatMap(node => {
+      if (removedNodeIds.has(node.id)) return []
+      if (node.sourceEventId === undefined) return [node]
+      const { sourceEventId: _sourceEventId, ...retained } = node
+      return [retained]
+    })
+    const edges = current.graph.edges.flatMap(edge => {
+      if (removedNodeIds.has(edge.source) || removedNodeIds.has(edge.target)
+        || edge.lifecycle === 'suggested' && edge.sourceEventId !== undefined) return []
+      if (edge.sourceEventId === undefined) return [edge]
+      const { sourceEventId: _sourceEventId, ...retained } = edge
+      return [retained]
+    })
+    const citations = current.citations.map(citation => {
+      if (citation.target?.kind === 'node' && removedNodeIds.has(citation.target.nodeId)
+        || citation.target?.kind === 'fact' && removedFactIds.has(citation.target.factId)) {
+        const { target: _target, ...retained } = citation
+        return retained
+      }
+      return citation
+    })
+    const snapshot = normalizeWorkspace({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      graph: { ...current.graph, nodes, edges },
+      characters: current.characters.map(character => ({ ...character, state: emptyCharacterState() })),
+      facts: current.facts.filter(fact => !removedFactIds.has(fact.id)),
+      events: [],
+      citations,
+      world,
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
+    this.removeUnreferenced(current, snapshot)
+    return this.get(snapshot.id)
   }
 
   /** Apply one typed action without permitting whole-workspace state replacement. */

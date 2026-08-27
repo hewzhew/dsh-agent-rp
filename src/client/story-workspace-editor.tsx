@@ -283,6 +283,16 @@ async function installPlayWorld(workspace: StoryWorkspaceSnapshot, moduleId: str
   return value.workspace
 }
 
+async function restartPlayWorld(workspace: StoryWorkspaceSnapshot): Promise<StoryWorkspaceSnapshot> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/restart`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision }),
+  })
+  if (value.workspace === undefined) throw new Error('世界重新开局响应无效')
+  return value.workspace
+}
+
 async function dispatchPlayWorldAction(workspace: StoryWorkspaceSnapshot, action: FlyingChessWorldAction): Promise<StoryWorkspaceSnapshot> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/actions`, {
     method: 'POST',
@@ -1602,7 +1612,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       setNotice('所有修改已保存')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
-  const installWorld = (moduleId: string, restarting = false): void => {
+  const installWorld = (moduleId: string): void => {
     if (workspace === undefined || dirty) return
     setSaving(true)
     setError(undefined)
@@ -1610,7 +1620,18 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       setWorkspace(saved)
       setItems(await listWorkspaces())
       setView('world')
-      setNotice(`${saved.world?.title ?? '世界'}已经${restarting ? '重新开局' : '装入场地'}`)
+      setNotice(`${saved.world?.title ?? '世界'}已经装入场地`)
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const restartWorld = (): void => {
+    if (workspace === undefined || workspace.world === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    void restartPlayWorld(workspace).then(async saved => {
+      setWorkspace(saved)
+      setItems(await listWorkspaces())
+      setView('world')
+      setNotice(`${saved.world?.title ?? '世界'}已经重新开局；旧局事件与临时状态已清空`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const runWorldAction = (action: FlyingChessWorldAction): void => {
@@ -1885,9 +1906,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
         ? 'start'
         : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}
       onAdvanceSession={advanceSession}
-      onInstall={installWorld} onRestart={() => {
-        if (workspace.world !== undefined) installWorld(workspace.world.moduleId, true)
-      }} onAction={runWorldAction} />
+      onInstall={installWorld} onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}
       clearPerspective={() => { setPerspectiveId(undefined) }} />

@@ -34,7 +34,7 @@ import type {
 import { searchStoryWorkspaceSourceExcerpts } from './story-research.ts'
 
 /** Ordered model responsibilities before the visible character request. */
-export type StoryTurnStage = 'research' | 'character' | 'director' | 'section' | 'editor' | 'continuity'
+export type StoryTurnStage = 'research' | 'character' | 'director' | 'section' | 'voice' | 'editor' | 'continuity'
 
 /** Exact auxiliary request dispatched by the story pipeline. */
 export interface StoryTurnStageRequestRecord {
@@ -163,6 +163,47 @@ interface StoryResearchDecision {
   readonly followUps: readonly StoryResearchFollowUp[]
 }
 
+interface StoryCharacterDecision {
+  readonly observation: string
+  readonly action: string
+  readonly speechIntent: string
+  readonly voiceEvidence: readonly string[]
+}
+
+interface StoryDirectorSpeechPlan {
+  readonly reference: string
+  readonly characterId: string
+  readonly intent: string
+  readonly voiceEvidence: readonly string[]
+}
+
+interface StoryDirectorSectionPlan {
+  readonly sectionId: string
+  readonly beats: readonly string[]
+  readonly speech: readonly StoryDirectorSpeechPlan[]
+}
+
+interface StoryDirectorDecision {
+  readonly sections: readonly StoryDirectorSectionPlan[]
+}
+
+interface StoryDialogueLine {
+  readonly reference: string
+  readonly move: StoryVoiceMove
+  readonly dialogue: string
+}
+
+type StoryVoiceMove = 'answer' | 'assert' | 'challenge' | 'correct' | 'command' | 'question' | 'warn' | 'tease' | 'refuse' | 'inform'
+
+interface StoryCharacterSectionDecision {
+  readonly insights: readonly StoryCharacterInsight[]
+}
+
+interface StoryCharacterInsight {
+  readonly kind: 'knowledge' | 'intention' | 'decision'
+  readonly text: string
+}
+
 interface ContinuityUpdate {
   readonly history: string
   readonly changes: StoryChangeSet
@@ -173,6 +214,12 @@ interface StorySectionDraft {
   readonly name: string
   readonly kind: 'prose' | 'character' | 'history'
   readonly text: string
+}
+
+interface StoryCharacterVoiceEvidence {
+  readonly characterId: string
+  readonly characterName: string
+  readonly evidence: readonly StoryResearchEvidence[]
 }
 
 interface StoryWebSearchGateway {
@@ -205,12 +252,6 @@ function messageText(messages: readonly UserMessage[]): string {
     .join('\n').trim()
 }
 
-function transcriptText(agent: Agent): string {
-  const text = agent.session.deriveMessages().flatMap(message =>
-    message.content.flatMap(block => block.type === 'text' ? [block.text] : [])).join('\n')
-  return text.length <= 24_000 ? text : text.slice(-24_000)
-}
-
 function visibleReplyText(events: readonly SessionEvent[], turn: number): string {
   const event = events.findLast(candidate => candidate.type === 'assistant/message'
     && candidate.data.turn === turn && candidate.data.interrupted !== true
@@ -236,6 +277,23 @@ function jsonObject(text: string, subject: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function evidenceReference(value: unknown, subject: string): string {
+  const reference = boundedString(value, subject, 240)
+  const bracketed = /^\[([^\[\]\r\n]+)\]$/u.exec(reference)
+  return bracketed?.[1] ?? reference
+}
+
+function availableEvidenceReference(
+  value: unknown,
+  subject: string,
+  availableEvidence: ReadonlySet<string>,
+): string | undefined {
+  const reference = evidenceReference(value, subject)
+  if (availableEvidence.has(reference)) return reference
+  const localReference = `local:${reference}`
+  return availableEvidence.has(localReference) ? localReference : undefined
+}
+
 function parseResearchDecision(text: string, availableEvidence: ReadonlySet<string>): StoryResearchDecision {
   const record = jsonObject(text, '研究决策')
   if (Object.keys(record).some(key => key !== 'findings' && key !== 'followUps')
@@ -250,9 +308,14 @@ function parseResearchDecision(text: string, availableEvidence: ReadonlySet<stri
     if (Object.keys(finding).some(key => !['certainty', 'text', 'evidence'].includes(key))
       || (finding.certainty !== 'fact' && finding.certainty !== 'uncertain')
       || !Array.isArray(finding.evidence)) throw new Error(`研究结论[${String(index)}]字段无效`)
-    const evidence = finding.evidence.slice(0, 8).map((reference, evidenceIndex) =>
-      boundedString(reference, `研究结论[${String(index)}].evidence[${String(evidenceIndex)}]`, 240))
-      .filter(reference => availableEvidence.has(reference))
+    const evidence = finding.evidence.slice(0, 8).flatMap((reference, evidenceIndex) => {
+      const resolved = availableEvidenceReference(
+        reference,
+        `研究结论[${String(index)}].evidence[${String(evidenceIndex)}]`,
+        availableEvidence,
+      )
+      return resolved === undefined ? [] : [resolved]
+    })
     const certainty = finding.certainty === 'fact' && evidence.length === 0 ? 'uncertain' : finding.certainty
     return {
       certainty,
@@ -305,6 +368,368 @@ function renderResearchFindings(findings: readonly StoryResearchFinding[]): stri
     const evidence = finding.evidence.length === 0 ? '无可核验依据' : finding.evidence.map(reference => `[${reference}]`).join(' ')
     return `- **${label}** ${finding.text}（依据：${evidence}）`
   }).join('\n')
+}
+
+function renderResearchBrief(
+  findings: readonly StoryResearchFinding[],
+  evidenceByReference: ReadonlyMap<string, StoryResearchEvidence>,
+): string {
+  if (findings.length === 0) return ''
+  const cited = [...new Set(findings.flatMap(finding => finding.evidence))]
+    .flatMap(reference => {
+      const evidence = evidenceByReference.get(reference)
+      return evidence === undefined ? [] : [evidence]
+    })
+  return [
+    '## 研究结论',
+    renderResearchFindings(findings),
+    ...(cited.length === 0 ? [] : ['## 结论所引用的原始证据', renderResearchEvidence(cited)]),
+  ].join('\n\n')
+}
+
+function parseCharacterDecision(
+  text: string,
+  availableEvidence: ReadonlySet<string>,
+): StoryCharacterDecision {
+  const record = jsonObject(text, '人物决策')
+  if (Object.keys(record).some(key => !['observation', 'action', 'speechIntent', 'voiceEvidence'].includes(key))
+    || !Array.isArray(record.voiceEvidence)) throw new Error('人物决策字段无效')
+  const observation = boundedString(record.observation, '人物决策.observation', 4_096)
+  const action = boundedString(record.action, '人物决策.action', 4_096)
+  const speechIntent = boundedString(record.speechIntent, '人物决策.speechIntent', 4_096)
+  if (/["“”「」『』]/u.test(`${observation}${action}${speechIntent}`)) {
+    throw new Error('人物决策包含不应提前写定的逐字对白')
+  }
+  const voiceEvidence = record.voiceEvidence.slice(0, 8).flatMap((value, index) => {
+    const resolved = availableEvidenceReference(
+      value,
+      `人物决策.voiceEvidence[${String(index)}]`,
+      availableEvidence,
+    )
+    return resolved === undefined ? [] : [resolved]
+  })
+  return { observation, action, speechIntent, voiceEvidence }
+}
+
+function renderCharacterDecision(characterName: string, decision: StoryCharacterDecision): string {
+  return [
+    `## ${characterName}`,
+    `- 观察：${decision.observation}`,
+    `- 行动：${decision.action}`,
+    `- 说话意图：${decision.speechIntent}`,
+    `- 语气依据：${decision.voiceEvidence.length === 0 ? '无可追溯依据，不应强行添加对白' : decision.voiceEvidence.map(reference => `[${reference}]`).join(' ')}`,
+  ].join('\n')
+}
+
+const DIRECT_DIALOGUE_PATTERN = /[“”「」『』"]/u
+
+function parseDirectorDecision(
+  text: string,
+  sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  characterIds: ReadonlySet<string>,
+  availableEvidence: ReadonlySet<string>,
+): StoryDirectorDecision {
+  const record = jsonObject(text, '导演方案')
+  if (Object.keys(record).some(key => key !== 'sections') || !Array.isArray(record.sections)) {
+    throw new Error('导演方案字段无效')
+  }
+  const sectionIds = new Set(sections.map(section => section.id))
+  const sectionById = new Map(sections.map(section => [section.id, section]))
+  const seen = new Set<string>()
+  const plans = record.sections.map((value, index): StoryDirectorSectionPlan => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`导演方案.sections[${String(index)}]不是对象`)
+    }
+    const plan = value as Record<string, unknown>
+    const beatsValue = plan.beats ?? []
+    const speechValue = plan.speech ?? []
+    if (Object.keys(plan).some(key => !['sectionId', 'characterId', 'beats', 'speech'].includes(key))
+      || !Array.isArray(beatsValue) || !Array.isArray(speechValue)) {
+      throw new Error(`导演方案.sections[${String(index)}]字段无效`)
+    }
+    const sectionId = boundedString(plan.sectionId, `导演方案.sections[${String(index)}].sectionId`, 240)
+    if (!sectionIds.has(sectionId) || seen.has(sectionId)) throw new Error('导演方案分区无效')
+    const section = sectionById.get(sectionId)!
+    if (plan.characterId !== undefined
+      && boundedString(plan.characterId, `导演方案.sections[${String(index)}].characterId`, 240) !== section.characterId) {
+      throw new Error('导演方案人物分区错配')
+    }
+    seen.add(sectionId)
+    const beats = beatsValue.slice(0, 24).map((beat, beatIndex) =>
+      boundedString(beat, `导演方案.sections[${String(index)}].beats[${String(beatIndex)}]`, 2_048))
+    const speech = speechValue.slice(0, 16).map((item, speechIndex): StoryDirectorSpeechPlan => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+        throw new Error(`导演方案.sections[${String(index)}].speech[${String(speechIndex)}]不是对象`)
+      }
+      const entry = item as Record<string, unknown>
+      const voiceEvidenceValue = entry.voiceEvidence ?? []
+      if (Object.keys(entry).some(key => !['characterId', 'intent', 'voiceEvidence'].includes(key))
+        || !Array.isArray(voiceEvidenceValue)) throw new Error('导演方案说话意图字段无效')
+      const characterId = boundedString(entry.characterId, '导演方案说话意图.characterId', 240)
+      if (!characterIds.has(characterId)) throw new Error('导演方案说话人物无效')
+      const intent = boundedString(entry.intent, '导演方案说话意图.intent', 2_048)
+      const voiceEvidence = voiceEvidenceValue.slice(0, 8).flatMap((reference, evidenceIndex) => {
+        const resolved = availableEvidenceReference(
+          reference,
+          `导演方案说话意图.voiceEvidence[${String(evidenceIndex)}]`,
+          availableEvidence,
+        )
+        return resolved === undefined ? [] : [resolved]
+      })
+      return {
+        reference: `speech:${sectionId}:${String(speechIndex + 1)}`,
+        characterId,
+        intent,
+        voiceEvidence,
+      }
+    })
+    if (sectionById.get(sectionId)?.kind !== 'prose' && speech.length > 0) {
+      throw new Error('导演方案只能把对白分配给正文分区')
+    }
+    if ([...beats, ...speech.map(item => item.intent)].some(value => DIRECT_DIALOGUE_PATTERN.test(value))) {
+      throw new Error('导演方案包含不应提前写定的逐字对白')
+    }
+    return { sectionId, beats, speech }
+  })
+  if (seen.size !== sectionIds.size) throw new Error('导演方案没有覆盖全部启用分区')
+  return { sections: plans }
+}
+
+function renderDirectorDecision(
+  decision: StoryDirectorDecision,
+  sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  dialogueByReference: ReadonlyMap<string, string>,
+): string {
+  const sectionById = new Map(sections.map(section => [section.id, section]))
+  const characterById = new Map(characters.map(character => [character.id, character.name]))
+  return decision.sections.map(plan => {
+    const section = sectionById.get(plan.sectionId)!
+    return [
+      `## ${section.name}（${section.kind}）`,
+      ...plan.beats.map(beat => `- 节拍：${beat}`),
+      ...plan.speech.flatMap(speech => {
+        const dialogue = dialogueByReference.get(speech.reference)
+        return dialogue === undefined || dialogue === ''
+          ? []
+          : [`- 获准对白：${characterById.get(speech.characterId) ?? speech.characterId}｜${dialogue}`]
+      }),
+      ...(plan.beats.length === 0 && !plan.speech.some(speech => (dialogueByReference.get(speech.reference) ?? '') !== '')
+        ? ['- 本轮没有独有材料。']
+        : []),
+    ].join('\n')
+  }).join('\n\n')
+}
+
+function groundDirectorVoiceEvidence(
+  decision: StoryDirectorDecision,
+  evidence: readonly StoryCharacterVoiceEvidence[],
+): StoryDirectorDecision {
+  const evidenceByCharacter = new Map(evidence.map(character => [character.characterId, character.evidence]))
+  return {
+    sections: decision.sections.map(section => ({
+      ...section,
+      speech: section.speech.map(speech => {
+        const characterEvidence = evidenceByCharacter.get(speech.characterId) ?? []
+        const available = new Set(characterEvidence.map(item => item.reference))
+        const dialogueAnchors = characterEvidence
+          .filter(item => DIRECT_DIALOGUE_PATTERN.test(item.text))
+          .slice(0, 4)
+          .map(item => item.reference)
+        const analysisAnchors = characterEvidence
+          .filter(item => !DIRECT_DIALOGUE_PATTERN.test(item.text))
+          .slice(0, 2)
+          .map(item => item.reference)
+        return {
+          ...speech,
+          voiceEvidence: [...new Set([
+            ...speech.voiceEvidence.filter(reference => available.has(reference)),
+            ...dialogueAnchors,
+            ...analysisAnchors,
+          ])].slice(0, 8),
+        }
+      }),
+    })),
+  }
+}
+
+function selectDirectorVoiceEvidence(
+  decision: StoryDirectorDecision,
+  evidence: readonly StoryCharacterVoiceEvidence[],
+): readonly StoryCharacterVoiceEvidence[] {
+  const referencesByCharacter = new Map<string, Set<string>>()
+  for (const plan of decision.sections.flatMap(section => section.speech)) {
+    const references = referencesByCharacter.get(plan.characterId) ?? new Set<string>()
+    for (const reference of plan.voiceEvidence) references.add(reference)
+    referencesByCharacter.set(plan.characterId, references)
+  }
+  return evidence.flatMap(character => {
+    const references = referencesByCharacter.get(character.characterId)
+    if (references === undefined) return []
+    const selected = character.evidence.filter(item => references.has(item.reference))
+    return selected.length === 0 ? [] : [{ ...character, evidence: selected }]
+  })
+}
+
+function renderDialoguePlans(
+  decision: StoryDirectorDecision,
+  sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): string {
+  const sectionById = new Map(sections.map(section => [section.id, section.name]))
+  const characterById = new Map(characters.map(character => [character.id, character.name]))
+  return decision.sections.flatMap(section => section.speech.map(speech => [
+    `## [${speech.reference}]`,
+    `- 分区：${sectionById.get(section.sectionId) ?? section.sectionId}`,
+    `- 人物：${characterById.get(speech.characterId) ?? speech.characterId}（${speech.characterId}）`,
+    `- 意图：${speech.intent}`,
+    `- 语气依据：${speech.voiceEvidence.map(reference => `[${reference}]`).join(' ') || '无'}`,
+  ].join('\n'))).join('\n\n')
+}
+
+function renderDialogueDraft(
+  decision: StoryDirectorDecision,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  dialogueByReference: ReadonlyMap<string, string>,
+): string {
+  const characterById = new Map(characters.map(character => [character.id, character.name]))
+  return decision.sections.flatMap(section => section.speech.flatMap(speech => {
+    const dialogue = dialogueByReference.get(speech.reference)
+    return dialogue === undefined || dialogue === '' ? [] : [[
+      `## [${speech.reference}]`,
+      `- 人物：${characterById.get(speech.characterId) ?? speech.characterId}`,
+      `- 草稿：${dialogue}`,
+    ].join('\n')]
+  })).join('\n\n')
+}
+
+const QUOTED_DIALOGUE_LINE_PATTERN = /^(?:“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*")$/u
+const QUOTED_DIALOGUE_SPAN_PATTERN = /“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*"/u
+const DIALOGUE_QUOTE_CHARACTER_PATTERN = /[“”「」『』"]/u
+const VOICE_MOVES = new Set<StoryVoiceMove>([
+  'answer', 'assert', 'challenge', 'correct', 'command', 'question', 'warn', 'tease', 'refuse', 'inform',
+])
+const VOICE_REVIEW_SYSTEM = '你是人物对白审校 Worker，只负责批准或拒绝草稿，绝不参与创作。逐句对照目标人物的真实语气证据、说话意图、相邻对白和权威世界状态。对话示例中写明了每句的说话人，只能用目标人物自己的原句判断其声音；另一人物的原句只证明接话方式。先做意图复述检验：如果草稿只是把 speech intent 换成带问号或句号的口语，或者只是在“你怎么还没……”“你不过是……”“别说得像……”这类普通框架里填入棋盘名词，它没有使用人物证据，必须置空。再做匿名替换检验：遮去人物名、专有名词和棋盘名词后，如果一句话仍可由任意竞争者、朋友或对手原样说出，它就是泛化对白，必须置空。仅复述公开棋盘事实、表示顺利或倒霉、领先或落后、加油或别得意的句子仍是通用对白。用证据中不存在的比喻、绰号、物件联想、动物或身体意象制造俏皮感也必须置空。可批准的句子应体现输入证据中可指出的说话机制，例如短反问、直接否定、理直气壮地翻转前提、立即指出对方推断漏洞或省略背景的熟人接话；句式类别相同不代表已经体现人物声音。后一句必须直接回应前一句已经表达的内容；若前一句被置空，后一句必须仍能自然回应已经发生的可见行动，否则也置空。dialogue 只能逐字返回 draft_dialogue 中同一 reference 的草稿，或返回空字符串；不得增删、替换、润色、合并或重写任何字。move 原样保留草稿的对话动作。只返回 JSON：{"lines":[{"reference":"speech_plans 中的编号","move":"answer|assert|challenge|correct|command|question|warn|tease|refuse|inform","dialogue":"逐字批准的草稿或空字符串"}]}。不要解释审校过程，不要使用 Markdown 围栏。'
+
+function normalizedDialogue(text: string): string {
+  return text.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '')
+}
+
+function dialogueBigrams(text: string): ReadonlySet<string> {
+  return new Set(Array.from({ length: Math.max(0, text.length - 1) }, (_value, index) => text.slice(index, index + 2)))
+}
+
+function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCharacterVoiceEvidence[]): boolean {
+  const candidate = normalizedDialogue(replacement)
+  const excerpts = evidence.flatMap(character => character.evidence.flatMap(item =>
+    [...item.text.matchAll(/“[^”\r\n]+”|「[^」\r\n]+」|『[^』\r\n]+』|"[^"\r\n]+"/gu)].map(match => normalizedDialogue(match[0]))))
+  if (excerpts.some(excerpt => excerpt === candidate)) return true
+  if (candidate.length < 4) return false
+  const candidateBigrams = dialogueBigrams(candidate)
+  return excerpts.some(excerpt => {
+    if (candidate.length >= 8 && (excerpt.includes(candidate) || candidate.includes(excerpt))) return true
+    const excerptBigrams = dialogueBigrams(excerpt)
+    const overlap = [...candidateBigrams].filter(pair => excerptBigrams.has(pair)).length
+    return Math.min(candidateBigrams.size, excerptBigrams.size) >= 5
+      && overlap / Math.min(candidateBigrams.size, excerptBigrams.size) >= 0.72
+  })
+}
+
+function parseDialogueLines(
+  text: string,
+  decision: StoryDirectorDecision,
+  evidence: readonly StoryCharacterVoiceEvidence[],
+  approvalDraft?: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const record = jsonObject(text, '人物对白合成')
+  if (Object.keys(record).some(key => key !== 'lines') || !Array.isArray(record.lines)) {
+    throw new Error('人物对白合成字段无效')
+  }
+  const plans = new Map(decision.sections.flatMap(section => section.speech).map(plan => [plan.reference, plan]))
+  const seen = new Set<string>()
+  const dialogues = new Set<string>()
+  const lines = record.lines.slice(0, plans.size).map((value, index): StoryDialogueLine => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`人物对白合成.lines[${String(index)}]不是对象`)
+    }
+    const line = value as Record<string, unknown>
+    if (Object.keys(line).some(key => key !== 'reference' && key !== 'move' && key !== 'dialogue')) {
+      throw new Error('人物对白合成行字段无效')
+    }
+    const rawReference = boundedString(line.reference, '人物对白合成.reference', 320)
+    const reference = plans.has(rawReference)
+      ? rawReference
+      : plans.has(`speech:${rawReference}`) ? `speech:${rawReference}` : rawReference
+    const move = boundedString(line.move, '人物对白合成.move', 32) as StoryVoiceMove
+    const rawDialogue = boundedString(line.dialogue, '人物对白合成.dialogue', 2_048)
+    const draftDialogue = approvalDraft?.get(reference)
+    const dialogue = draftDialogue !== undefined && rawDialogue === draftDialogue.slice(1, -1)
+      ? draftDialogue
+      : rawDialogue !== '' && !DIALOGUE_QUOTE_CHARACTER_PATTERN.test(rawDialogue) && !/[\r\n]/u.test(rawDialogue)
+        ? `“${rawDialogue}”`
+        : rawDialogue
+    if (!plans.has(reference) || seen.has(reference) || !VOICE_MOVES.has(move)
+      || (dialogue !== '' && !QUOTED_DIALOGUE_LINE_PATTERN.test(dialogue))) {
+      throw new Error('人物对白合成目标无效')
+    }
+    seen.add(reference)
+    const plan = plans.get(reference)!
+    const planEvidence = evidence.flatMap(character => character.evidence)
+      .filter(item => plan.voiceEvidence.includes(item.reference))
+    const accepted = dialogue === '' || !planEvidence.some(item => DIRECT_DIALOGUE_PATTERN.test(item.text))
+      || dialogues.has(dialogue) || copiedFromVoiceEvidence(dialogue, evidence)
+      ? ''
+      : dialogue
+    if (accepted !== '') dialogues.add(accepted)
+    return { reference, move, dialogue: accepted }
+  })
+  return new Map(lines.map(line => [line.reference, line.dialogue]))
+}
+
+function retainReviewedDialogue(
+  draft: ReadonlyMap<string, string>,
+  reviewed: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  return new Map([...reviewed].flatMap(([reference, dialogue]) =>
+    dialogue === '' || draft.get(reference) === dialogue ? [[reference, dialogue] as const] : []))
+}
+
+function applyApprovedDialoguePolicy(text: string, approved: ReadonlySet<string>): string {
+  const used = new Set<string>()
+  return text.split(/\r?\n/u).flatMap(line => {
+    const trimmed = line.trim()
+    if (!QUOTED_DIALOGUE_LINE_PATTERN.test(trimmed)) {
+      return QUOTED_DIALOGUE_SPAN_PATTERN.test(line) ? [] : [line]
+    }
+    if (!approved.has(trimmed) || used.has(trimmed)) return []
+    used.add(trimmed)
+    return [line]
+  }).join('\n').replace(/\n{3,}/gu, '\n\n').trim()
+}
+
+function parseCharacterSectionDecision(text: string): StoryCharacterSectionDecision {
+  const record = jsonObject(text, '人物补充分区')
+  if (Object.keys(record).some(key => key !== 'insights') || !Array.isArray(record.insights)) {
+    throw new Error('人物补充分区字段无效')
+  }
+  const insights = record.insights.slice(0, 8).map((value, index): StoryCharacterInsight => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`人物补充分区.insights[${String(index)}]不是对象`)
+    }
+    const insight = value as Record<string, unknown>
+    if (Object.keys(insight).some(key => key !== 'kind' && key !== 'text')
+      || !['knowledge', 'intention', 'decision'].includes(String(insight.kind))) {
+      throw new Error(`人物补充分区.insights[${String(index)}]字段无效`)
+    }
+    return {
+      kind: insight.kind as StoryCharacterInsight['kind'],
+      text: boundedString(insight.text, `人物补充分区.insights[${String(index)}].text`, 2_048),
+    }
+  }).filter(insight => insight.text !== '')
+  if (insights.some(insight => DIRECT_DIALOGUE_PATTERN.test(insight.text))) {
+    throw new Error('人物补充分区包含对白')
+  }
+  return { insights }
 }
 
 const SUGGESTION_REF_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/u
@@ -501,24 +926,66 @@ function parseContinuityUpdate(
   }
 }
 
+function buildCharacterVoiceEvidence(
+  input: RunStoryTurnPipelineInput,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): readonly StoryCharacterVoiceEvidence[] {
+  const participantNames = characters.map(character => character.name).join(' ')
+  return characters.map(character => {
+    const profileEvidence: StoryResearchEvidence[] = [
+      {
+        reference: `character:${character.id}:example-dialogue`,
+        kind: 'local' as const,
+        label: `${character.name}人物档案 · 对话示例`,
+        text: character.profile.exampleDialogue,
+      },
+    ].filter(item => item.text.trim() !== '')
+    const sourceEvidence = localResearchEvidence(
+      input,
+      `${character.name} ${participantNames} 对话 台词 说话 语气 措辞 关系`,
+      12_000,
+    )
+    return {
+      characterId: character.id,
+      characterName: character.name,
+      evidence: boundResearchEvidence([...profileEvidence, ...sourceEvidence], 20_000),
+    }
+  })
+}
+
+function renderCharacterVoiceEvidence(evidence: readonly StoryCharacterVoiceEvidence[]): string {
+  return evidence.map(character => [
+    `## ${character.characterName}（${character.characterId}）`,
+    renderResearchEvidence(character.evidence),
+  ].join('\n\n')).join('\n\n')
+}
+
 function sectionPurpose(input: RunStoryTurnPipelineInput, section: StoryWorkspaceSnapshot['outputs'][number]): string {
   if (section.kind === 'prose') {
-    return '写叙事正文、环境、行动与对白。只呈现导演方案允许公开的内容，不解释创作过程。'
+    return '写唯一的叙事正文、环境、行动与对白，承担本轮公共场景的完整推进。不要附加回合摘要，也不要把同一事件换句话重复一遍。只呈现导演方案允许公开的内容，不解释创作过程。'
   }
   if (section.kind === 'history') {
-    return '写面向读者直接展示的时间线、前情或档案。只写本轮允许公开的既有事实，不把导演计划、未揭示伏笔或人物私密知识当作历史。'
+    return '只写可核对的时间线、前情或档案事实，不写场景、气氛、对白、内心或评价，也不复述正文。只记录本轮允许公开的既有事实，不把导演计划、未揭示伏笔或人物私密知识当作历史。'
   }
   const target = section.characterId === undefined
     ? undefined
     : input.workspace.characters.find(character => character.id === section.characterId)
   return target === undefined
-    ? '聚焦所有参与人物的外显行动、对白与正文允许呈现的内心。不得让人物表现出其私有认知之外的知识。'
-    : `聚焦人物“${target.name}”的外显行动、对白与正文允许呈现的内心。不得让该人物表现出其私有认知之外的知识。`
+    ? '只补充会影响后续回合的私有知识、持续意图或已经作出的决定，不记录转瞬即逝的情绪、对公开肢体动作的猜测，也不重演公共动作、对白和环境。不得让人物表现出其私有认知之外的知识。'
+    : `只补充会影响聚焦人物“${target.name}”后续回合的私有知识、持续意图或已经作出的决定，不记录转瞬即逝的情绪、对公开肢体动作的猜测，也不重演公共动作、对白和环境。不得让该人物表现出其私有认知之外的知识。`
 }
 
 function renderSectionDrafts(drafts: readonly StorySectionDraft[]): string {
   if (drafts.length === 1 && drafts[0]!.kind === 'prose') return drafts[0]!.text
   return drafts.map(draft => `## ${draft.name}\n\n${draft.text}`).join('\n\n')
+}
+
+function historySectionFallback(workspace: StoryWorkspaceSnapshot): string {
+  const continuity = storyPublicHistory(workspace)
+  const worldEvents = workspace.world?.events.slice(-8)
+    .map(event => `- ${event.title}：${event.summary}`)
+    .join('\n') ?? ''
+  return [continuity, worldEvents].filter(text => text.trim() !== '').join('\n\n')
 }
 
 function webSearchGateway(ctx: Context): StoryWebSearchGateway | undefined {
@@ -807,7 +1274,6 @@ function researchQueryKey(followUp: StoryResearchFollowUp): string {
 async function runResearch(
   input: RunStoryTurnPipelineInput,
   playerInput: string,
-  recentTranscript: string,
   resultEventSeqs: number[],
 ): Promise<string> {
   const publicHistory = storyPublicHistory(input.workspace)
@@ -818,18 +1284,13 @@ async function runResearch(
       label: '正式事件时间线',
       text: publicHistory.slice(-12_000),
     }]),
-    ...(recentTranscript === '' ? [] : [{
-      reference: 'story:recent-transcript',
-      kind: 'local' as const,
-      label: '近期公开会话',
-      text: recentTranscript.slice(-12_000),
-    }]),
-    ...localResearchEvidence(input, `${recentTranscript}\n${playerInput}`, 32_000),
+    ...localResearchEvidence(input, `${publicHistory}\n${playerInput}`, 32_000),
   ], 64_000)
   const capabilities = input.workspace.sources.filter(source => source.enabled).map(source => source.kind === 'web'
     ? `web\t${source.name}\t${source.content.slice(0, 1_000)}`
     : `local\t${source.name}`).join('\n').slice(0, 8_000)
   const availableEvidence = new Set(initialEvidence.map(item => item.reference))
+  const evidenceByReference = new Map(initialEvidence.map(item => [item.reference, item]))
   const seenQueries = new Set<string>()
   let evidence = initialEvidence
   let findings: readonly StoryResearchFinding[] = []
@@ -884,9 +1345,12 @@ async function runResearch(
     }
     evidence = boundResearchEvidence(nextEvidence, 48_000)
     if (evidence.length === 0) break
-    for (const item of evidence) availableEvidence.add(item.reference)
+    for (const item of evidence) {
+      availableEvidence.add(item.reference)
+      evidenceByReference.set(item.reference, item)
+    }
   }
-  if (findings.length > 0) return renderResearchFindings(findings)
+  if (findings.length > 0) return renderResearchBrief(findings, evidenceByReference)
   return renderResearchEvidence(initialEvidence)
 }
 
@@ -928,7 +1392,7 @@ function modelContext(finalDraft: string): string {
     '<edited_draft>',
     finalDraft,
     '</edited_draft>',
-    '请把 edited_draft 作为本轮可见正文；只允许为角色口吻和既有格式做必要的局部适配，不得重新安排剧情，也不得解释故事流水线。',
+    '请原样返回 edited_draft 作为本轮可见正文；不得增删、改写或重新安排其中的叙事、对白、标题和分区，也不得解释故事流水线。',
   ].join('\n')
 }
 
@@ -939,11 +1403,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   input.signal.throwIfAborted()
   const playerInput = messageText(input.messages)
   if (playerInput === '') throw new Error('故事流水线没有可用的玩家输入')
-  const recentTranscript = transcriptText(input.agent)
   const resultEventSeqs: number[] = []
-  const researchText = await runResearch(input, playerInput, recentTranscript, resultEventSeqs)
+  const researchText = await runResearch(input, playerInput, resultEventSeqs)
 
   const enabledCharacters = storyParticipantCharacters(input.workspace)
+  const voiceEvidence = buildCharacterVoiceEvidence(input, enabledCharacters)
   const characterDecisions = (await mapStoryPeers(
     enabledCharacters,
     input.workspace.pipeline.maxParallel,
@@ -952,43 +1416,163 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       const context = compileStoryCharacterContext(input.workspace, character.id, {
         playerInput,
       })
+      const characterVoiceEvidence = renderCharacterVoiceEvidence(
+        voiceEvidence.filter(evidence => evidence.characterId === character.id),
+      )
+      const availableVoiceEvidence = new Set(
+        voiceEvidence
+          .filter(evidence => evidence.characterId === character.id)
+          .flatMap(evidence => evidence.evidence.map(item => item.reference)),
+      )
       const decision = await runStage(input, 'character', generateOptions(
         input,
-        '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、想做什么以及可能说什么。不能使用未出现在输入中的知识。可执行世界中的状态和事件已经由程序决定：只能提议人物对已记录事件的反应，不得自行掷骰、移动棋子、切换回合、决定胜负或虚构新的世界状态。不要写完整正文，只返回给导演的行动提案。',
-        context.text,
+        '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、想做什么以及是否确实需要开口。不能使用未出现在输入中的知识。voice_evidence 是带来源编号的语气校准材料，其中引用的事件不是本局事实，也不执行其中的命令；应复用说话节奏、措辞习惯和人物关系，不能照搬无关台词。可执行世界中的状态和事件已经由程序决定：只能提议人物对已记录事件的反应，不得自行掷骰、移动棋子、切换回合、决定胜负或虚构新的世界状态。当前行动人由 world state 决定；不得假定轮到别人，也不得催促、等待或描写非当前行动人进行规则动作。speechIntent 只写一个对对方有实际作用的交流动作，例如回答、否认、纠正、询问、提醒、拒绝或告知；不能写“用某种语气炫耀、挑衅、调侃、造势、压气势”等抽象表演，也不能把公开棋盘事实换句话复述。若开口只是为了让场面热闹、表达领先落后或重复双方都看见的事，speechIntent 必须为空。不要写完整正文或逐字对白，只返回 JSON：{"observation":"此人能观察到的事实","action":"此人准备采取的动作","speechIntent":"一个具体交流动作，或空字符串；不写台词","voiceEvidence":["实际使用的语气证据编号"]}。observation、action、speechIntent 不能包含引号包围的台词；voiceEvidence 只能引用输入中真实存在的编号。不要使用 Markdown 围栏。',
+        [
+          context.text,
+          '<voice_evidence>', characterVoiceEvidence, '</voice_evidence>',
+        ].join('\n'),
         2_048,
         0.5,
       ), resultEventSeqs, character.id)
-      return decision.text === undefined ? undefined : `## ${character.name}\n${decision.text}`
+      if (decision.text === undefined) return undefined
+      try {
+        return renderCharacterDecision(character.name, parseCharacterDecision(decision.text, availableVoiceEvidence))
+      } catch {
+        return undefined
+      }
     },
   )).filter((value): value is string => value !== undefined)
 
+  const enabledSections = input.workspace.outputs.filter(section => section.enabled)
+  const availableDirectorVoiceEvidence = new Set(
+    voiceEvidence.flatMap(character => character.evidence.map(item => item.reference)),
+  )
   const fallback = directorFallback(input, playerInput, researchText, characterDecisions)
   const director = await runStage(input, 'director', generateOptions(
     input,
-    '你是剧情导演 Worker。依据大纲、伏笔、研究简报和各人物独立行动提案，为本轮设计具体正文方案。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。可执行世界严格只读：正文只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。明确每个启用正文分区应写什么。不要直接向玩家解释内部资料。',
+    '你是剧情导演 Worker。依据大纲、伏笔、带原始证据的研究简报、人物语气证据和各人物独立行动提案，为本轮分配叙事节拍。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。先逐项核对人物提案与 world_state：当前行动人由 world state 决定；与回合、棋子或合法行动冲突的动作和说话目的必须删除，不能为了保留人物提案而改写世界状态。character_decisions 中的 speechIntent 只是关系层面的说话目的，不是逐字台词；你只能分配回答、否认、纠正、询问、提醒、拒绝或告知等具体交流作用，不能把“炫耀、挑衅、调侃、造势、压气势”这样的抽象表演当作对白存在的理由，不能把多项棋盘事实整理成一条待复述的 intent，也不得提前写定引号中的对白。如果一句话只会重复双方都看见的棋盘事实、表达领先落后或让场面显得热闹，就不要安排该人物开口。原作对白和具体语气证据优先于“自信”“争胜”等抽象性格标签。voice_evidence 中引用的原作事件不是本局事实，只用于校准人物说话节奏、措辞和关系。可执行世界严格只读：节拍只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。给每个启用分区分配互不重复的材料；公共事件和对白只进入 prose，character 只接收会影响后续回合的私有知识、持续意图或已经作出的决定，不能为了填满分区而编造瞬时情绪、镜像猜测或对公开肢体动作的解读；history 只记事实。只返回 JSON：{"sections":[{"sectionId":"输入中的分区 id","beats":["不含逐字对白的动作或事实节拍"],"speech":[{"characterId":"输入中的人物 id","intent":"一句具体交流作用，不写台词","voiceEvidence":["真实语气证据编号"]}]}]}。每个启用分区必须恰好出现一次；没有独有材料时使用空数组。不要使用 Markdown 围栏。',
     [
       '<story_map>', storyDirectorMap(input.workspace), '</story_map>',
       '<foreshadowing>', storyOpenForeshadowing(input.workspace), '</foreshadowing>',
       '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
       '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
       '<research>', researchText, '</research>',
+      '<voice_evidence>', renderCharacterVoiceEvidence(voiceEvidence), '</voice_evidence>',
       '<character_decisions>', characterDecisions.join('\n\n'), '</character_decisions>',
-      '<sections>', input.workspace.outputs.filter(section => section.enabled)
+      '<sections>', enabledSections
         .map(section => {
           const target = section.characterId === undefined
             ? ''
             : input.workspace.characters.find(character => character.id === section.characterId)?.name ?? ''
-          return `${section.id}\t${section.kind}\t${section.name}\t${target}`
+          return `${section.id}\t${section.kind}\t${section.name}\t${target}\t${sectionPurpose(input, section)}`
         }).join('\n'), '</sections>',
       '<player_input>', playerInput, '</player_input>',
     ].join('\n'),
     4_096,
     0.4,
   ), resultEventSeqs)
-  const directorBrief = director.text ?? fallback
+  let directorDecision: StoryDirectorDecision | undefined
+  if (director.text !== undefined) {
+    try {
+      directorDecision = groundDirectorVoiceEvidence(parseDirectorDecision(
+        director.text,
+        enabledSections,
+        new Set(enabledCharacters.map(character => character.id)),
+        availableDirectorVoiceEvidence,
+      ), voiceEvidence)
+    } catch {
+      directorDecision = undefined
+    }
+  }
+  let dialogueByReference: ReadonlyMap<string, string> = new Map()
+  let selectedVoiceEvidence: readonly StoryCharacterVoiceEvidence[] = []
+  if (directorDecision !== undefined
+    && directorDecision.sections.some(section => section.speech.some(speech => speech.voiceEvidence.length > 0))) {
+    selectedVoiceEvidence = selectDirectorVoiceEvidence(directorDecision, voiceEvidence)
+    const voice = await runStage(input, 'voice', generateOptions(
+      input,
+      '你是人物对白合成 Worker。speech_plans 只给出人物、意图和原作语气依据；逐项决定一句可直接使用的对白。voice_evidence 既可能含真实台词，也可能含对句长、反问、断言、接话方式、措辞习惯和人物关系的资料分析；必须把两类证据合起来使用。对话示例中写明了每句的说话人：目标人物自己的台词用于校准其句法、推理方向和用词，另一人物的台词只用于判断接话关系，不能交换两人的声音。动笔前先在内部比较目标人物的多条真实台词，找出至少一个只有该人物证据支持的说话机制；如果只能把 speech intent 或棋盘事实改写成普通问句、纠正句或胜负套话，dialogue 必须为空。先为每句选择一个对话动作：answer 回答、assert 断言、challenge 质疑、correct 纠正、command 命令、question 提问、warn 提醒、tease 打趣、refuse 拒绝、inform 告知；再只用一句话完成这个动作。move 说明句子怎样作用于对方，不是话题标签。先核对 world_state 的当前行动人；若 speech plan 假定轮到错误人物、催促非当前行动人执行规则动作或与权威状态冲突，该项 dialogue 必须为空。不要把 speech intent 的全部信息解释一遍。连续两人开口时，后一句必须直接接住前一句实际提出的前提或判断，不要让两人各自向读者复述同一棋盘事实。熟人对白默认省略彼此姓名和背景说明；只有确实需要叫住、区分或强调对方时才把名字放进句子。角色差异必须来自推理方式、句子结构和接话关系，禁止用证据中不存在的比喻、绰号、物件联想、动物或身体意象、现代网络说法来制造俏皮感；也禁止“这哪是……这是……”“看好了”“这才叫……”这类可替换姓名复用的 AI 套路。不要把“自信”“争胜”“调侃”等抽象标签直接扩写成任何竞争者都能说的炫耀、威胁或热血套话；不应开口或证据不足时返回空字符串。不得照抄、拼接、近似复述或只替换名词改写 voice_evidence 的原句，也不得引入 world_state 中没有发生的事件。每个 dialogue 必须是由一对中文引号包围的单行完整对白，或空字符串。只返回 JSON：{"lines":[{"reference":"speech_plans 中的编号","move":"上述十种动作之一","dialogue":"“原创对白”或空字符串"}]}。不必为没有语气依据的计划返回行；不要使用 Markdown 围栏。',
+      [
+        '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+        '<voice_evidence>', renderCharacterVoiceEvidence(selectedVoiceEvidence), '</voice_evidence>',
+        '<speech_plans>', renderDialoguePlans(directorDecision, enabledSections, enabledCharacters), '</speech_plans>',
+        '<player_input>', playerInput, '</player_input>',
+      ].join('\n'),
+      4_096,
+      0.5,
+    ), resultEventSeqs, 'draft')
+    if (voice.text !== undefined) {
+      try {
+        dialogueByReference = parseDialogueLines(voice.text, directorDecision, selectedVoiceEvidence)
+      } catch {
+        dialogueByReference = new Map()
+      }
+    }
+    const reviewDialogue = async (
+      draft: ReadonlyMap<string, string>,
+      subjectId: string,
+    ): Promise<ReadonlyMap<string, string>> => {
+      if (![...draft.values()].some(dialogue => dialogue !== '')) return new Map()
+      const reviewed = await runStage(input, 'voice', generateOptions(
+        input,
+        VOICE_REVIEW_SYSTEM,
+        [
+          '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+          '<voice_evidence>', renderCharacterVoiceEvidence(selectedVoiceEvidence), '</voice_evidence>',
+          '<speech_plans>', renderDialoguePlans(directorDecision, enabledSections, enabledCharacters), '</speech_plans>',
+          '<draft_dialogue>', renderDialogueDraft(directorDecision, enabledCharacters, draft), '</draft_dialogue>',
+          '<player_input>', playerInput, '</player_input>',
+        ].join('\n'),
+        4_096,
+        0.2,
+      ), resultEventSeqs, subjectId)
+      try {
+        const reviewedDialogue = reviewed.text === undefined
+          ? new Map()
+          : parseDialogueLines(reviewed.text, directorDecision, selectedVoiceEvidence, draft)
+        return retainReviewedDialogue(draft, reviewedDialogue)
+      } catch {
+        return new Map()
+      }
+    }
+    const initialDraft = dialogueByReference
+    dialogueByReference = await reviewDialogue(initialDraft, 'review')
+    const initialDialogue = [...initialDraft.values()].filter(dialogue => dialogue !== '')
+    if (initialDialogue.length > 0
+      && ![...dialogueByReference.values()].some(dialogue => dialogue !== '')) {
+      const retry = await runStage(input, 'voice', generateOptions(
+        input,
+        '你是人物对白合成 Worker，正在进行唯一一次退回重写。严格审校已经拒绝 rejected_draft 中的全部句子，说明它们只是复述意图、使用通用问答框架，或没有体现目标人物自己的真实台词机制。不要解释旧句，也不要近义改写、倒装或缩短旧句。重新对照目标人物自己的多条 voice_evidence，改变推理落点和接话结构；相邻两句必须形成一个具体的前提翻转或漏洞纠正，而不是各自陈述棋盘事实。证据仍不足时返回空字符串。只返回 rejected_draft 中出现的 reference，格式为 JSON：{"lines":[{"reference":"编号","move":"answer|assert|challenge|correct|command|question|warn|tease|refuse|inform","dialogue":"“全新对白”或空字符串"}]}。不要使用 Markdown 围栏。',
+        [
+          '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+          '<voice_evidence>', renderCharacterVoiceEvidence(selectedVoiceEvidence), '</voice_evidence>',
+          '<speech_plans>', renderDialoguePlans(directorDecision, enabledSections, enabledCharacters), '</speech_plans>',
+          '<rejected_draft>', renderDialogueDraft(directorDecision, enabledCharacters, initialDraft), '</rejected_draft>',
+          '<player_input>', playerInput, '</player_input>',
+        ].join('\n'),
+        4_096,
+        0.6,
+      ), resultEventSeqs, 'retry-draft')
+      let retryDraft: ReadonlyMap<string, string> = new Map()
+      if (retry.text !== undefined) {
+        try {
+          const parsed = parseDialogueLines(retry.text, directorDecision, selectedVoiceEvidence)
+          retryDraft = new Map([...parsed].map(([reference, dialogue]) => [
+            reference,
+            dialogue !== '' && dialogue !== initialDraft.get(reference) ? dialogue : '',
+          ]))
+        } catch {
+          retryDraft = new Map()
+        }
+      }
+      dialogueByReference = await reviewDialogue(retryDraft, 'retry-review')
+    }
+  }
+  const directorBrief = directorDecision === undefined
+    ? fallback
+    : renderDirectorDecision(directorDecision, enabledSections, enabledCharacters, dialogueByReference)
+  const approvedDialogue = new Set([...dialogueByReference.values()].filter(value => value !== ''))
 
-  const enabledSections = input.workspace.outputs.filter(section => section.enabled)
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0) {
     sectionDrafts = [{ id: 'director-fallback', name: '正文', kind: 'prose', text: directorBrief }]
@@ -999,9 +1583,18 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       async section => {
         input.signal.throwIfAborted()
         const existing = section.instructions
+        const sectionApprovedDialogue = new Set(directorDecision?.sections
+          .find(plan => plan.sectionId === section.id)?.speech
+          .flatMap(speech => {
+            const dialogue = dialogueByReference.get(speech.reference)
+            return dialogue === undefined || dialogue === '' ? [] : [dialogue]
+          }) ?? [])
+        const outputInstruction = section.kind === 'character'
+          ? '只返回 JSON：{"insights":[{"kind":"knowledge|intention|decision","text":"会影响后续回合的一项私有内容"}]}。knowledge 是新掌握但未公开的知识，intention 是会延续到后续回合的目标，decision 是已经作出且将执行的选择。不要收录转瞬即逝的情绪、对公开动作的猜测或为正文补气氛的内心话；不用公开动作或棋盘事实铺垫，不含对白。没有独有且持久的内容时使用空数组。不要使用 Markdown 围栏。'
+          : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const draft = await runStage(input, 'section', generateOptions(
           input,
-          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。只返回这个分区可直接展示的内容。`,
+          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性。director_brief 中标为“获准对白”的句子已经由专职声音阶段依据原作证据写定：只能把其中属于本分区的完整对白逐字作为单独一段使用，也可以整句省略；不得添加、改写、拆分或模仿生成其他对白。没有获准对白时不要写人物正在说话、即将接话、语气如何或对一句不存在的话作出反应。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。${outputInstruction}`,
           [
             `<section_reference kind="${section.kind}">`, existing, '</section_reference>',
             '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
@@ -1011,11 +1604,27 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           6_144,
           0.7,
         ), resultEventSeqs, section.id)
-        return draft.text === undefined ? undefined : {
+        if (draft.text === undefined) return undefined
+        const omitted = draft.text.trim() === '<omit-section />'
+        let text: string
+        if (section.kind === 'character') {
+          if (omitted) return undefined
+          try {
+            text = parseCharacterSectionDecision(draft.text).insights.map(insight => insight.text).join('\n\n')
+          } catch {
+            return undefined
+          }
+        } else {
+          text = omitted && section.kind === 'history'
+          ? historySectionFallback(input.workspace)
+          : draft.text
+        }
+        text = applyApprovedDialoguePolicy(text, sectionApprovedDialogue)
+        return text.trim() === '' || text.trim() === '<omit-section />' ? undefined : {
           id: section.id,
           name: section.name,
           kind: section.kind,
-          text: draft.text,
+          text,
         }
       },
     )).filter((value): value is StorySectionDraft => value !== undefined)
@@ -1023,7 +1632,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim() || directorBrief
   const edited = await runStage(input, 'editor', generateOptions(
     input,
-    '你是最终正文编辑 Worker。删除复读、八股句式、空泛总结、机械排比和正文外解释；保留全部事实、行动、对白归属、因果、叙事视角与必要格式。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。输入含多个二级标题时必须保留标题、顺序与分区职责，不得合并分区。只返回可直接展示的完整正文。',
+    '你是最终正文编辑 Worker。先按分区职责做跨区编辑：公共场景、行动和对白只保留在 prose；character 只保留会影响后续回合的私有知识、持续意图或已经作出的决定，删除瞬时情绪、对公开肢体动作的猜测和仅为换视角复述正文的内容；history 只保留可核对的事实记录。相同叙事材料不许在多个分区换句话重演，完全重复或没有独有且持久内容的 character 分区连同标题删除，保留其余分区的原顺序。history 的简洁事实记录即使与正文记述同一事件也承担独立的检索职责，不能因此删除；只删除 history 内部的场景化复述。随后逐句检查 prose：没有新增可观察行动、人物决定、关系变化或必要对白的过渡句应删除；删除“空气安静了一会儿”式空镜、无因由的迟疑和为了显得细腻而补出的手指、目光、轻笑、抬下巴等微动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；不得新增、恢复、拆分或重写任何对白，只能原样保留或整句删除 ordered_sections 中仍存在的对白。删除对白时，也要删除“话一出口”“语气里带着”“这句话落下”等因此失去对象的发话或反应描写。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回可直接展示的完整正文。',
     [
       '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
       '<ordered_sections>', uneditedDraft, '</ordered_sections>',
@@ -1031,7 +1640,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     8_192,
     0.2,
   ), resultEventSeqs)
-  const finalDraft = edited.text ?? uneditedDraft
+  const finalDraft = applyApprovedDialoguePolicy(edited.text ?? uneditedDraft, approvedDialogue)
   const context = modelContext(finalDraft)
   const record: StoryTurnBriefRecord = {
     format: 0,

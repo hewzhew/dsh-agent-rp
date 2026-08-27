@@ -41,6 +41,12 @@ export interface PlayWorldInstallRequest {
   readonly moduleId: string
 }
 
+/** Request to recreate the current executable world and discard this playthrough's derived story state. */
+export interface PlayWorldRestartRequest {
+  readonly format: 0
+  readonly revision: number
+}
+
 /** Request to apply one module-defined action to the authoritative state. */
 export interface PlayWorldActionRequest {
   readonly format: 0
