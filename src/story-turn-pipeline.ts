@@ -22,6 +22,7 @@ import {
 } from './story-workspace.ts'
 import type {
   StoryChangeSet,
+  StoryCharacterStateChange,
   StoryEdgeSuggestion,
   StoryFactChange,
   StoryKnowledgePolicy,
@@ -365,10 +366,30 @@ function parseContinuityUpdate(
     throw new Error('连续性记录字段无效')
   }
   const changes = record.changes as Record<string, unknown>
-  if (Object.keys(changes).some(key => key !== 'facts' && key !== 'nodes' && key !== 'edges')
-    || !Array.isArray(changes.facts) || !Array.isArray(changes.nodes) || !Array.isArray(changes.edges)) {
+  if (Object.keys(changes).some(key => key !== 'characters' && key !== 'facts' && key !== 'nodes' && key !== 'edges')
+    || !Array.isArray(changes.characters) || !Array.isArray(changes.facts)
+    || !Array.isArray(changes.nodes) || !Array.isArray(changes.edges)) {
     throw new Error('连续性变更集字段无效')
   }
+  const characters = changes.characters.slice(0, 16).map((value, index): StoryCharacterStateChange => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`人物状态变更[${String(index)}]不是对象`)
+    }
+    const change = value as Record<string, unknown>
+    const stateFields = ['location', 'condition', 'objective', 'notes'] as const
+    if (Object.keys(change).some(key => key !== 'characterId' && !stateFields.includes(key as typeof stateFields[number]))
+      || typeof change.characterId !== 'string' || !characterIds.has(change.characterId)
+      || !stateFields.some(field => change[field] !== undefined)) {
+      throw new Error(`人物状态变更[${String(index)}]字段无效`)
+    }
+    return {
+      characterId: change.characterId,
+      ...Object.fromEntries(stateFields.flatMap(field => change[field] === undefined
+        ? []
+        : [[field, boundedString(change[field], `人物状态变更[${String(index)}].${field}`, 16 * 1_024)]])),
+    }
+  })
+  if (new Set(characters.map(change => change.characterId)).size !== characters.length) throw new Error('人物状态变更重复')
   const parsedFacts = changes.facts.slice(0, 32).map((value, index): StoryFactChange => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`事实变更[${String(index)}]不是对象`)
@@ -475,7 +496,7 @@ function parseContinuityUpdate(
   if (new Set(edgeKeys).size !== edgeKeys.length) throw new Error('候选关系重复')
   return {
     history: boundedString(record.history, '连续性公开历史'),
-    changes: { facts, nodes, edges },
+    changes: { characters, facts, nodes, edges },
   }
 }
 
@@ -1061,13 +1082,14 @@ export async function materializeStoryTurn(input: {
     [
       '你是剧情连续性记录 Worker。正文已经完成；不要续写、改写或评价正文。',
       'history 只概括正文中已经发生、可供导演维持连续性的事件，不记录创作过程。',
+      'changes.characters 只更新正文已经明确改变的人物当前状态；characterId 必须来自 participants，可按需给出 location、condition、objective、notes，未变化的字段不要输出。人物的稳定身份与性格不能通过这里改写。',
       'changes.facts 只记录当前场景参与人物在正文中明确亲历或可感知的事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。',
       'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
       '节点 kind 只能是 arc、beat、secret，必须同时给出折叠 summary、content、participantIds 和 knowledge。knowledge.mode 只能是 inherit、none、participants、characters；只有 characters 可以列出 characterIds。关系 kind 只能是 precedes、causes、foreshadows，只有 foreshadows 可以携带 foreshadowStatus。所有人物 id 必须来自 participants。',
-      '只返回 JSON，例如：{"history":"...","changes":{"facts":[{"text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"participants","characterIds":[]}}],"edges":[{"kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
+      '只返回 JSON，例如：{"history":"...","changes":{"characters":[{"characterId":"character-id","location":"车站月台","objective":"查清徽章来历"}],"facts":[{"text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"participants","characterIds":[]}}],"edges":[{"kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
     ].join('\n'),
     [
-      '<participants>', participants.map(character => `${character.id}\t${character.name}`).join('\n'), '</participants>',
+      '<participants>', participants.map(character => `${character.id}\t${character.name}\t${JSON.stringify(character.state)}`).join('\n'), '</participants>',
       '<canonical_nodes>', canonicalNodes.map(node => `${node.id}\t${node.kind}\t${node.parentId ?? '-'}\t${node.title}`).join('\n'), '</canonical_nodes>',
       '<current_story_map>', storyDirectorMap(workspace), '</current_story_map>',
       '<current_foreshadowing>', storyOpenForeshadowing(workspace), '</current_foreshadowing>',
@@ -1087,7 +1109,7 @@ export async function materializeStoryTurn(input: {
   } catch {
     update = {
       history: visibleReply,
-      changes: { facts: [], nodes: [], edges: [] },
+      changes: { characters: [], facts: [], nodes: [], edges: [] },
     }
   }
   const materialized = input.store.materializeTurn(input.workspaceId, {

@@ -9,7 +9,7 @@ import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src
 import { PlayWorldRegistry } from '../src/play-world.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
 import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
-import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,
@@ -35,6 +35,15 @@ function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   }
 }
 
+function character(id: string, name: string, description = ''): StoryCharacter {
+  return {
+    id,
+    name,
+    profile: { description, personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
+    state: { location: '', condition: '', objective: '', notes: '' },
+  }
+}
+
 test('advances a host-owned flying-chess world only through typed actions', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -48,8 +57,8 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   const withCharacters = store.save({
     ...editable(created),
     characters: [
-      { id: reimuId, name: '博丽灵梦', persona: '博丽神社的巫女。' },
-      { id: marisaId, name: '雾雨魔理沙', persona: '普通的魔法使。' },
+      character(reimuId, '博丽灵梦', '博丽神社的巫女，负责维护博丽大结界、解决异变与退治造成麻烦的妖怪。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使，擅长以光与热为主的华丽高火力魔法。'),
     ],
   })
 
@@ -133,8 +142,8 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   const withCharacters = store.save({
     ...editable(created),
     characters: [
-      { id: first, name: '甲', persona: '' },
-      { id: second, name: '乙', persona: '' },
+      character(first, '甲'),
+      character(second, '乙'),
     ],
   })
   const installed = store.installWorld(withCharacters.id, {
@@ -167,7 +176,7 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
     revision: renamed.revision,
     characterId: first,
     actor: { kind: 'actor', id: 'actor:reimu' },
-  }, { name: '博丽灵梦', persona: '博丽神社的巫女。' })
+  }, { name: '博丽灵梦', profile: character(first, '博丽灵梦', '博丽神社的巫女。').profile })
   assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
   const detached = store.bindCharacterActor(bound.id, {
     format: 0,
@@ -176,6 +185,6 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   })
   assert.equal(detached.characters[0]?.actor, undefined)
   assert.equal(detached.characters[0]?.name, '博丽灵梦')
-  assert.equal(detached.characters[0]?.persona, '博丽神社的巫女。')
+  assert.equal(detached.characters[0]?.profile.description, '博丽神社的巫女。')
   assert.deepEqual(detached.world, installed.world)
 })

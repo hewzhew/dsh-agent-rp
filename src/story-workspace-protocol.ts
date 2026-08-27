@@ -100,12 +100,31 @@ export interface StoryGraph {
   readonly edges: readonly StoryEdge[]
 }
 
+/** Reusable identity fields carried by one story character or bound Character Card snapshot. */
+export interface StoryCharacterProfile {
+  readonly description: string
+  readonly personality: string
+  readonly scenario: string
+  readonly exampleDialogue: string
+  readonly systemPrompt: string
+  readonly postHistoryInstructions: string
+}
+
+/** Mutable state owned by one character instance in the current play space. */
+export interface StoryCharacterState {
+  readonly location: string
+  readonly condition: string
+  readonly objective: string
+  readonly notes: string
+}
+
 /** One independently prompted story character. */
 export interface StoryCharacter {
   readonly id: string
   readonly name: string
-  readonly persona: string
-  /** Stable source reference for a persona snapshot bound from the resource center. */
+  readonly profile: StoryCharacterProfile
+  readonly state: StoryCharacterState
+  /** Stable source reference for a Character Card snapshot bound from the resource center. */
   readonly actor?: RoleplayResourceSelection
 }
 
@@ -285,8 +304,18 @@ export interface StoryFactChange {
   readonly knownBy: readonly string[]
 }
 
+/** Current-play-space state fields changed by one completed visible turn. */
+export interface StoryCharacterStateChange {
+  readonly characterId: string
+  readonly location?: string
+  readonly condition?: string
+  readonly objective?: string
+  readonly notes?: string
+}
+
 /** One atomic typed change set proposed from a completed visible turn. */
 export interface StoryChangeSet {
+  readonly characters: readonly StoryCharacterStateChange[]
   readonly facts: readonly StoryFactChange[]
   readonly nodes: readonly StoryNodeSuggestion[]
   readonly edges: readonly StoryEdgeSuggestion[]

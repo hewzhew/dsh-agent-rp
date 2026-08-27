@@ -76,7 +76,14 @@ interface RoleplayResourceProvider {
 /** Host-only actor snapshot stored by a play-space character instance. */
 interface RoleplayActorProjection {
   readonly name: string;
-  readonly persona: string;
+  readonly profile: {
+    readonly description: string;
+    readonly personality: string;
+    readonly scenario: string;
+    readonly exampleDialogue: string;
+    readonly systemPrompt: string;
+    readonly postHistoryInstructions: string;
+  };
 }
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
 interface RoleplayResourceMaterializationContext {

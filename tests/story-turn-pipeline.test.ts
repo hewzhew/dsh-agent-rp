@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import type { StoryCharacter, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { appendAgentRpSessionEvent } from '../src/session-event-compat.ts'
 import { createStoryCharacterId, createStoryNodeId, StoryWorkspaceStore } from '../src/story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
@@ -28,6 +28,15 @@ const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
+
+function character(id: string, name: string, description = ''): StoryCharacter {
+  return {
+    id,
+    name,
+    profile: { description, personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
+    state: { location: '', condition: '', objective: '', notes: '' },
+  }
+}
 
 function workspace(): StoryWorkspaceSnapshot {
   return {
@@ -86,8 +95,8 @@ function workspace(): StoryWorkspaceSnapshot {
       edges: [],
     },
     characters: [
-      { id: aliceId, name: '阿梨', persona: '阿梨谨慎。' },
-      { id: bobId, name: '柏舟', persona: '柏舟果断。' },
+      character(aliceId, '阿梨', '阿梨谨慎。'),
+      character(bobId, '柏舟', '柏舟果断。'),
     ],
     facts: [
       {
@@ -384,7 +393,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       }],
       edges: [],
     },
-    characters: [{ id: characterId, name: '阿梨', persona: '谨慎。' }],
+    characters: [character(characterId, '阿梨', '谨慎。')],
     facts: [],
     events: [],
     outputs: [],
@@ -451,6 +460,7 @@ test('materializes continuity from the actually visible reply instead of the pre
         const text = JSON.stringify({
           history: '阿梨在车站看见雨停。',
           changes: {
+            characters: [{ characterId, location: '雨后的车站', objective: '检查徽章刻痕' }],
             facts: [
               { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
               { text: '阿梨亲眼看见雨停。', knownBy: [characterId] },
@@ -524,6 +534,8 @@ test('materializes continuity from the actually visible reply instead of the pre
   const saved = store.get(workspace.id)
   assert.match(saved.events[0]?.summary ?? '', /阿梨在车站看见雨停/u)
   assert.match(saved.events[0]?.evidence ?? '', /实际展示时，阿梨只看见雨停了/u)
+  assert.equal(saved.characters.find(character => character.id === characterId)?.state.location, '雨后的车站')
+  assert.equal(saved.characters.find(character => character.id === characterId)?.state.objective, '检查徽章刻痕')
   assert.equal(saved.facts.find(fact => fact.text.includes('阿梨亲眼看见雨停'))?.knownBy[0], characterId)
   assert.match(saved.graph.nodes.find(node => node.lifecycle === 'suggested')?.content ?? '', /检查徽章刻痕/u)
   assert.equal(saved.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)

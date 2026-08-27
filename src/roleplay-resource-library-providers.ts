@@ -10,7 +10,7 @@ import { appendCharacterWorldSessionSeed, appendWorldInfoLibrarySessionSeed } fr
 import type { PersonaLibrary } from './persona-library.ts'
 import type { PresetLibrary, PresetLibraryEntry } from './preset-library.ts'
 import type { RegexPackLibrary } from './regex-pack-library.ts'
-import { renderImportedCharacterPrompt, substituteCardMacros } from './prompt.ts'
+import { substituteCardMacros } from './prompt.ts'
 import type {
   RoleplayResourceMaterializationInput,
   RoleplayResourceProvider,
@@ -194,9 +194,21 @@ export function roleplayLibraryResourceProviders(libraries: {
       if (selection.variant !== undefined) throw new Error('故事人物绑定暂不使用角色开场变体')
       const resolved = libraries.characters.resolve(libraryId(descriptor.id, 'character:library:'))
       if (resolved.detail.archived) throw new Error('请先恢复这个角色，再绑定人物')
+      const name = resolved.card.nickname?.trim() || resolved.card.name
+      const original = `你是${name}。直接以${name}的身份与用户相处和交谈。`
+      const expand = (value: string): string => substituteCardMacros(value, resolved.card)
       return {
         name: resolved.detail.displayName,
-        persona: renderImportedCharacterPrompt(resolved.card, [], []),
+        profile: {
+          description: expand(resolved.card.description),
+          personality: expand(resolved.card.personality),
+          scenario: expand(resolved.card.scenario),
+          exampleDialogue: expand(resolved.card.messageExample),
+          systemPrompt: resolved.card.systemPrompt.trim() === ''
+            ? original
+            : expand(resolved.card.systemPrompt.replaceAll('{{original}}', original)),
+          postHistoryInstructions: expand(resolved.card.postHistoryInstructions.replaceAll('{{original}}', '')),
+        },
       }
     },
   }, {

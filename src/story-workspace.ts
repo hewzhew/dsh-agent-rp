@@ -27,6 +27,8 @@ import type {
   StoryCitation,
   StoryCharacter,
   StoryCharacterActorBindRequest,
+  StoryCharacterProfile,
+  StoryCharacterState,
   StoryEdge,
   StoryEdgeKind,
   StoryEvent,
@@ -82,7 +84,7 @@ const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4, research
 const DEFAULT_PLAY_WORLD_REGISTRY = createDefaultPlayWorldRegistry()
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
-interface StoredStoryCharacter extends Omit<StoryCharacter, 'persona'> {}
+interface StoredStoryCharacter extends Omit<StoryCharacter, 'profile'> {}
 interface StoredStoryOutput extends Omit<StoryOutput, 'instructions'> {}
 interface StoredStorySource extends Omit<StorySource, 'content'> {}
 
@@ -149,7 +151,8 @@ export interface StoryCharacterContext {
   readonly workspaceId: string
   readonly characterId: string
   readonly characterName: string
-  readonly persona: string
+  readonly profile: StoryCharacterProfile
+  readonly state: StoryCharacterState
   readonly privateKnowledge: string
   readonly worldContext: string
   readonly playerInput: string
@@ -172,6 +175,47 @@ function cleanLabel(value: unknown, subject: string, max = 240): string {
   const result = value.trim()
   if (result.length > max) throw new Error(`${subject}不能超过 ${String(max)} 个字符`)
   return result
+}
+
+function emptyCharacterProfile(description = ''): StoryCharacterProfile {
+  return {
+    description,
+    personality: '',
+    scenario: '',
+    exampleDialogue: '',
+    systemPrompt: '',
+    postHistoryInstructions: '',
+  }
+}
+
+function emptyCharacterState(): StoryCharacterState {
+  return { location: '', condition: '', objective: '', notes: '' }
+}
+
+function normalizeCharacterProfile(value: unknown): StoryCharacterProfile {
+  if (!isRecord(value) || Object.keys(value).some(key => ![
+    'description', 'personality', 'scenario', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions',
+  ].includes(key))) throw new Error('人物档案字段无效')
+  return {
+    description: cleanDocument(value.description, '人物描述'),
+    personality: cleanDocument(value.personality, '人物性格'),
+    scenario: cleanDocument(value.scenario, '人物场景基线'),
+    exampleDialogue: cleanDocument(value.exampleDialogue, '人物对话示例'),
+    systemPrompt: cleanDocument(value.systemPrompt, '人物系统指令'),
+    postHistoryInstructions: cleanDocument(value.postHistoryInstructions, '人物历史后指令'),
+  }
+}
+
+function normalizeCharacterState(value: unknown): StoryCharacterState {
+  if (!isRecord(value) || Object.keys(value).some(key => !['location', 'condition', 'objective', 'notes'].includes(key))) {
+    throw new Error('人物场地状态字段无效')
+  }
+  return {
+    location: cleanDocument(value.location, '人物当前位置'),
+    condition: cleanDocument(value.condition, '人物当前状态'),
+    objective: cleanDocument(value.objective, '人物当前目标'),
+    notes: cleanDocument(value.notes, '人物场地备注'),
+  }
 }
 
 function cleanDocument(value: unknown, subject: string): string {
@@ -256,7 +300,8 @@ function normalizeCharacter(value: unknown): StoryCharacter {
   return {
     id: value.id,
     name: cleanName(value.name, '人物'),
-    persona: cleanDocument(value.persona, '人物 Persona'),
+    profile: normalizeCharacterProfile(value.profile),
+    state: normalizeCharacterState(value.state),
     ...(actor === undefined ? {} : { actor }),
   }
 }
@@ -619,7 +664,10 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
     }
   }
   const documents = nodes.flatMap(node => [node.summary, node.content])
-    .concat(characters.map(character => character.persona))
+    .concat(characters.flatMap(character => [
+      ...Object.values(character.profile),
+      ...Object.values(character.state),
+    ]))
     .concat(facts.flatMap(fact => [fact.text, fact.source.kind === 'event' ? fact.source.evidence : '']))
     .concat(events.flatMap(event => [event.summary, event.evidence]))
     .concat(outputs.map(output => output.instructions))
@@ -672,6 +720,22 @@ function readOptionalMarkdown(path: string): string {
   return existsSync(path) ? readMarkdown(path) : ''
 }
 
+function readCharacterProfile(root: string, id: string): StoryCharacterProfile {
+  const characterRoot = join(root, 'characters', id)
+  const descriptionPath = join(characterRoot, 'description.md')
+  if (!existsSync(descriptionPath)) {
+    return emptyCharacterProfile(readOptionalMarkdown(join(characterRoot, 'persona.md')))
+  }
+  return {
+    description: readMarkdown(descriptionPath),
+    personality: readOptionalMarkdown(join(characterRoot, 'personality.md')),
+    scenario: readOptionalMarkdown(join(characterRoot, 'scenario.md')),
+    exampleDialogue: readOptionalMarkdown(join(characterRoot, 'example-dialogue.md')),
+    systemPrompt: readOptionalMarkdown(join(characterRoot, 'system-prompt.md')),
+    postHistoryInstructions: readOptionalMarkdown(join(characterRoot, 'post-history-instructions.md')),
+  }
+}
+
 function withoutLegacyTurnMarkers(value: string): string {
   return value
     .replace(/^\s*<!--\s*agent-rp:story-turn:[^>]*-->\s*$/gmu, '')
@@ -693,7 +757,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
       nodes: snapshot.graph.nodes.map(({ content: _content, ...node }) => node),
       edges: snapshot.graph.edges,
     },
-    characters: snapshot.characters.map(({ persona: _persona, ...character }) => character),
+    characters: snapshot.characters.map(({ profile: _profile, ...character }) => character),
     facts: snapshot.facts,
     events: snapshot.events,
     outputs: snapshot.outputs.map(({ instructions: _instructions, ...output }) => output),
@@ -718,7 +782,7 @@ function hydrateStored(root: string, value: unknown, worlds: PlayWorldRegistry):
   const characters = value.characters.map(item => {
     if (!isRecord(item)) throw new Error('人物索引无效')
     assertId(item.id, CHARACTER_ID_PATTERN, '人物')
-    return { ...item, persona: readMarkdown(join(root, 'characters', item.id, 'persona.md')) }
+    return { ...item, state: item.state ?? emptyCharacterState(), profile: readCharacterProfile(root, item.id) }
   })
   const outputs = value.outputs.map(item => {
     if (!isRecord(item)) throw new Error('输出分区索引无效')
@@ -783,7 +847,7 @@ function migrateTypedFormat1(root: string, value: unknown, worlds: PlayWorldRegi
   const characters = value.characters.map(item => {
     if (!isRecord(item)) throw new Error('人物索引无效')
     assertId(item.id, CHARACTER_ID_PATTERN, '人物')
-    return { ...item, persona: readMarkdown(join(root, 'characters', item.id, 'persona.md')) }
+    return { ...item, state: emptyCharacterState(), profile: readCharacterProfile(root, item.id) }
   })
   const facts = value.facts.map(item => {
     if (!isRecord(item)) throw new Error('旧类型化人物事实索引无效')
@@ -1130,7 +1194,7 @@ export class StoryWorkspaceStore {
         const { actor: _actor, ...detached } = character
         return detached
       }
-      return { ...character, name: projection.name, persona: projection.persona, actor: request.actor }
+      return { ...character, name: projection.name, profile: projection.profile, actor: request.actor }
     })
     const snapshot = normalizeWorkspace({
       ...current,
@@ -1163,6 +1227,24 @@ export class StoryWorkspaceStore {
       participantIds: [...new Set(materialization.participantIds)],
       ...(activeNode === undefined ? {} : { nodeId: activeNode.id }),
     }
+    const stateChanges = new Map(materialization.changes.characters.map(change => [change.characterId, change]))
+    if (stateChanges.size !== materialization.changes.characters.length
+      || [...stateChanges].some(([characterId]) => !characterIds.has(characterId))) {
+      throw new Error('人物状态变更包含未知或重复人物')
+    }
+    const characters = current.characters.map(character => {
+      const change = stateChanges.get(character.id)
+      if (change === undefined) return character
+      return {
+        ...character,
+        state: {
+          location: change.location === undefined ? character.state.location : cleanDocument(change.location, '人物当前位置'),
+          condition: change.condition === undefined ? character.state.condition : cleanDocument(change.condition, '人物当前状态'),
+          objective: change.objective === undefined ? character.state.objective : cleanDocument(change.objective, '人物当前目标'),
+          notes: change.notes === undefined ? character.state.notes : cleanDocument(change.notes, '人物场地备注'),
+        },
+      }
+    })
     const factChanges = new Map<string, Set<string>>()
     for (const change of materialization.changes.facts) {
       const text = cleanDocument(change.text, '人物观察')
@@ -1269,7 +1351,7 @@ export class StoryWorkspaceStore {
         nodes: [...current.graph.nodes, ...suggestedNodes],
         edges: [...current.graph.edges, ...suggestedEdges],
       },
-      characters: current.characters,
+      characters,
       facts: [...current.facts, ...facts],
       events: [...current.events, event],
       outputs: current.outputs,
@@ -1302,7 +1384,13 @@ export class StoryWorkspaceStore {
     const root = this.workspacePath(snapshot.id)
     for (const node of snapshot.graph.nodes) atomicWrite(join(root, 'nodes', `${node.id}.md`), node.content)
     for (const character of snapshot.characters) {
-      atomicWrite(join(root, 'characters', character.id, 'persona.md'), character.persona)
+      const characterRoot = join(root, 'characters', character.id)
+      atomicWrite(join(characterRoot, 'description.md'), character.profile.description)
+      atomicWrite(join(characterRoot, 'personality.md'), character.profile.personality)
+      atomicWrite(join(characterRoot, 'scenario.md'), character.profile.scenario)
+      atomicWrite(join(characterRoot, 'example-dialogue.md'), character.profile.exampleDialogue)
+      atomicWrite(join(characterRoot, 'system-prompt.md'), character.profile.systemPrompt)
+      atomicWrite(join(characterRoot, 'post-history-instructions.md'), character.profile.postHistoryInstructions)
     }
     for (const output of snapshot.outputs) atomicWrite(join(root, 'outputs', `${output.id}.md`), output.instructions)
     for (const source of snapshot.sources) atomicWrite(join(root, 'sources', `${source.id}.md`), source.content)
@@ -1363,7 +1451,8 @@ export class StoryWorkspaceStore {
     const characters: StoryCharacter[] = legacy.characters.map(character => ({
       id: character.id,
       name: character.name,
-      persona: readOptionalMarkdown(join(root, 'characters', character.id, 'persona.md')),
+      profile: emptyCharacterProfile(readOptionalMarkdown(join(root, 'characters', character.id, 'persona.md'))),
+      state: emptyCharacterState(),
     }))
     const participantIds = legacy.characters.filter(character => character.enabled).map(character => character.id)
     const arcId = createStoryNodeId()
@@ -1512,20 +1601,34 @@ export function compileStoryCharacterContext(
     : worlds.get(workspace.world.moduleId).projectForCharacter(workspace.world, characterId, { characters: workspace.characters }).text
   const text = [
     `# 人物：${character.name}`,
-    '## Persona',
-    character.persona,
+    ...(character.profile.systemPrompt.trim() === '' ? [] : ['## 扮演指令', character.profile.systemPrompt]),
+    ...(character.profile.description.trim() === '' ? [] : ['## 人物描述', character.profile.description]),
+    ...(character.profile.personality.trim() === '' ? [] : ['## 性格与行为', character.profile.personality]),
+    ...(character.profile.scenario.trim() === '' ? [] : ['## 场景基线', character.profile.scenario]),
+    ...(character.profile.exampleDialogue.trim() === '' ? [] : ['## 对话示例', character.profile.exampleDialogue]),
+    ...(Object.values(character.state).every(value => value.trim() === '') ? [] : [
+      '## 当前场地状态',
+      [
+        character.state.location.trim() === '' ? '' : `- 位置：${character.state.location}`,
+        character.state.condition.trim() === '' ? '' : `- 状态：${character.state.condition}`,
+        character.state.objective.trim() === '' ? '' : `- 当前目标：${character.state.objective}`,
+        character.state.notes.trim() === '' ? '' : `- 备注：${character.state.notes}`,
+      ].filter(Boolean).join('\n'),
+    ]),
     '## 此人物已经知道的事实',
     privateKnowledge,
     ...(worldContext === '' ? [] : ['## 此人物可见的世界状态', worldContext]),
     '## 本轮玩家输入',
     playerInput,
     '只能依据以上材料决定该人物此刻相信什么、注意到什么和采取什么行动。不得假设其他人物的私有知识，也不得读取导演故事图、建议节点或未公开的未来安排。',
+    ...(character.profile.postHistoryInstructions.trim() === '' ? [] : ['## 历史后指令', character.profile.postHistoryInstructions]),
   ].join('\n\n')
   return {
     workspaceId: workspace.id,
     characterId,
     characterName: character.name,
-    persona: character.persona,
+    profile: character.profile,
+    state: character.state,
     privateKnowledge,
     worldContext,
     playerInput,

@@ -407,12 +407,25 @@ function compileCharacterPreview(workspace: StoryWorkspaceSnapshot, character: S
     }).join('\n')
   return [
     `# 人物：${character.name}`,
-    '## Persona',
-    character.persona,
+    ...(character.profile.systemPrompt.trim() === '' ? [] : ['## 扮演指令', character.profile.systemPrompt]),
+    ...(character.profile.description.trim() === '' ? [] : ['## 人物描述', character.profile.description]),
+    ...(character.profile.personality.trim() === '' ? [] : ['## 性格与行为', character.profile.personality]),
+    ...(character.profile.scenario.trim() === '' ? [] : ['## 场景基线', character.profile.scenario]),
+    ...(character.profile.exampleDialogue.trim() === '' ? [] : ['## 对话示例', character.profile.exampleDialogue]),
+    ...(Object.values(character.state).every(value => value.trim() === '') ? [] : [
+      '## 当前场地状态',
+      [
+        character.state.location.trim() === '' ? '' : `- 位置：${character.state.location}`,
+        character.state.condition.trim() === '' ? '' : `- 状态：${character.state.condition}`,
+        character.state.objective.trim() === '' ? '' : `- 当前目标：${character.state.objective}`,
+        character.state.notes.trim() === '' ? '' : `- 备注：${character.state.notes}`,
+      ].filter(Boolean).join('\n'),
+    ]),
     '## 此人物已经知道的事实',
     facts,
     '## 本轮玩家输入',
     '（将在生成时填入）',
+    ...(character.profile.postHistoryInstructions.trim() === '' ? [] : ['## 历史后指令', character.profile.postHistoryInstructions]),
   ].join('\n\n')
 }
 
@@ -591,9 +604,59 @@ function EdgeInspector({ workspace, edge, update, onDelete }: {
   </>
 }
 
-function CharacterInspector({ workspace, character, actorResources, busy, dirty, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, onBindActor, onDelete }: {
+function KnowledgeAudit({ workspace, selectedCharacterId, update, selectEvent }: {
   readonly workspace: StoryWorkspaceSnapshot
-  readonly character: StoryCharacter
+  readonly selectedCharacterId: string
+  readonly update: UpdateWorkspace
+  readonly selectEvent: (id: string) => void
+}) {
+  const patchFact = (factId: string, transform: (value: StoryFact) => StoryFact): void => {
+    update(current => ({ ...current, facts: current.facts.map(item => item.id === factId ? transform(item) : item) }))
+  }
+  const knowledgeColumns = `minmax(220px, 1fr) repeat(${String(workspace.characters.length)}, minmax(70px, 86px)) 94px`
+  return <section className="story-knowledge-ledger story-knowledge-audit">
+    <div className="story-knowledge-ledger-heading"><div><strong>全局认知审计</strong><span>用于排查或批量修正知情范围；日常编辑请使用上方人物认知。</span></div>
+      <span>{workspace.facts.length} 条事实</span></div>
+    <div className="story-knowledge-scroll">
+      <div className="story-knowledge-row story-knowledge-row-head" style={{ gridTemplateColumns: knowledgeColumns }}>
+        <span>事实与来源</span>{workspace.characters.map(character => <span data-selected={selectedCharacterId === character.id} key={character.id}>{character.name}</span>)}<span>状态</span>
+      </div>
+      {workspace.facts.map(fact => {
+        const sourceEventId = fact.source.kind === 'event' ? fact.source.eventId : undefined
+        const sourceEvent = sourceEventId === undefined ? undefined : workspace.events.find(event => event.id === sourceEventId)
+        const effectiveKnownBy = factKnownBy(workspace, fact)
+        const parentNode = fact.nodeId === undefined ? undefined : workspace.graph.nodes.find(node => node.id === fact.nodeId)
+        return <article className="story-knowledge-row" data-highlighted={effectiveKnownBy.includes(selectedCharacterId)}
+          key={fact.id} style={{ gridTemplateColumns: knowledgeColumns }}>
+          <div className="story-knowledge-fact-copy"><span>{fact.text}</span>
+            {sourceEvent === undefined
+              ? <small>{parentNode === undefined ? '未归入故事簇' : `归入：${parentNode.title}`}</small>
+              : <button className="story-citation-link" type="button" onClick={() => { selectEvent(sourceEvent.id) }}>
+                第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗
+              </button>}
+          </div>
+          {workspace.characters.map(character => <label className="story-knowledge-person" data-selected={selectedCharacterId === character.id} key={character.id}>
+            <span className="story-knowledge-person-name">{character.name}</span>
+            <input aria-label={`${character.name}知道：${fact.text.slice(0, 48)}`} type="checkbox" checked={effectiveKnownBy.includes(character.id)}
+              onChange={event => { patchFact(fact.id, current => {
+                const base = current.knowledgeMode === 'inherit' ? effectiveKnownBy : current.knownBy
+                return {
+                  ...current,
+                  knowledgeMode: 'override',
+                  knownBy: event.target.checked ? [...new Set([...base, character.id])] : base.filter(id => id !== character.id),
+                }
+              }) }} />
+          </label>)}
+          <div className="story-knowledge-state"><span>{fact.status === 'asserted' ? '确认' : fact.status === 'uncertain' ? '不确定' : '已否定'}</span></div>
+        </article>
+      })}
+    </div>
+  </section>
+}
+
+function CharacterWorkspaceView({ workspace, character, actorResources, busy, dirty, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, openStoryMap, onBindActor, onDelete, selectEvent, addCharacter }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly character: StoryCharacter | undefined
   readonly actorResources: readonly RoleplayResourceDescriptor[]
   readonly busy: boolean
   readonly dirty: boolean
@@ -602,57 +665,22 @@ function CharacterInspector({ workspace, character, actorResources, busy, dirty,
   readonly previewId: string | undefined
   readonly setPerspectiveId: (id: string | undefined) => void
   readonly setPreviewId: (id: string | undefined) => void
-  readonly onBindActor: (actorId?: string) => void
-  readonly onDelete: () => void
-}) {
-  const facts = workspace.facts.filter(fact => factKnownBy(workspace, fact).includes(character.id))
-  const patchCharacter = (transform: (value: StoryCharacter) => StoryCharacter): void => {
-    update(current => ({ ...current, characters: current.characters.map(item => item.id === character.id ? transform(item) : item) }))
-  }
-  return <>
-    <h2>{character.name}</h2>
-    <div className="story-studio-inspector-subtitle">人物档案与可追溯认知</div>
-    <Field label="角色卡"><select className="story-studio-input" value={character.actor?.id ?? ''} disabled={busy || dirty}
-      onChange={event => { onBindActor(event.target.value === '' ? undefined : event.target.value) }}>
-      <option value="">手写人物</option>{actorResources.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
-    </select></Field>
-    {dirty && <p className="story-studio-inline-note">保存当前修改后即可绑定角色卡。</p>}
-    <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
-    <TextField label={character.actor === undefined ? 'Persona' : '角色卡 Persona 快照'} rows={7} value={character.persona} onChange={value => { patchCharacter(current => ({ ...current, persona: value })) }} />
-    <div className="story-studio-actions">
-      <button className="story-studio-button" type="button" onClick={() => { setPerspectiveId(perspectiveId === character.id ? undefined : character.id) }}>
-        {perspectiveId === character.id ? '退出人物视角' : '以此人物查看'}
-      </button>
-      <button className="story-studio-button" type="button" onClick={() => { setPreviewId(previewId === character.id ? undefined : character.id) }}>
-        {previewId === character.id ? '收起 Worker 输入' : '预览 Worker 输入'}
-      </button>
-    </div>
-    {previewId === character.id && <pre className="story-studio-preview">{compileCharacterPreview(workspace, character)}</pre>}
-    <hr className="story-studio-divider" />
-    <div className="story-character-knowledge-summary"><strong>{facts.length} 条人物认知</strong>
-      <span>认知内容、事件证据和知情人物在中央认知矩阵中统一编辑。</span></div>
-    <hr className="story-studio-divider" />
-    <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除人物</button>
-  </>
-}
-
-function CharacterKnowledgeView({ workspace, selectedCharacterId, update, selectCharacter, selectEvent, addCharacter }: {
-  readonly workspace: StoryWorkspaceSnapshot
-  readonly selectedCharacterId: string | undefined
-  readonly update: UpdateWorkspace
-  readonly selectCharacter: (id: string) => void
+  readonly openStoryMap: () => void
+  readonly onBindActor: (characterId: string, actorId?: string) => void
+  readonly onDelete: (id: string) => void
   readonly selectEvent: (id: string) => void
   readonly addCharacter: () => void
 }) {
+  const [tab, setTab] = useState<'profile' | 'state' | 'knowledge' | 'agent'>('profile')
+  if (character === undefined) return <div className="story-studio-empty"><span style={{ fontSize: 32 }}>◉</span><strong>先建立一位人物</strong>
+    <span>人物档案、当前状态和独立认知会在这里汇合。</span><button className="story-studio-button story-studio-button-primary" type="button" onClick={addCharacter}>添加人物</button></div>
+  const patchCharacter = (transform: (value: StoryCharacter) => StoryCharacter): void => {
+    update(current => ({ ...current, characters: current.characters.map(item => item.id === character.id ? transform(item) : item) }))
+  }
   const patchFact = (factId: string, transform: (value: StoryFact) => StoryFact): void => {
     update(current => ({ ...current, facts: current.facts.map(item => item.id === factId ? transform(item) : item) }))
   }
   const addFact = (): void => {
-    const characterId = selectedCharacterId !== undefined
-      && workspace.characters.some(character => character.id === selectedCharacterId)
-      ? selectedCharacterId
-      : workspace.characters[0]?.id
-    if (characterId === undefined) return
     update(current => ({ ...current, facts: [...current.facts, {
       id: `fact-${createClientOpaqueUuid()}`,
       ...(current.graph.activeNodeId === undefined ? {} : { nodeId: current.graph.activeNodeId }),
@@ -660,7 +688,7 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
       status: 'asserted',
       audience: 'director',
       knowledgeMode: 'override',
-      knownBy: [characterId],
+      knownBy: [character.id],
       source: { kind: 'manual' },
     }] }))
   }
@@ -672,64 +700,103 @@ function CharacterKnowledgeView({ workspace, selectedCharacterId, update, select
         ? citationWithoutTarget(citation) : citation),
     }))
   }
-  const knowledgeColumns = `minmax(220px, 1fr) repeat(${String(workspace.characters.length)}, minmax(70px, 86px)) 94px`
-  return <div className="story-studio-view story-knowledge-view">
-    <div className="story-studio-view-heading"><div><h1>人物与认知</h1><p>每个勾选格都决定下一轮哪个人物 Worker 能使用这条事实。</p></div>
-      <div className="story-studio-toolbar"><button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button>
-        <button className="story-studio-button story-studio-button-primary" disabled={workspace.characters.length === 0} type="button" onClick={addFact}>＋ 添加事实</button></div></div>
-    <div className="story-character-strip">{workspace.characters.map(character => {
-      const factCount = workspace.facts.filter(fact => fact.status !== 'refuted' && factKnownBy(workspace, fact).includes(character.id)).length
-      return <button className="story-character-card" data-selected={selectedCharacterId === character.id} key={character.id} type="button"
-        onClick={() => { selectCharacter(character.id) }}><span>{character.name}</span><small>{factCount} 条当前认知 · 查看 Persona 与 Worker 输入</small></button>
-    })}{workspace.characters.length === 0 && <div className="story-studio-empty"><span>先添加人物，再为每个人建立独立认知。</span></div>}</div>
-    {workspace.characters.length > 0 && <section className="story-knowledge-ledger">
-      <div className="story-knowledge-ledger-heading"><div><strong>认知矩阵</strong><span>事件参与不等于知情；只有下方明确勾选的人物会收到对应事实。</span></div>
-        <span>{workspace.facts.length} 条事实</span></div>
-      <div className="story-knowledge-scroll">
-        <div className="story-knowledge-row story-knowledge-row-head" style={{ gridTemplateColumns: knowledgeColumns }}>
-          <span>事实与来源</span>{workspace.characters.map(character => <span data-selected={selectedCharacterId === character.id} key={character.id}>{character.name}</span>)}<span>状态</span>
+  const knownFacts = workspace.facts.filter(fact => fact.status !== 'refuted' && factKnownBy(workspace, fact).includes(character.id))
+  const relatedEvents = workspace.events.filter(event => event.participantIds.includes(character.id)
+    || workspace.facts.some(fact => fact.source.kind === 'event' && fact.source.eventId === event.id && factKnownBy(workspace, fact).includes(character.id)))
+  return <div className="story-studio-view story-character-workspace">
+    <header className="story-character-hero">
+      <div className="story-character-avatar" aria-hidden="true">{character.name.slice(0, 1)}</div>
+      <div className="story-character-hero-copy"><span>{character.actor === undefined ? '本场地手写人物' : '已绑定资源中心角色卡'}</span><h1>{character.name}</h1>
+        <p>{character.profile.description.trim().split('\n').find(Boolean)?.slice(0, 120) || '还没有人物描述。'}</p></div>
+      <div className="story-character-hero-actions"><button className="story-studio-button" type="button" onClick={() => {
+        if (perspectiveId === character.id) setPerspectiveId(undefined)
+        else {
+          setPerspectiveId(character.id)
+          openStoryMap()
+        }
+      }}>
+        {perspectiveId === character.id ? '退出人物视角' : '以此人物查看故事图'}</button>
+        <button className="story-studio-button" type="button" onClick={addCharacter}>＋ 添加人物</button></div>
+    </header>
+    <nav className="story-character-tabs" aria-label="人物编辑区">
+      {([['profile', '人物档案'], ['state', '场地状态'], ['knowledge', `认知与经历 · ${String(knownFacts.length)}`], ['agent', 'Agent 输入']] as const)
+        .map(([id, label]) => <button aria-current={tab === id ? 'page' : undefined} key={id} type="button" onClick={() => { setTab(id) }}>{label}</button>)}
+    </nav>
+    {tab === 'profile' && <div className="story-character-editor-grid">
+      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>角色卡</strong><span>稳定身份会跨场景复用；临时状态放在“场地状态”。</span></div></div>
+        <div className="story-character-fields">
+          <Field label="角色卡来源"><select className="story-studio-input" value={character.actor?.id ?? ''} disabled={busy || dirty}
+            onChange={event => { onBindActor(character.id, event.target.value === '' ? undefined : event.target.value) }}>
+            <option value="">手写人物</option>{actorResources.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
+          </select></Field>
+          {dirty && <p className="story-studio-inline-note">保存当前修改后即可更换角色卡来源。</p>}
+          <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
+          <TextField label="人物描述" rows={9} value={character.profile.description} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, description: value } })) }} />
+          <TextField label="性格与行为" rows={7} value={character.profile.personality} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, personality: value } })) }} />
         </div>
-        {workspace.facts.map(fact => {
+      </section>
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>场景与声音</strong><span>对应角色卡的场景基线与示例对话。</span></div></div>
+        <TextField label="场景基线" rows={6} value={character.profile.scenario} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, scenario: value } })) }} />
+        <TextField label="对话示例" rows={10} value={character.profile.exampleDialogue} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, exampleDialogue: value } })) }} />
+      </section>
+    </div>}
+    {tab === 'state' && <div className="story-character-editor-grid">
+      <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>当前场地状态</strong><span>只描述此刻；故事回合可以持续更新这些字段。</span></div></div>
+        <div className="story-character-state-grid">
+          <TextField label="当前位置" rows={2} value={character.state.location} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, location: value } })) }} />
+          <TextField label="身心状态" rows={2} value={character.state.condition} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, condition: value } })) }} />
+        </div>
+        <TextField label="当前目标" rows={3} value={character.state.objective} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, objective: value } })) }} />
+        <TextField label="本局备注" rows={7} value={character.state.notes} onChange={value => { patchCharacter(current => ({ ...current, state: { ...current.state, notes: value } })) }} />
+      </section>
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>为什么单独保存</strong><span>角色卡回答“这个人是谁”，场地状态回答“这个人现在怎样”。</span></div></div>
+        <p className="story-character-help">换一局或进入另一段故事时，可以继续复用人物档案，而不会把上一局的位置、伤势或临时目标误当成永久性格。</p>
+      </section>
+    </div>}
+    {tab === 'knowledge' && <div className="story-character-knowledge-layout">
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>{character.name} 已知的事实</strong><span>只显示会进入此人物 Worker 的认知。</span></div>
+        <button className="story-studio-button story-studio-button-primary" type="button" onClick={addFact}>＋ 添加认知</button></div>
+        <div className="story-character-fact-list">{knownFacts.map(fact => {
           const sourceEventId = fact.source.kind === 'event' ? fact.source.eventId : undefined
           const sourceEvent = sourceEventId === undefined ? undefined : workspace.events.find(event => event.id === sourceEventId)
           const effectiveKnownBy = factKnownBy(workspace, fact)
           const parentNode = fact.nodeId === undefined ? undefined : workspace.graph.nodes.find(node => node.id === fact.nodeId)
-          return <article className="story-knowledge-row" data-highlighted={selectedCharacterId !== undefined && effectiveKnownBy.includes(selectedCharacterId)}
-            key={fact.id} style={{ gridTemplateColumns: knowledgeColumns }}>
-            <div className="story-knowledge-fact-copy"><textarea className="story-studio-input" rows={2} value={fact.text}
+          return <article className="story-character-fact" key={fact.id}><div className="story-character-fact-main"><textarea className="story-studio-input" rows={2} value={fact.text}
               aria-label="人物事实" onChange={event => { patchFact(fact.id, current => ({ ...current, text: event.target.value })) }} />
-              {sourceEvent === undefined
-                ? <small>{parentNode === undefined ? '未归入故事簇' : `归入：${parentNode.title}`}</small>
-                : <button className="story-citation-link" type="button" onClick={() => { selectEvent(sourceEvent.id) }}>
-                  第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗
-                </button>}
-            </div>
-            {workspace.characters.map(character => <label className="story-knowledge-person" data-selected={selectedCharacterId === character.id} key={character.id}>
-              <span className="story-knowledge-person-name">{character.name}</span>
-              <input aria-label={`${character.name}知道：${fact.text.slice(0, 48)}`} type="checkbox" checked={effectiveKnownBy.includes(character.id)}
-                onChange={event => { patchFact(fact.id, current => {
-                  const base = current.knowledgeMode === 'inherit' ? effectiveKnownBy : current.knownBy
-                  return {
-                    ...current,
-                    knowledgeMode: 'override',
-                    knownBy: event.target.checked ? [...new Set([...base, character.id])] : base.filter(id => id !== character.id),
-                  }
-                }) }} />
-            </label>)}
-            <div className="story-knowledge-state">{fact.nodeId !== undefined && <button className="story-studio-icon-button" type="button"
+              <div className="story-character-fact-source">{sourceEvent === undefined
+                ? <span>{parentNode === undefined ? '手动记录 · 未归入故事簇' : `故事簇 · ${parentNode.title}`}</span>
+                : <button className="story-citation-link" type="button" onClick={() => { selectEvent(sourceEvent.id) }}>第 {sourceEvent.turn} 回合 · {sourceEvent.title} ↗</button>}</div></div>
+            <div className="story-character-fact-actions">{fact.nodeId !== undefined && <button className="story-studio-icon-button" type="button"
               aria-label={`切换认知继承：${fact.text.slice(0, 48)}`} title={fact.knowledgeMode === 'inherit' ? '正在继承故事簇' : '改为继承故事簇'}
               onClick={() => { patchFact(fact.id, current => ({ ...current, knowledgeMode: current.knowledgeMode === 'inherit' ? 'override' : 'inherit' })) }}>
               {fact.knowledgeMode === 'inherit' ? '↳' : '◇'}
             </button>}<select className="story-studio-input" aria-label="事实状态" value={fact.status}
               onChange={event => { patchFact(fact.id, current => ({ ...current, status: event.target.value as StoryFact['status'] })) }}>
               <option value="asserted">确认</option><option value="uncertain">不确定</option><option value="refuted">已否定</option>
-            </select><button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除事实：${fact.text.slice(0, 48)}`}
-              onClick={() => { deleteFact(fact.id) }}>×</button></div>
+            </select><button className="story-studio-button" type="button" onClick={() => { patchFact(fact.id, current => ({ ...current, knowledgeMode: 'override', knownBy: effectiveKnownBy.filter(id => id !== character.id) })) }}>移出此人物认知</button>
+              <button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除事实：${fact.text.slice(0, 48)}`} onClick={() => { deleteFact(fact.id) }}>×</button></div>
           </article>
-        })}
-        {workspace.facts.length === 0 && <div className="story-studio-empty"><span>完成故事回合或手动添加事实后，人物之间的认知差异会显示在这里。</span></div>}
-      </div>
-    </section>}
+        })}{knownFacts.length === 0 && <div className="story-studio-empty"><span>这个人物还没有自己的认知记录。</span></div>}</div>
+      </section>
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>共同经历</strong><span>由人物参与的事件和后来得知的事件自动汇合。</span></div></div>
+        <div className="story-character-event-list">{relatedEvents.map(event => <button key={event.id} type="button" onClick={() => { selectEvent(event.id) }}>
+          <span>第 {event.turn} 回合</span><strong>{event.title}</strong><small>{event.summary}</small></button>)}
+          {relatedEvents.length === 0 && <p className="story-character-help">人物参与故事回合后，经历会自动出现在这里。</p>}</div>
+      </section>
+    </div>}
+    {tab === 'agent' && <div className="story-character-agent-layout">
+      <section className="story-character-panel"><div className="story-character-panel-heading"><div><strong>人物 Worker 输入</strong><span>预览只包含人物档案、当前状态和此人物可见的信息。</span></div>
+        <button className="story-studio-button" type="button" onClick={() => { setPreviewId(previewId === character.id ? undefined : character.id) }}>
+          {previewId === character.id ? '收起完整预览' : '展开完整预览'}</button></div>
+        <TextField label="系统指令" rows={6} value={character.profile.systemPrompt} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, systemPrompt: value } })) }} />
+        <TextField label="历史后指令" rows={5} value={character.profile.postHistoryInstructions} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, postHistoryInstructions: value } })) }} />
+        {previewId === character.id && <pre className="story-studio-preview story-character-preview">{compileCharacterPreview(workspace, character)}</pre>}
+      </section>
+      <details className="story-character-audit"><summary>高级：打开全局认知审计</summary>
+        <KnowledgeAudit workspace={workspace} selectedCharacterId={character.id} update={update} selectEvent={selectEvent} />
+      </details>
+      <div className="story-character-danger-zone"><button className="story-studio-button story-studio-danger" type="button" onClick={() => { onDelete(character.id) }}>删除 {character.name}</button></div>
+    </div>}
   </div>
 }
 
@@ -1251,7 +1318,8 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
     <div className="story-studio-nav-group">
       <div className="story-studio-nav-heading"><span>人物</span><button className="story-studio-icon-button" type="button" aria-label="添加人物" onClick={addCharacter}>＋</button></div>
       {workspace.characters.map(character => <button key={character.id} className="story-studio-nav-item"
-        data-active={selection?.kind === 'character' && selection.id === character.id} type="button" onClick={() => { select({ kind: 'character', id: character.id }) }}>
+        data-active={view === 'characters' && (selection?.kind === 'character' ? selection.id === character.id : workspace.characters[0]?.id === character.id)}
+        type="button" onClick={() => { select({ kind: 'character', id: character.id }) }}>
         <span className="story-studio-nav-icon">◉</span><span>{character.name}</span>
         <span className="story-studio-nav-count">{workspace.facts.filter(fact => factKnownBy(workspace, fact).includes(character.id)).length}</span>
       </button>)}
@@ -1584,7 +1652,12 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
   const addCharacter = (): void => {
     if (workspace === undefined) return
     const id = `character-${createClientOpaqueUuid()}`
-    update(current => ({ ...current, characters: [...current.characters, { id, name: `人物 ${current.characters.length + 1}`, persona: '' }] }))
+    update(current => ({ ...current, characters: [...current.characters, {
+      id,
+      name: `人物 ${current.characters.length + 1}`,
+      profile: { description: '', personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
+      state: { location: '', condition: '', objective: '', notes: '' },
+    }] }))
     select({ kind: 'character', id })
   }
   const addSource = (): void => {
@@ -1742,6 +1815,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
   const selectedNode = selection?.kind === 'node' ? workspace?.graph.nodes.find(node => node.id === selection.id) : undefined
   const selectedEdge = selection?.kind === 'edge' ? workspace?.graph.edges.find(edge => edge.id === selection.id) : undefined
   const selectedCharacter = selection?.kind === 'character' ? workspace?.characters.find(character => character.id === selection.id) : undefined
+  const activeCharacter = view === 'characters' ? selectedCharacter ?? workspace?.characters[0] : selectedCharacter
   const selectedEvent = selection?.kind === 'event' ? workspace?.events.find(event => event.id === selection.id) : undefined
   const selectedSource = selection?.kind === 'source' ? workspace?.sources.find(source => source.id === selection.id) : undefined
   const selectedCitation = selection?.kind === 'citation' ? workspace?.citations.find(citation => citation.id === selection.id) : undefined
@@ -1754,11 +1828,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
     : selectedNode !== undefined ? <NodeInspector workspace={workspace} node={selectedNode} update={update} onSelect={setSelection}
       onOpenEvent={id => { select({ kind: 'event', id }) }} onDelete={() => { deleteNode(selectedNode.id) }} />
       : selectedEdge !== undefined ? <EdgeInspector workspace={workspace} edge={selectedEdge} update={update} onDelete={() => { deleteEdge(selectedEdge.id) }} />
-        : selectedCharacter !== undefined ? <CharacterInspector workspace={workspace} character={selectedCharacter} actorResources={actorResources}
-          busy={saving} dirty={dirty} update={update}
-          perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
-          onBindActor={actorId => { bindActor(selectedCharacter.id, actorId) }}
-          onDelete={() => { deleteCharacter(selectedCharacter.id) }} />
+        : selectedCharacter !== undefined ? <EmptyInspector />
           : selectedEvent !== undefined ? <EventInspector workspace={workspace} event={selectedEvent} update={update}
             onOpenKnowledge={() => { setView('characters') }} onSelect={select}
             onDelete={() => { deleteEvent(selectedEvent.id) }} />
@@ -1809,8 +1879,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       })}{events.length === 0 && <div className="story-studio-empty"><span>第一轮故事完成后，事件会出现在这里。</span></div>}</div>
     </div>
   } else if (view === 'characters') {
-    main = <CharacterKnowledgeView workspace={workspace} selectedCharacterId={selectedCharacter?.id} update={update}
-      selectCharacter={id => { setSelection({ kind: 'character', id }) }} selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
+    main = <CharacterWorkspaceView workspace={workspace} character={activeCharacter} actorResources={actorResources} busy={saving} dirty={dirty} update={update}
+      perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
+      openStoryMap={() => { navigate('map') }}
+      onBindActor={bindActor} onDelete={deleteCharacter} selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
@@ -1893,12 +1965,12 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       <button className="story-studio-icon-button" type="button" aria-label="场地设置" disabled={workspace === undefined} onClick={() => { setSettingsOpen(true) }}>⚙</button>
       <button className="story-studio-icon-button" type="button" aria-label="关闭游玩场地" onClick={onClose}>×</button>
     </header>
-    <div className="story-studio-shell" data-inspector-open={selection !== undefined}>
+    <div className="story-studio-shell" data-inspector-open={selection !== undefined && selection.kind !== 'character'}>
       {workspace !== undefined && <StudioNavigation workspace={workspace} view={view} selection={selection} setView={navigate} select={select}
         addCharacter={addCharacter} addSource={addSource} />}
       <main className="story-studio-main">{loading ? <div className="story-studio-empty">正在打开游玩场地…</div> : main}</main>
-      <aside className="story-studio-inspector" data-open={selection !== undefined}>
-        {selection !== undefined && <button className="story-studio-icon-button" style={{ float: 'right' }} type="button" aria-label="关闭属性面板" onClick={() => { setSelection(undefined) }}>×</button>}
+      <aside className="story-studio-inspector" data-open={selection !== undefined && selection.kind !== 'character'}>
+        {selection !== undefined && selection.kind !== 'character' && <button className="story-studio-icon-button" style={{ float: 'right' }} type="button" aria-label="关闭属性面板" onClick={() => { setSelection(undefined) }}>×</button>}
         {inspector}
       </aside>
     </div>

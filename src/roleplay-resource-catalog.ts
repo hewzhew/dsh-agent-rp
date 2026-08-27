@@ -37,7 +37,14 @@ export interface RoleplayResourceProvider {
 /** Host-only actor snapshot stored by a play-space character instance. */
 export interface RoleplayActorProjection {
   readonly name: string
-  readonly persona: string
+  readonly profile: {
+    readonly description: string
+    readonly personality: string
+    readonly scenario: string
+    readonly exampleDialogue: string
+    readonly systemPrompt: string
+    readonly postHistoryInstructions: string
+  }
 }
 
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
@@ -219,12 +226,16 @@ export class RoleplayResourceCatalog {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} cannot project actors`)
     }
     const projected = registration.projectActor(Object.freeze({ ...selection }), located.descriptor)
+    const profile = projected?.profile
     if (typeof projected !== 'object' || projected === null || typeof projected.name !== 'string'
-      || projected.name.trim() === '' || projected.name.length > 120 || typeof projected.persona !== 'string'
-      || Buffer.byteLength(projected.persona, 'utf8') > 2 * 1024 * 1024) {
+      || projected.name.trim() === '' || projected.name.length > 120 || typeof profile !== 'object' || profile === null
+      || !['description', 'personality', 'scenario', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions']
+        .every(field => typeof profile[field as keyof typeof profile] === 'string')
+      || Object.keys(profile).some(field => !['description', 'personality', 'scenario', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions'].includes(field))
+      || Buffer.byteLength(Object.values(profile).join('\n'), 'utf8') > 2 * 1024 * 1024) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid actor projection`)
     }
-    return Object.freeze({ name: projected.name.trim(), persona: projected.persona })
+    return Object.freeze({ name: projected.name.trim(), profile: Object.freeze({ ...profile }) })
   }
 
   /** Dispatch one selection to its owning provider and verify append-only Session semantics. */

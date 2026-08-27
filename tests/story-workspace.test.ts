@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { searchStoryWorkspaceSources } from '../src/story-research.ts'
 import { splitStorySourcePassages } from '../src/story-source.ts'
 import {
@@ -44,6 +44,15 @@ function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   }
 }
 
+function character(id: string, name: string, description = ''): StoryCharacter {
+  return {
+    id,
+    name,
+    profile: { description, personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
+    state: { location: '', condition: '', objective: '', notes: '' },
+  }
+}
+
 test('persists typed story objects and rejects stale whole-workspace writes', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-workspace-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -81,7 +90,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
       }],
       edges: [],
     },
-    characters: [{ id: characterId, name: '小满', persona: '怕冷，谨慎。' }],
+    characters: [character(characterId, '小满', '怕冷，谨慎。')],
     facts: [{
       id: factId,
       text: '她知道车票背面的字。',
@@ -146,7 +155,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   })
   assert.deepEqual(new StoryWorkspaceStore({ root }).get(saved.id), saved)
   assert.equal(readFileSync(join(root, saved.id, 'nodes', `${nodeId}.md`), 'utf8'), '先在车站重逢。')
-  assert.equal(readFileSync(join(root, saved.id, 'characters', characterId, 'persona.md'), 'utf8'), '怕冷，谨慎。')
+  assert.equal(readFileSync(join(root, saved.id, 'characters', characterId, 'description.md'), 'utf8'), '怕冷，谨慎。')
   assert.equal(readFileSync(join(root, saved.id, 'outputs', `${outputId}.md`), 'utf8'), '夜班车尚未到站。')
   assert.equal(readFileSync(join(root, saved.id, 'sources', `${sourceId}.md`), 'utf8'), '原著中的车站终年落雪。')
   assert.match(storyDirectorMap(saved), /原著摘录 · 第一章 · 第 2 段: 原著中的车站终年落雪/u)
@@ -217,7 +226,7 @@ test('migrates one format 0 workspace into the typed story model and removes obs
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'secret')?.content, '旧车票将在终章回收。')
   assert.equal(migrated.graph.nodes.find(node => node.lifecycle === 'suggested')?.content, '让列车提前进站。')
   assert.deepEqual(migrated.graph.nodes.find(node => node.id === migrated.graph.activeNodeId)?.participantIds, [characterId])
-  assert.equal(migrated.characters[0]?.persona, '谨慎、怕冷。')
+  assert.equal(migrated.characters[0]?.profile.description, '谨慎、怕冷。')
   assert.match(migrated.facts[0]?.text ?? '', /阿梨认得旧车票/u)
   assert.match(migrated.facts[0]?.text ?? '', /阿梨看见雨停/u)
   assert.equal(migrated.facts[0]?.knownBy[0], characterId)
@@ -429,8 +438,8 @@ test('compiles inherited scene knowledge while preserving private fact overrides
       edges: [],
     },
     characters: [
-      { id: aliceId, name: '阿梨', persona: '阿梨遇事先观察。' },
-      { id: bobId, name: '柏舟', persona: '柏舟说话直接。' },
+      character(aliceId, '阿梨', '阿梨遇事先观察。'),
+      character(bobId, '柏舟', '柏舟说话直接。'),
     ],
     events: [{
       id: eventId,
@@ -607,8 +616,8 @@ test('materializes one visible turn into an event, observed facts, and a suggest
       edges: [],
     },
     characters: [
-      { id: aliceId, name: '阿梨', persona: '谨慎。' },
-      { id: bobId, name: '柏舟', persona: '直接。' },
+      character(aliceId, '阿梨', '谨慎。'),
+      character(bobId, '柏舟', '直接。'),
     ],
     facts: [{
       id: createStoryFactId(),
@@ -629,6 +638,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     evidence: '阿梨举起徽章，门外的雨声停了。',
     participantIds: [aliceId, bobId],
     changes: {
+      characters: [{ characterId: aliceId, location: '车站门廊', objective: '确认徽章来历' }],
       facts: [
         { text: '阿梨和柏舟都看见门廊外已经停雨。', knownBy: [aliceId] },
         { text: '阿梨和柏舟都看见门廊外已经停雨。', knownBy: [bobId] },
@@ -695,6 +705,8 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   assert.equal(materialized.revision, workspace.revision + 1)
   assert.equal(materialized.events[0]?.summary, '阿梨在门廊举起徽章。')
   assert.equal(materialized.events[0]?.evidence, '阿梨举起徽章，门外的雨声停了。')
+  assert.equal(materialized.characters.find(character => character.id === aliceId)?.state.location, '车站门廊')
+  assert.equal(materialized.characters.find(character => character.id === aliceId)?.state.objective, '确认徽章来历')
   assert.equal(materialized.events[0]?.nodeId, activeNodeId)
   const observed = materialized.facts.find(fact => fact.text.includes('门廊外已经停雨'))
   assert.deepEqual(observed?.knownBy, [aliceId, bobId])
@@ -770,6 +782,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     evidence: '不应重复追加。',
     participantIds: [aliceId],
     changes: {
+      characters: [],
       facts: [{ text: '不应重复追加。', knownBy: [aliceId] }],
       nodes: [{
         ref: 'duplicate', kind: 'beat', title: '不应重复追加', summary: '不应重复追加。',
