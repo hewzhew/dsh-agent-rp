@@ -440,6 +440,21 @@ test('keeps the exact world outcome while preserving only private-section charac
   const fake = {
     sessions: { flush: async () => true },
     llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
       stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages ?? [])
@@ -518,6 +533,11 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(researchDispatch, /实际行动人物：博丽灵梦/u)
   assert.match(researchDispatch, /下一行动者与玩家输入点名的刚完成行动者不同不是冲突/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
+  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data] : [])
+  assert.equal(stageRequests.find(request => request.stage === 'world-action')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
+  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
   const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
@@ -557,6 +577,9 @@ test('keeps the exact world outcome while preserving only private-section charac
     turn: 2,
     signal: new AbortController().signal,
   })
+  const continuityRequest = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'continuity' ? [event.data] : []).at(-1)
+  assert.equal(continuityRequest?.dispatch.reasoningEffort, 'low')
   assert.deepEqual(materialized?.changes.characters, [{ characterId: reimuId, objective: '继续当前棋局' }])
   assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '继续当前棋局')
   assert.equal(store.get(installed.id).characters.find(character => character.id === marisaId)?.state.objective, '')
@@ -580,4 +603,133 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /不再要求作废/u)
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), true)
+})
+
+test('assembles a grounded world result and approved dialogue without unowned model stages', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-host-world-dialogue-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '权威世界对白' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const historyId = createStoryOutputId()
+  const reimu = character(reimuId, '博丽灵梦')
+  const configured = store.save({
+    ...editable(created),
+    characters: [
+      {
+        ...reimu,
+        profile: { ...reimu.profile, exampleDialogue: '灵梦：“你自己说过的话，还要问我？”' },
+      },
+      character(marisaId, '雾雨魔理沙'),
+    ],
+    outputs: [
+      { id: proseId, name: '对局正文', kind: 'prose', enabled: true, instructions: '只写本轮。' },
+      { id: historyId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '记录规则事实。' },
+    ],
+  })
+  const installed = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const session = Session.create(SessionId('host-world-dialogue'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 32_768 } },
+  })
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'none', name: 'None' },
+              { id: 'minimal', name: 'Minimal' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        let text: string
+        if (system.includes('结构化世界行动 Worker')) {
+          text = JSON.stringify({ actionId: 'roll' })
+        } else if (system.includes('剧情研究 Worker')) {
+          text = JSON.stringify({ findings: [], followUps: [] })
+        } else if (system.includes('指定人物认知')) {
+          text = body.includes('# 人物：博丽灵梦')
+            ? JSON.stringify({
+              observation: '听见魔理沙追问。',
+              action: '',
+              speech: {
+                respondsTo: '魔理沙追问她指的是哪句话。',
+                move: 'answer',
+                content: '指出是魔理沙自己把两个判断接在了一起。',
+              },
+              voiceEvidence: [`character:${reimuId}:example-dialogue`],
+              insights: [],
+            })
+            : JSON.stringify({ observation: '灵梦刚完成本轮。', action: '', speech: null, voiceEvidence: [], insights: [] })
+        } else if (system.includes('剧情导演 Worker')) {
+          text = JSON.stringify({ sections: [
+            { sectionId: proseId, beats: [], speech: [{ characterId: reimuId }] },
+            { sectionId: historyId, beats: [], speech: [] },
+          ] })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, move: 'answer', dialogue: '“你自己把两句话接在一起，还问我是哪句？”' }] })
+        } else if (system.includes('对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '你自己把两句话接在一起，还问我是哪句？' }] })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent,
+    store,
+    workspace: installed,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '魔理沙追问灵梦指的是哪句话，请让灵梦回答。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.match(result.finalDraft, /博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.match(result.finalDraft, /“你自己把两句话接在一起，还问我是哪句？”/u)
+  assert.match(result.finalDraft, /## 公开回合记录/u)
+  assert.equal(result.hostOnlyWorldDraft, undefined)
+  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data]
+    : [])
+  assert.equal(stageRequests.every(request => request.dispatch.reasoningEffort === 'high'), true)
+  assert.deepEqual(stageRequests.flatMap(request =>
+    (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
+      ? [request.stage]
+      : []), [])
 })

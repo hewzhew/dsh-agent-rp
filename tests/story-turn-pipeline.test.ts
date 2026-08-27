@@ -281,6 +281,21 @@ test('runs logged story stages while keeping each character request privately sc
     },
     sessions: { flush: async () => true },
     llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
       stream(options: {
         readonly provider: string
         readonly model: string
@@ -485,7 +500,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(calls, 14)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.every(effort => effort === 'high'), true)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 3)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 11)
   assert.equal(maxTokenBudgets.every(budget => budget >= 16_384), true)
   assert.equal(characterBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
