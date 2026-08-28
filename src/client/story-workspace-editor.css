@@ -167,7 +167,10 @@
 .story-play-session-copy { display: grid; gap: 4px; }
 .story-play-session-copy strong { font-size: 12px; }
 .story-play-session-copy span,
-.story-play-session-input > span { color: var(--studio-muted); font-size: 9px; line-height: 1.45; }
+.story-play-session-input > span,
+.story-play-session-target > span { color: var(--studio-muted); font-size: 9px; line-height: 1.45; }
+.story-play-session-target { display: grid; gap: 5px; }
+.story-play-session-target select { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 8px; color: inherit; font: inherit; font-size: 10px; min-width: 140px; padding: 8px; width: 100%; }
 .story-play-session-input { display: grid; gap: 5px; }
 .story-play-session-input textarea { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 8px; color: inherit; font: inherit; font-size: 10px; line-height: 1.45; min-height: 48px; padding: 7px 8px; resize: vertical; width: 100%; }
 .story-play-session-input textarea:focus { border-color: var(--story-accent); outline: 1px solid color-mix(in srgb, var(--story-accent) 35%, transparent); }

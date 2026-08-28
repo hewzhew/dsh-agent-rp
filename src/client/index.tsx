@@ -42,6 +42,7 @@ import {
 } from './st-extension-surface.tsx'
 import { StoryWorkspaceEditor } from './story-workspace-editor.tsx'
 import { createStoryWorkspaceNavigation, type StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
+import { startStoryWorkspaceSessionFromHostWorkspace } from './story-workspace-launch-source.ts'
 import { installStoryWorkspaceSessionCard } from './story-workspace-session-card.tsx'
 
 interface SidebarDestinationOwnerProps {
@@ -2757,7 +2758,7 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
     agentPresetId?: string,
     regexPackIds?: readonly string[],
   ) => Promise<void>
-  readonly startStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
+  readonly startStoryWorkspaceSession: (hostWorkspaceId: string, workspaceId: string, request: string) => Promise<void>
   readonly continueStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
   readonly renamePreset: (id: string, name: string) => Promise<PresetLibrarySummary>
   readonly deletePreset: (id: string) => Promise<void>
@@ -2880,7 +2881,23 @@ function SidebarRoleplayDestination({
     && !accessSaving
   const blankSessionReady = currentSession?.blank === true
     && workspaceEnabled
-  const storyWorkspaceLaunchReady = blankSessionReady
+  const currentRoleplaySession = isAgentRpCapabilityPresetId(sessionAgentPreset(currentSession))
+  const storySessionWorkspaces = settingsSnapshot.status === 'ready'
+    ? workspaceSnapshot.items.filter(item => allowsAgentRpEntry(settingsSnapshot.value, item.workspaceId))
+      .map(item => ({ id: String(item.workspaceId), title: item.title }))
+    : []
+  const defaultStorySessionWorkspaceId = workspaceEnabled
+    ? String(workspace.workspaceId)
+    : storySessionWorkspaces.length === 1 ? storySessionWorkspaces[0]?.id : undefined
+  const storyWorkspaceLaunchUnavailableReason = currentRoleplaySession
+    ? undefined
+    : settingsSnapshot.status === 'loading'
+      ? '正在读取可用的会话工作区…'
+      : settingsSnapshot.status === 'error'
+        ? '会话工作区设置暂时不可用，请稍后重试。'
+        : storySessionWorkspaces.length === 0
+          ? '先在 Agent RP 工作台为一个 DSH 工作区启用入口，再从这里开始游玩。'
+          : undefined
   const unavailableReason = currentSessionId === undefined
     ? '先点侧栏的“新会话”，再从这里选择角色或迁移聊天'
     : !currentSession?.blank
@@ -3163,11 +3180,13 @@ function SidebarRoleplayDestination({
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
       {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
-      {...(storyWorkspaceLaunchReady && currentSessionId !== undefined ? {
-        launchSourceSessionId: String(currentSessionId),
-        onStartSession: (sourceSessionId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId, request),
-      } : {})}
-      {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(sessionAgentPreset(currentSession))
+      {...(currentRoleplaySession ? {} : {
+        launchTargets: storySessionWorkspaces,
+        ...(defaultStorySessionWorkspaceId === undefined ? {} : { defaultLaunchTargetId: defaultStorySessionWorkspaceId }),
+        ...(storyWorkspaceLaunchUnavailableReason === undefined ? {} : { launchUnavailableReason: storyWorkspaceLaunchUnavailableReason }),
+        onStartSession: (hostWorkspaceId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(hostWorkspaceId, workspaceId, request),
+      })}
+      {...(currentSessionId === undefined || !currentRoleplaySession
         ? {}
         : {
             sessionId: String(currentSessionId),
@@ -12980,19 +12999,42 @@ export function apply(ctx: ClientContext): void {
     if (conversation === undefined) throw new Error('角色会话已经打开，但暂时还不能发送这一回合；请稍后重试')
     await conversation.send(request)
   }
-  const startStoryWorkspaceFromBlankSession = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
+  const launchStoryWorkspaceFromSession = async (sessionId: SessionId, workspaceId: string): Promise<SessionId> => {
     const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
-    if (summary === undefined || !summary.blank) throw new Error('只能从尚未开始的会话进入游玩场地')
-    const launchedSessionId = await launchRoleplaySession({
+    if (summary === undefined) throw new Error('用于启动游玩场地的来源会话当前不可用')
+    return launchRoleplaySession({
       format: 0,
       sourceSessionId: String(sessionId),
       kind: 'story-workspace',
       workspaceId,
     })
-    await archiveConsumedBlankSession(sessionId)
-    const conversation = ctx.sessions.scope(launchedSessionId)?.get('conversation') as IConversation | undefined
-    if (conversation === undefined) throw new Error('游玩会话已经创建，但暂时还不能发送第一回合；请稍后重试')
-    await conversation.send(request)
+  }
+  const startStoryWorkspaceInHostWorkspace = async (
+    hostWorkspaceId: string,
+    workspaceId: string,
+    request: string,
+  ): Promise<void> => {
+    const hostWorkspace = ctx.workspaces.list.getSnapshot().items
+      .find(item => String(item.workspaceId) === hostWorkspaceId)
+    if (hostWorkspace === undefined) throw new Error('选择的会话工作区当前不可用')
+    const settings = workspaceSettings.getSnapshot()
+    if (settings.status !== 'ready' || !allowsAgentRpEntry(settings.value, hostWorkspace.workspaceId)) {
+      throw new Error('选择的会话工作区尚未启用 Agent RP 入口')
+    }
+    await startStoryWorkspaceSessionFromHostWorkspace(
+      ctx.sessions,
+      hostWorkspace,
+      ctx.sessions.list.getSnapshot().current,
+      {
+        launch: sourceSessionId => launchStoryWorkspaceFromSession(sourceSessionId, workspaceId),
+        archive: archiveConsumedBlankSession,
+        send: async sessionId => {
+          const conversation = ctx.sessions.scope(sessionId)?.get('conversation') as IConversation | undefined
+          if (conversation === undefined) throw new Error('游玩会话已经创建，但暂时还不能发送第一回合；请稍后重试')
+          await conversation.send(request)
+        },
+      },
+    )
   }
   const startCharacterFromCurrentSession = async (
     sessionId: SessionId,
@@ -13414,7 +13456,7 @@ export function apply(ctx: ClientContext): void {
     renamePreset: renamePresetLibraryEntry, deletePreset: deletePresetLibraryEntry, listPersonas, savePersona, deletePersona,
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
-    startStoryWorkspaceSession: startStoryWorkspaceFromBlankSession,
+    startStoryWorkspaceSession: startStoryWorkspaceInHostWorkspace,
     continueStoryWorkspaceSession: sendStoryWorkspaceTurn,
     storyWorkspaceNavigation,
   }
