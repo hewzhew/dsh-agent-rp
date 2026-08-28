@@ -67,6 +67,7 @@ import {
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
+import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from '../story-world-events.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
 import {
@@ -1523,6 +1524,9 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onA
   const name = (id: string): string => workspace.characters.find(character => character.id === id)?.name ?? id
   const currentName = name(state.currentPlayerId)
   const latestEvent = workspace.world?.events.at(-1)
+  const pendingWorldEvents = storyPendingWorldEvents(workspace)
+  const pendingCharacterResult = hasPendingCharacterWorldResult(workspace)
+  const latestPendingEvent = pendingWorldEvents.at(-1)
   return <div className="story-play-view">
     <div className="story-play-heading"><div><span>可执行世界 · 第 {state.turn} 回合</span><h1>幻想乡飞行棋</h1>
       <p>棋盘是权威状态；正文和 Agent 只能读取投影，不能靠叙述改写棋子位置。</p></div>
@@ -1543,14 +1547,18 @@ function FlyingChessPlayView({ workspace, state, busy, dirty, sessionAction, onA
       </div>
     </div>
     {sessionAction !== undefined && <section className="story-play-session-action">
-      <div className="story-play-session-copy"><strong>{sessionAction === 'start' ? '让人物开始第一回合' : `让${currentName}行动`}</strong>
-        <span>{latestEvent === undefined ? '当前人物只会从规则程序给出的合法动作中选择；结算后再写成场面。' : `从“${latestEvent.title}”之后继续，由规则程序结算下一步。`}</span></div>
+      <div className="story-play-session-copy"><strong>{pendingCharacterResult
+        ? '把刚才的规则结果写成场面'
+        : sessionAction === 'start' ? '让人物开始第一回合' : `让${currentName}行动`}</strong>
+        <span>{pendingCharacterResult
+          ? `“${latestPendingEvent?.title ?? '已结算事件'}”尚未进入正文；先写入这次真实结果，再轮到下一步。`
+          : latestEvent === undefined ? '当前人物只会从规则程序给出的合法动作中选择；结算后再写成场面。' : `从“${latestEvent.title}”之后继续，由规则程序结算下一步。`}</span></div>
       <label className="story-play-session-input"><span>希望这一回合怎样发展？</span><textarea value={turnDirection} maxLength={4_000}
         placeholder="可以留空，让当前人物依据自己的认知选择；也可以补充一句方向。"
         onChange={event => { setTurnDirection(event.target.value) }} /></label>
       <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || dirty}
         onClick={() => { onAdvanceSession(resolveStoryTurnRequest(workspace, turnDirection)) }}>
-        {sessionAction === 'start' ? '开始游玩' : `让${currentName}行动并续写`}
+        {pendingCharacterResult ? '写入本回合' : sessionAction === 'start' ? '开始游玩' : `让${currentName}行动并续写`}
       </button>
     </section>}
     {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进棋局。</div>}

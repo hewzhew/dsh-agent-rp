@@ -36,6 +36,7 @@ import type {
 } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './story-research.ts'
 import { splitStorySourcePassages } from './story-source.ts'
+import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from './story-world-events.ts'
 
 /** Ordered model responsibilities before the visible character request. */
 export type StoryTurnStage = 'world-action' | 'cast' | 'history' | 'research' | 'character' | 'director' | 'section' | 'voice' | 'editor' | 'continuity'
@@ -2233,20 +2234,30 @@ function worldActionReceiptKey(runKey: string, sequence: number): string {
 function worldEventSequencesForRun(input: RunStoryTurnPipelineInput): readonly number[] {
   if (input.workspace.world === undefined) return []
   const runKey = worldActionRunKey(input, input.workspace.world.instanceId)
-  return [...new Set((input.workspace.worldActionReceipts ?? [])
+  return [...new Set([
+    ...storyPendingWorldEvents(input.workspace).map(event => event.sequence),
+    ...(input.workspace.worldActionReceipts ?? [])
     .filter(receipt => receipt.runKey === runKey)
-    .flatMap(receipt => receipt.eventSequences))]
+    .flatMap(receipt => receipt.eventSequences),
+  ])]
     .sort((left, right) => left - right)
 }
 
-function worldActionCharacterIdForRun(input: RunStoryTurnPipelineInput): string | undefined {
+function worldActionCharacterIdForRun(input: RunStoryTurnPipelineInput, sequences: readonly number[]): string | undefined {
   if (input.workspace.world === undefined) return undefined
   const runKey = worldActionRunKey(input, input.workspace.world.instanceId)
-  const characterIds = [...new Set((input.workspace.worldActionReceipts ?? [])
+  const receiptCharacterIds = [...new Set((input.workspace.worldActionReceipts ?? [])
     .filter(receipt => receipt.runKey === runKey)
     .map(receipt => receipt.characterId))]
-  if (characterIds.length > 1) throw new Error('一个故事回合记录了多个世界行动人物')
-  return characterIds[0]
+  if (receiptCharacterIds.length > 1) throw new Error('一个故事回合记录了多个世界行动人物')
+  const selected = new Set(sequences)
+  const characterIds = new Set([
+    ...receiptCharacterIds,
+    ...input.workspace.world.events.flatMap(event => selected.has(event.sequence) && event.actorId !== undefined
+      ? [event.actorId]
+      : []),
+  ])
+  return characterIds.size === 1 ? [...characterIds][0] : undefined
 }
 
 function characterReferenceNames(name: string): readonly string[] {
@@ -2351,6 +2362,13 @@ function renderWorldNarrative(input: RunStoryTurnPipelineInput, sequences: reado
   )
 }
 
+function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): string {
+  let remainder = text.replaceAll(worldNarrative, '')
+  const sentences = worldNarrative.match(/[^。！？.!?]+[。！？.!?]+|[^。！？.!?]+$/gu) ?? []
+  for (const sentence of sentences) remainder = remainder.replaceAll(sentence, '')
+  return remainder.trim()
+}
+
 function enforceFinalSections(
   editedDrafts: readonly StorySectionDraft[],
   preparedDrafts: readonly StorySectionDraft[],
@@ -2377,7 +2395,7 @@ function enforceFinalSections(
       }]
     }
     if (output.kind === 'prose' && worldNarrative !== '') {
-      const remainder = existing?.text.replace(worldNarrative, '').trim() ?? ''
+      const remainder = existing === undefined ? '' : proseWithoutHostWorldNarrative(existing.text, worldNarrative)
       return [{
         sectionId: output.id,
         name: output.name,
@@ -2799,14 +2817,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   if (playerInput === '') throw new Error('故事流水线没有可用的玩家输入')
   const reasoning = await resolveStoryStageReasoning(input)
   const resultEventSeqs: number[] = []
-  if (input.workspace.world !== undefined) {
+  if (input.workspace.world !== undefined && !hasPendingCharacterWorldResult(input.workspace)) {
     const workspace = await advanceStoryWorld(input, reasoning, playerInput, resultEventSeqs)
     input = { ...input, workspace }
     prior = existingBrief(input.agent.session.events, input)
     if (prior !== undefined) return prior.data
   }
   const worldEventSequences = worldEventSequencesForRun(input)
-  const worldActionCharacterId = worldActionCharacterIdForRun(input)
+  const worldActionCharacterId = worldActionCharacterIdForRun(input, worldEventSequences)
   const worldActionCharacter = worldActionCharacterId === undefined
     ? undefined
     : input.workspace.characters.find(character => character.id === worldActionCharacterId)
