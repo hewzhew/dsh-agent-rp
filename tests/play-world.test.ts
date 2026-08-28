@@ -468,6 +468,91 @@ test('lets the current private character Worker complete one world turn exactly 
   assert.equal(bodies.length, 2)
 })
 
+test('writes a manually completed world result before another character acts', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-manual-world-result-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '手动规则结果' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const historyId = createStoryOutputId()
+  const configured = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    outputs: [
+      { id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '' },
+      { id: historyId, name: '棋局记录', kind: 'history', enabled: true, instructions: '' },
+    ],
+  })
+  const installed = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  const withoutMap = store.save({ ...editable(installed), graph: { nodes: [], edges: [] } })
+  const manuallyAdvanced = store.dispatchWorldAction(withoutMap.id, {
+    format: 0,
+    revision: withoutMap.revision,
+    action: { type: 'roll', actorId: reimuId },
+  })
+  const stateBeforeWriting = manuallyAdvanced.world?.state as FlyingChessWorldState
+  assert.equal(stateBeforeWriting.currentPlayerId, marisaId)
+
+  const session = Session.create(SessionId('manual-world-result'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
+  })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        if (!system.includes('指定人物认知')) throw new Error('不应调用额外故事阶段：' + system.slice(0, 40))
+        const text = JSON.stringify({ observation: '看见已结算结果。', action: '', speech: null, insights: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent,
+    store,
+    workspace: manuallyAdvanced,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '请把刚才的规则结果写入正文。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data]
+    : [])
+  assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
+  assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [reimuId, marisaId])
+  assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
+    && request.subjectId === reimuId)?.dispatch), /thisCharacterRole=actor/u)
+  assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
+    && request.subjectId === marisaId)?.dispatch), /thisCharacterRole=observer/u)
+  assert.deepEqual(result.worldEventSequences, [1, 2, 3])
+  assert.match(result.finalDraft, /棋局开始：博丽灵梦、雾雨魔理沙 已就位。/u)
+  assert.match(result.finalDraft, /博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.equal(store.get(manuallyAdvanced.id).revision, manuallyAdvanced.revision)
+  assert.equal((store.get(manuallyAdvanced.id).world?.state as FlyingChessWorldState).currentPlayerId, marisaId)
+})
+
 test('keeps the exact world outcome while preserving only private-section character state', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-grounded-world-turn-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -626,9 +711,9 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(JSON.stringify(sanaeRequest?.dispatch), /thisCharacterRole=observer/u)
   assert.match(JSON.stringify(sanaeRequest?.dispatch.messages), /publicResponse=observe-only/u)
   assert.match(JSON.stringify(sanaeRequest?.dispatch), /让魔理沙留意结果/u)
-  assert.deepEqual(result.worldEventSequences, [2, 3])
+  assert.deepEqual(result.worldEventSequences, [1, 2, 3])
   assert.equal(result.hostOnlyWorldDraft, undefined)
-  assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.match(result.finalDraft, /## 对局正文\s+棋局开始：[\s\S]*博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
   assert.equal(result.finalDraft.match(/博丽灵梦没有可移动的飞机，本回合结束。/gu)?.length, 1)
   assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
@@ -669,7 +754,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.equal(typeof materialized?.continuityResultEventSeq, 'number')
   assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
-  assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [2, 3])
+  assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [1, 2, 3])
   assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
     { location: '', condition: '', objective: '继续当前棋局', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
@@ -989,6 +1074,24 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     characterId: reimuId,
     dialogue: '“都被你接到一块了，怎么反倒来问我？”',
   }])
+
+  sourcedSession.append('assistant/message', {
+    turn: 3,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: sourcedResult.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  sourcedSession.append('step/end', { turn: 3, step: 1 })
+  await materializeStoryTurn({
+    ctx: fake,
+    agent: sourcedAgent,
+    store,
+    workspaceId: sourced.id,
+    turn: 3,
+    signal: new AbortController().signal,
+  })
 
   const constrainedWorkspace = store.get(sourced.id)
   const constrainedSession = Session.create(SessionId('host-world-dialogue-no-world-restatement'))
