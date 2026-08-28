@@ -230,6 +230,13 @@ export interface StorySourceUrlImportRequest {
   readonly kind: 'original' | 'reference'
 }
 
+/** Revision-guarded request to promote one research-inbox URL into a full-text source. */
+export interface StoryResearchAcceptRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly itemId: string
+}
+
 /** One network result waiting for the player to keep or dismiss it. */
 export interface StoryResearchItem extends StoryWebSourceOrigin {
   readonly id: string

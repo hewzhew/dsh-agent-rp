@@ -399,6 +399,22 @@ async function importStorySourceUrl(
   return { ...result, sourceId: value.sourceImport.sourceId, truncated: value.sourceImport.truncated }
 }
 
+async function acceptStoryResearchItem(
+  workspace: StoryWorkspaceSnapshot,
+  itemId: string,
+): Promise<StorySourceImportResult> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/sources/research`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, itemId }),
+  })
+  const result = workspaceResult(value, '网络研究收取')
+  if (typeof value.sourceImport?.sourceId !== 'string' || typeof value.sourceImport.truncated !== 'boolean') {
+    throw new Error('网络研究收取响应无效')
+  }
+  return { ...result, sourceId: value.sourceImport.sourceId, truncated: value.sourceImport.truncated }
+}
+
 async function listPlayWorldResources(): Promise<readonly PlayWorldResourceDescriptor[]> {
   const response = await fetch(PLAY_WORLD_RESOURCES_PATH, { headers: { accept: 'application/json' } })
   const value = await response.json() as PlayWorldResourcesResponse
@@ -2816,7 +2832,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     }] }))
     setSelection({ kind: 'citation', id })
   }
-  const acceptResearch = (item: StoryResearchItem): void => {
+  const acceptResearchExcerpt = (item: StoryResearchItem): void => {
     const id = `source-${createClientOpaqueUuid()}`
     const content = [`# ${item.title}`, '', item.snippet || '这个搜索结果没有提供摘要。', '', `来源：${item.url}`].join('\n')
     update(current => ({
@@ -2839,6 +2855,25 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       researchInbox: current.researchInbox.filter(candidate => candidate.id !== item.id),
     }))
     select({ kind: 'source', id })
+    setNotice('已保留当前网络摘录；保存场地后生效')
+  }
+  const acceptResearchPage = (item: StoryResearchItem): void => {
+    if (workspace === undefined || dirty || webFetchAvailable !== true) return
+    setSaving(true)
+    setError(undefined)
+    void acceptStoryResearchItem(workspace, item.id).then(async accepted => {
+      setWorkspace(accepted.workspace)
+      setWorldTurn(accepted.worldTurn)
+      setWorldModuleAvailable(accepted.worldModuleAvailable)
+      setWebFetchAvailable(accepted.webFetchAvailable)
+      setWebSearchAvailable(accepted.webSearchAvailable)
+      setItems(await listWorkspaces())
+      setDirty(false)
+      select({ kind: 'source', id: accepted.sourceId })
+      setNotice(accepted.truncated
+        ? '网页正文已经收为资料；超过安全上限的部分未保存'
+        : '网页正文已经收为资料，并保留原查询与回合来源')
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const dismissResearch = (id: string): void => {
     update(current => ({ ...current, researchInbox: current.researchInbox.filter(item => item.id !== id) }))
@@ -3091,7 +3126,12 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
             <p>{item.snippet || '搜索服务没有返回摘要，可以先查看原网页再决定是否保留。'}</p>
             <div className="story-research-query">查询：{item.query}</div>
             <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
-              onClick={() => { acceptResearch(item) }}>收为资料</button>
+              disabled={saving || webFetchAvailable === null || webFetchAvailable === true && dirty}
+              title={webFetchAvailable === true && dirty ? '先保存当前修改，再读取网页正文' : undefined}
+              onClick={() => { if (webFetchAvailable === true) acceptResearchPage(item); else acceptResearchExcerpt(item) }}>
+              {webFetchAvailable === null ? '正在确认正文读取…' : webFetchAvailable ? '读取正文并收为资料' : '保留当前摘录'}</button>
+              {webFetchAvailable === true && <button className="story-studio-button" type="button" disabled={saving}
+                onClick={() => { acceptResearchExcerpt(item) }}>只保留当前摘录</button>}
               <button className="story-studio-button" type="button" onClick={() => { dismissResearch(item.id) }}>忽略</button></div>
           </article>)}</div>
         </section>}

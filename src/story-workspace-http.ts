@@ -11,6 +11,7 @@ import {
 } from './host-http.ts'
 import {
   STORY_WORKSPACES_PATH,
+  type StoryResearchAcceptRequest,
   type StorySourceUrlImportRequest,
   type StoryWorkspaceCreateRequest,
   type StoryCharacterActorBindRequest,
@@ -173,6 +174,15 @@ function parseSourceUrlImportRequest(value: unknown): StorySourceUrlImportReques
   return record as unknown as StorySourceUrlImportRequest
 }
 
+function parseResearchAcceptRequest(value: unknown): StoryResearchAcceptRequest {
+  const record = requestRecord(value)
+  if (record.format !== 0 || typeof record.revision !== 'number' || typeof record.itemId !== 'string'
+    || Object.keys(record).some(key => !['format', 'revision', 'itemId'].includes(key))) {
+    throw new Error('网络研究收取请求字段无效')
+  }
+  return record as unknown as StoryResearchAcceptRequest
+}
+
 function sourceNameFromUrl(value: string): string {
   const url = new URL(value)
   const lastSegment = url.pathname.split('/').filter(Boolean).at(-1)
@@ -182,6 +192,22 @@ function sourceNameFromUrl(value: string): string {
   } catch {
     return lastSegment.slice(0, 120) || url.hostname
   }
+}
+
+async function fetchSourcePage(ctx: Context, url: string): ReturnType<typeof fetchStoryWebPage> {
+  let fetched
+  try {
+    fetched = await fetchStoryWebPage(ctx, url)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/资料 URL 必须|没有可用的网页正文读取能力|最终 URL/u.test(message)) throw error
+    throw new Error(`网页读取失败：${message}`, { cause: error })
+  }
+  if (fetched.statusCode < 200 || fetched.statusCode >= 300) {
+    throw new Error(`网页读取失败：HTTP ${String(fetched.statusCode)}`)
+  }
+  if (fetched.content.trim() === '') throw new Error('网页读取失败：页面没有可导入的正文')
+  return fetched
 }
 
 function responseStatus(message: string): number {
@@ -273,18 +299,7 @@ export function installStoryWorkspaceHttp(
           if (!Number.isSafeInteger(input.revision) || input.revision < 0 || input.revision !== current.revision) {
             throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
           }
-          let fetched
-          try {
-            fetched = await fetchStoryWebPage(ctx, input.url)
-          } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error)
-            if (/资料 URL 必须|没有可用的网页正文读取能力|最终 URL/u.test(message)) throw error
-            throw new Error(`网页读取失败：${message}`, { cause: error })
-          }
-          if (fetched.statusCode < 200 || fetched.statusCode >= 300) {
-            throw new Error(`网页读取失败：HTTP ${String(fetched.statusCode)}`)
-          }
-          if (fetched.content.trim() === '') throw new Error('网页读取失败：页面没有可导入的正文')
+          const fetched = await fetchSourcePage(ctx, input.url)
           const sourceId = createStorySourceId()
           const workspace = store.appendSource(segments[0]!, input.revision, {
             id: sourceId,
@@ -297,6 +312,37 @@ export function installStoryWorkspaceHttp(
               url: fetched.url,
               ...(fetched.requestedUrl === fetched.url ? {} : { requestedUrl: fetched.requestedUrl }),
               truncated: fetched.truncated,
+            },
+          })
+          json(response, 201, {
+            ...workspaceResponse(ctx, store, workspace),
+            sourceImport: { sourceId, truncated: fetched.truncated },
+          })
+          return
+        }
+        if (request.method === 'POST' && segments.length === 3 && segments[1] === 'sources' && segments[2] === 'research') {
+          const input = parseResearchAcceptRequest(await readJson(request))
+          const current = store.get(segments[0]!)
+          if (!Number.isSafeInteger(input.revision) || input.revision < 0 || input.revision !== current.revision) {
+            throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
+          }
+          const item = current.researchInbox.find(candidate => candidate.id === input.itemId)
+          if (item === undefined) throw new Error('要收取的网络研究结果不存在')
+          const fetched = await fetchSourcePage(ctx, item.url)
+          const sourceId = createStorySourceId()
+          const workspace = store.appendSource(segments[0]!, input.revision, {
+            id: sourceId,
+            name: item.title,
+            kind: 'research',
+            enabled: true,
+            content: fetched.content,
+            origin: {
+              kind: 'web',
+              url: item.url,
+              query: item.query,
+              sessionId: item.sessionId,
+              turn: item.turn,
+              resultEventSeq: item.resultEventSeq,
             },
           })
           json(response, 201, {
