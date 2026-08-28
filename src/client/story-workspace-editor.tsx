@@ -824,7 +824,7 @@ function KnowledgeAudit({ workspace, selectedCharacterId, update, selectEvent }:
   </section>
 }
 
-function CharacterWorkspaceView({ workspace, character, actorResources, busy, dirty, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, openStoryMap, onBindActor, onDelete, selectEvent, addCharacter }: {
+function CharacterWorkspaceView({ workspace, character, actorResources, busy, dirty, update, perspectiveId, previewId, setPerspectiveId, setPreviewId, openStoryMap, onBindActor, onImportActor, onDelete, selectEvent, addCharacter }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly character: StoryCharacter | undefined
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -841,11 +841,14 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
     actor?: RoleplayResourceSelection,
     intent?: 'bind' | 'refresh',
   ) => void
+  readonly onImportActor: (characterId: string, file: File) => Promise<void>
   readonly onDelete: (id: string) => void
   readonly selectEvent: (id: string) => void
   readonly addCharacter: () => void
 }) {
   const [tab, setTab] = useState<'profile' | 'state' | 'knowledge' | 'agent'>('profile')
+  const [importingActor, setImportingActor] = useState(false)
+  const actorFileInputRef = useRef<HTMLInputElement>(null)
   if (character === undefined) return <div className="story-studio-empty"><span style={{ fontSize: 32 }}>◉</span><strong>先建立一位人物</strong>
     <span>人物档案、当前状态和独立认知会在这里汇合。</span><button className="story-studio-button story-studio-button-primary" type="button" onClick={addCharacter}>添加人物</button></div>
   const patchCharacter = (transform: (value: StoryCharacter) => StoryCharacter): void => {
@@ -905,11 +908,21 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
               : { kind: 'actor', id: event.target.value }) }}>
             <option value="">手写人物</option>{actorResources.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
           </select></Field>
-          {character.actor !== undefined && <div className="story-character-source-sync">
-            <button className="story-studio-button" type="button" disabled={busy || dirty}
+          <div className="story-character-source-sync">
+            <input ref={actorFileInputRef} hidden type="file" accept=".png,.json,.charx,image/png,application/json,application/zip"
+              onChange={event => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file === undefined) return
+                setImportingActor(true)
+                void onImportActor(character.id, file).finally(() => { setImportingActor(false) })
+              }} />
+            <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
+              onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入并绑定角色卡'}</button>
+            {character.actor !== undefined && <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
               onClick={() => { onBindActor(character.id, character.actor, 'refresh') }}>重新同步角色卡设定</button>
-            <span>更新姓名与角色卡档案；保留本局动态、认知、事件和世界进度。</span>
-          </div>}
+            }<span>导入会保存为可复用角色卡；绑定或同步只更新姓名与角色卡档案，保留本局动态、认知、事件和世界进度。</span>
+          </div>
           {dirty && <p className="story-studio-inline-note">保存当前修改后即可更换角色卡来源。</p>}
           <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
           <TextField label="原作署名" rows={4} value={(character.voiceAliases ?? []).join('\n')}
@@ -2581,21 +2594,50 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setSaving(false)
     }
   }
+  const importActorResource = async (file: File): Promise<ImportedWorldActor> => {
+    const imported = await importCharacterFile(file)
+    const actors = await listActorResources()
+    const actor = actors.find(candidate => candidate.id === `character:library:${imported.entry.id}`)
+    if (actor === undefined) throw new Error('角色卡已经导入，但暂时没有出现在人物资源目录中')
+    setActorResources(actors)
+    return { actor, outcome: imported.outcome }
+  }
   const importWorldActor = async (file: File): Promise<ImportedWorldActor> => {
     setSaving(true)
     setError(undefined)
     try {
-      const imported = await importCharacterFile(file)
-      const actors = await listActorResources()
-      const actor = actors.find(candidate => candidate.id === `character:library:${imported.entry.id}`)
-      if (actor === undefined) throw new Error('角色卡已经导入，但暂时没有出现在人物资源目录中')
-      setActorResources(actors)
+      const imported = await importActorResource(file)
+      const actor = imported.actor
       setNotice(imported.outcome === 'created'
         ? `角色卡「${actor.name}」已导入并加入人物槽位`
         : imported.outcome === 'restored'
           ? `角色卡「${actor.name}」已从收纳箱恢复并加入人物槽位`
           : `角色卡「${actor.name}」已在资源中心并加入人物槽位`)
       return { actor, outcome: imported.outcome }
+    } finally {
+      setSaving(false)
+    }
+  }
+  const importCharacterActor = async (characterId: string, file: File): Promise<void> => {
+    if (workspace === undefined || dirty) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      const imported = await importActorResource(file)
+      const saved = await bindStoryCharacterActor(workspace, characterId, { kind: 'actor', id: imported.actor.id })
+      setWorkspace(saved.workspace)
+      setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebFetchAvailable(saved.webFetchAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
+      setItems(await listWorkspaces())
+      setNotice(imported.outcome === 'created'
+        ? `角色卡「${imported.actor.name}」已导入并绑定；本局动态与世界进度保持不变`
+        : imported.outcome === 'restored'
+          ? `角色卡「${imported.actor.name}」已恢复并绑定；本局动态与世界进度保持不变`
+          : `角色卡「${imported.actor.name}」已绑定；本局动态与世界进度保持不变`)
+    } catch (reason) {
+      setError(errorMessage(reason))
     } finally {
       setSaving(false)
     }
@@ -3001,7 +3043,8 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     main = <CharacterWorkspaceView workspace={workspace} character={activeCharacter} actorResources={actorResources} busy={saving} dirty={dirty} update={update}
       perspectiveId={perspectiveId} previewId={previewId} setPerspectiveId={setPerspectiveId} setPreviewId={setPreviewId}
       openStoryMap={() => { navigate('map') }}
-      onBindActor={bindActor} onDelete={deleteCharacter} selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
+      onBindActor={bindActor} onImportActor={importCharacterActor} onDelete={deleteCharacter}
+      selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><div className="story-studio-actions">
