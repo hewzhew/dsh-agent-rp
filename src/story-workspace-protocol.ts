@@ -215,6 +215,15 @@ export interface StoryResearchItem extends StorySourceOrigin {
 export type StoryCitationTarget =
   | { readonly kind: 'node'; readonly nodeId: string }
   | { readonly kind: 'fact'; readonly factId: string }
+  | { readonly kind: 'event'; readonly eventId: string }
+
+/** Exact local-source excerpt ready to attach after a visible turn is committed. */
+export interface StoryCitationDraft {
+  readonly sourceId: string
+  readonly locator: string
+  readonly quote: string
+  readonly note: string
+}
 
 /** Durable source excerpt whose quote remains evidence if the source later changes. */
 export interface StoryCitation {
@@ -354,5 +363,7 @@ export interface StoryTurnMaterialization {
   /** Executable-world events that the visible reply was required to represent. */
   readonly worldEventSequences?: readonly number[]
   readonly changes: StoryChangeSet
+  /** Local research excerpts shown to the director for this turn. */
+  readonly citations?: readonly StoryCitationDraft[]
   readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }

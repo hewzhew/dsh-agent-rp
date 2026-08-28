@@ -23,6 +23,7 @@ import {
 } from './story-workspace.ts'
 import type {
   StoryChangeSet,
+  StoryCitationDraft,
   StoryCharacterStateChange,
   StoryEdgeSuggestion,
   StoryFactChange,
@@ -90,6 +91,8 @@ export interface StoryTurnBriefRecord {
   /** Exact executable-world events produced before this draft, when present. */
   readonly worldEventSequences?: readonly number[]
   readonly directorBrief: string
+  /** Exact local excerpts exposed to the director through the research stage. */
+  readonly researchCitations?: readonly StoryCitationDraft[]
   /** Structured source of the rendered final draft and later continuity update. */
   readonly finalSections: readonly StoryTurnFinalSection[]
   readonly finalDraft: string
@@ -114,6 +117,7 @@ export interface StoryTurnMaterializedRecord {
   readonly continuityResultEventSeq?: number
   readonly eventSummary: string
   readonly changes: StoryChangeSet
+  readonly researchCitations?: readonly StoryCitationDraft[]
 }
 
 /** Logged network-search request generated from an enabled Web source. */
@@ -182,7 +186,13 @@ interface StoryResearchEvidence {
   readonly kind: 'local' | 'web'
   readonly label: string
   readonly text: string
+  readonly citation?: StoryCitationDraft
   readonly voiceParts?: StoryVoiceEvidenceParts
+}
+
+interface StoryResearchRun {
+  readonly text: string
+  readonly citations: readonly StoryCitationDraft[]
 }
 
 interface StoryResearchFinding {
@@ -1831,7 +1841,27 @@ function localResearchEvidence(
     kind: 'local',
     label: researchEvidenceLabel(`${excerpt.sourceName} · ${excerpt.locator}`),
     text: excerpt.text,
+    citation: {
+      sourceId: excerpt.sourceId,
+      locator: excerpt.locator,
+      quote: excerpt.text,
+      note: '',
+    },
   }))
+}
+
+function researchSourceCitations(
+  evidence: readonly StoryResearchEvidence[],
+  note: string,
+): readonly StoryCitationDraft[] {
+  const seen = new Set<string>()
+  return evidence.flatMap(item => {
+    if (item.citation === undefined) return []
+    const key = [item.citation.sourceId, item.citation.locator, item.citation.quote].join('\n')
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{ ...item.citation, note }]
+  }).slice(0, 12)
 }
 
 function webResearchEvidence(
@@ -2391,7 +2421,7 @@ async function runResearch(
   resultEventSeqs: number[],
   worldOutcome: string,
   worldActionCharacterName: string | undefined,
-): Promise<string> {
+): Promise<StoryResearchRun> {
   const publicHistory = storyPublicHistory(input.workspace)
   const worldState = input.workspace.world === undefined ? '' : compileStoryDirectorWorldContext(input.workspace)
   const initialEvidence = boundResearchEvidence([
@@ -2502,8 +2532,21 @@ async function runResearch(
       evidenceByReference.set(item.reference, item)
     }
   }
-  if (findings.length > 0) return renderResearchBrief(findings, evidenceByReference)
-  return renderResearchEvidence(initialEvidence)
+  if (findings.length > 0) {
+    const cited = [...new Set(findings.flatMap(finding => finding.evidence))]
+      .flatMap(reference => {
+        const evidence = evidenceByReference.get(reference)
+        return evidence === undefined ? [] : [evidence]
+      })
+    return {
+      text: renderResearchBrief(findings, evidenceByReference),
+      citations: researchSourceCitations(cited, '本回合研究 Worker 引用'),
+    }
+  }
+  return {
+    text: renderResearchEvidence(initialEvidence),
+    citations: researchSourceCitations(initialEvidence, '本回合研究阶段提供给导演'),
+  }
 }
 
 function existingBrief(
@@ -2660,7 +2703,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     storyMap,
     foreshadowing,
   )
-  const researchText = hostDirectorAssignment === undefined
+  const research = hostDirectorAssignment === undefined
     ? await runResearch(
         input,
         reasoning,
@@ -2669,7 +2712,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         worldOutcome,
         worldActionCharacter?.name,
       )
-    : ''
+    : { text: '', citations: [] }
+  const researchText = research.text
   const fallback = directorFallback(input, playerInput, researchText, characterDecisionText, worldOutcome, worldNarrative)
   let directorDecision = hostDirectorAssignment === undefined
     ? undefined
@@ -2997,6 +3041,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     resultEventSeqs,
     ...(worldEventSequences.length === 0 ? {} : { worldEventSequences }),
     directorBrief,
+    ...(research.citations.length === 0 ? {} : { researchCitations: research.citations }),
     finalSections,
     finalDraft,
     modelContext: context,
@@ -3146,6 +3191,7 @@ export async function materializeStoryTurn(input: {
     participantIds: participants.map(character => character.id),
     worldEventSequences: briefEvent.data.worldEventSequences ?? [],
     changes: update.changes,
+    citations: briefEvent.data.researchCitations ?? [],
     webResearch: materializedWebResearch(
       input.agent.session.events,
       briefEvent.data.resultEventSeqs,
@@ -3163,6 +3209,7 @@ export async function materializeStoryTurn(input: {
     ...(continuityResultEventSeq === undefined ? {} : { continuityResultEventSeq }),
     eventSummary: update.history,
     changes: update.changes,
+    ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-materialized', record)
   await input.ctx.sessions.flush(input.agent.session)

@@ -23,7 +23,7 @@ function queryTerms(query: string): readonly string[] {
   const words = normalized.split(' ').filter(term => term.length >= 2)
   const compact = normalized.replace(/\s+/gu, '')
   const bigrams = Array.from({ length: Math.max(0, compact.length - 1) }, (_, index) => compact.slice(index, index + 2))
-  return [...new Set([...words, ...bigrams])].slice(0, 128)
+  return [...new Set([...bigrams, ...words])].slice(0, 128)
 }
 
 function relevance(text: string, terms: readonly string[]): number {

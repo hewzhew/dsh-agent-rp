@@ -510,6 +510,7 @@ test('runs logged story stages while keeping each character request privately sc
   }
 
   const result = await runStoryTurnPipeline(input)
+  const briefEvent = session.events.find(event => event.type === 'agent-rp/story-turn-brief')
 
   assert.equal(calls, 14)
   assert.equal(maxActive, 2)
@@ -673,6 +674,12 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /## 结论所引用的原始证据/u)
   assert.match(directorBody, /终章原著/u)
   assert.match(directorSystem, /Host 会把导演遗漏的有效决定补回默认正文分区/u)
+  assert.deepEqual(briefEvent?.data.researchCitations, [{
+    sourceId: originalSourceId,
+    locator: '终章设定 · 第 1 段',
+    quote: '鸦青印记只在列车终章显现。',
+    note: '本回合研究 Worker 引用',
+  }])
   assert.match(result.finalDraft, /阿梨看向徽章/u)
   assert.match(result.finalDraft, /「先看“徽章”，别忙着猜。」/u)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
@@ -792,6 +799,7 @@ test('materializes continuity from the actually visible reply instead of the pre
   const proseSectionId = createStoryOutputId()
   const privateSectionId = createStoryOutputId()
   const historySectionId = createStoryOutputId()
+  const localSourceId = 'source-00000000-0000-4000-8000-000000000099'
   const workspace = store.save({
     format: 2,
     id: created.id,
@@ -823,7 +831,13 @@ test('materializes continuity from the actually visible reply instead of the pre
       { id: privateSectionId, name: '魔理沙视角', kind: 'character', enabled: true, characterId: marisaId, instructions: '' },
       { id: historySectionId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '' },
     ],
-    sources: [],
+    sources: [{
+      id: localSourceId,
+      name: '旧站原著',
+      kind: 'original',
+      enabled: true,
+      content: '雨水会让旧徽章显出刻痕。',
+    }],
     citations: [],
     researchInbox: [],
   })
@@ -865,6 +879,12 @@ test('materializes continuity from the actually visible reply instead of the pre
     step: 1,
     resultEventSeqs: [webResult.seq],
     directorBrief: '内部导演方案。',
+    researchCitations: [{
+      sourceId: localSourceId,
+      locator: '徽章篇 · 第 4 段',
+      quote: '雨水会让旧徽章显出刻痕。',
+      note: '本回合研究 Worker 引用',
+    }],
     finalSections: [
       { sectionId: proseSectionId, name: '对局正文', kind: 'prose', text: '流水线准备稿里的公开正文。' },
       {
@@ -991,6 +1011,12 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('继续当前棋局'))?.knownBy, [marisaId])
   assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('都看见雨停'))?.knownBy, [reimuId, marisaId])
   assert.equal(result?.format, 3)
+  assert.deepEqual(result?.researchCitations, [{
+    sourceId: localSourceId,
+    locator: '徽章篇 · 第 4 段',
+    quote: '雨水会让旧徽章显出刻痕。',
+    note: '本回合研究 Worker 引用',
+  }])
   assert.equal(result?.changes.nodes.length, 2)
   assert.equal(result?.changes.edges.length, 2)
   const saved = store.get(workspace.id)
@@ -1002,6 +1028,19 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.deepEqual(saved.facts.find(fact => fact.text.includes('魔理沙决定继续当前棋局'))?.knownBy, [marisaId])
   assert.deepEqual(saved.facts.find(fact => fact.text.includes('灵梦与魔理沙都看见雨停'))?.knownBy, [reimuId, marisaId])
   assert.equal(saved.facts.some(fact => fact.text.includes('流水线准备稿里的私人决定')), false)
+  assert.deepEqual(saved.citations.map(citation => ({
+    sourceId: citation.sourceId,
+    locator: citation.locator,
+    quote: citation.quote,
+    note: citation.note,
+    target: citation.target,
+  })), [{
+    sourceId: localSourceId,
+    locator: '徽章篇 · 第 4 段',
+    quote: '雨水会让旧徽章显出刻痕。',
+    note: '本回合研究 Worker 引用',
+    target: { kind: 'event', eventId: saved.events[0]!.id },
+  }])
   const reimuContext = compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' })
   const marisaContext = compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' })
   assert.doesNotMatch(reimuContext.privateKnowledge, /继续当前棋局/u)
@@ -1035,4 +1074,5 @@ test('materializes continuity from the actually visible reply instead of the pre
     signal: new AbortController().signal,
   }), result)
   assert.equal(store.get(workspace.id).revision, saved.revision)
+  assert.equal(store.get(workspace.id).citations.length, 1)
 })
