@@ -35,6 +35,8 @@ interface RoleplayPersonaResourceDetail {
 interface RoleplayWorldCastSlotDetail {
   readonly id: string;
   readonly name: string;
+  /** Alternative written names used to match imported Character Cards to this role. */
+  readonly aliases: readonly string[];
   readonly description: string;
   readonly required: boolean;
 }

@@ -332,16 +332,28 @@ export class RoleplayResourceCatalog {
     }
     const castSlots = projected.castSlots.map((slot, index) => {
       if (typeof slot !== 'object' || slot === null || Array.isArray(slot)
-        || Object.keys(slot).some(key => !['id', 'name', 'description', 'required'].includes(key))) {
+        || Object.keys(slot).some(key => !['id', 'name', 'aliases', 'description', 'required'].includes(key))) {
         throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slot ${index}`)
       }
       const id = stableId(slot.id, 'Roleplay world cast slot id')
       if (typeof slot.name !== 'string' || slot.name.trim() === '' || slot.name.length > 120
+        || !Array.isArray(slot.aliases) || slot.aliases.length > 32
+        || slot.aliases.some((alias: unknown) => typeof alias !== 'string' || alias.trim() === '' || alias.length > 120)
         || typeof slot.description !== 'string' || slot.description.length > 500
         || typeof slot.required !== 'boolean') {
         throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slot ${JSON.stringify(id)}`)
       }
-      return Object.freeze({ id, name: slot.name.trim(), description: slot.description, required: slot.required })
+      const aliases = (slot.aliases as readonly string[]).map(alias => alias.trim())
+      if (new Set(aliases).size !== aliases.length || aliases.includes(slot.name.trim())) {
+        throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned repeated cast slot names`)
+      }
+      return Object.freeze({
+        id,
+        name: slot.name.trim(),
+        aliases: Object.freeze(aliases),
+        description: slot.description,
+        required: slot.required,
+      })
     })
     if (castSlots.length > 64 || new Set(castSlots.map(slot => slot.id)).size !== castSlots.length) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slots`)
