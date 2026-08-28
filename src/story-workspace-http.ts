@@ -18,7 +18,7 @@ import {
 } from './story-workspace-protocol.ts'
 import type { RoleplayResourceCatalog } from './roleplay-resource-catalog.ts'
 import {
-  PLAY_WORLD_MODULES_PATH,
+  PLAY_WORLD_RESOURCES_PATH,
   type PlayWorldActionRequest,
   type PlayWorldInstallRequest,
   type PlayWorldRestartRequest,
@@ -68,8 +68,13 @@ function parseSaveRequest(value: unknown, id: string): StoryWorkspaceSaveRequest
 
 function parseWorldInstallRequest(value: unknown): PlayWorldInstallRequest {
   const record = requestRecord(value)
-  if (record.format !== 0 || typeof record.revision !== 'number' || typeof record.moduleId !== 'string'
-    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'moduleId')) {
+  const resource = record.resource
+  if (record.format !== 0 || typeof record.revision !== 'number'
+    || typeof resource !== 'object' || resource === null || Array.isArray(resource)
+    || (resource as { readonly kind?: unknown }).kind !== 'world'
+    || typeof (resource as { readonly id?: unknown }).id !== 'string'
+    || Object.keys(resource).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
+    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'resource')) {
     throw new Error('游玩世界安装请求字段无效')
   }
   return record as unknown as PlayWorldInstallRequest
@@ -98,8 +103,14 @@ function workspaceResponse(store: StoryWorkspaceStore, workspace: StoryWorkspace
   readonly format: 1
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
+  readonly worldModuleAvailable: boolean | null
 } {
-  return { format: 1, workspace, worldTurn: store.worldTurn(workspace.id) ?? null }
+  return {
+    format: 1,
+    workspace,
+    worldTurn: store.worldTurn(workspace.id) ?? null,
+    worldModuleAvailable: workspace.world === undefined ? null : store.worlds.has(workspace.world.moduleId),
+  }
 }
 
 function parseActorBindRequest(value: unknown, characterId: string): StoryCharacterActorBindRequest {
@@ -132,7 +143,7 @@ export function installStoryWorkspaceHttp(
 ): void {
   ctx.effect(() => server.register({
     kind: 'exact',
-    path: PLAY_WORLD_MODULES_PATH,
+    path: PLAY_WORLD_RESOURCES_PATH,
     handler(request, response) {
       if (!trustedBrowserRequest(request)) {
         json(response, 403, { error: 'forbidden' })
@@ -143,7 +154,7 @@ export function installStoryWorkspaceHttp(
         json(response, 405, { error: 'method not allowed' })
         return
       }
-      json(response, 200, { format: 0, modules: store.worldModules() })
+      json(response, 200, { format: 0, worlds: store.worldResources() })
     },
   }), 'agent-rp: play world module HTTP')
   ctx.effect(() => server.register({

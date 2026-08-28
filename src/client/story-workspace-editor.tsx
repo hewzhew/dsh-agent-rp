@@ -32,8 +32,9 @@ import {
   type FlyingChessWorldState,
 } from '../flying-chess-protocol.ts'
 import {
-  PLAY_WORLD_MODULES_PATH,
+  PLAY_WORLD_RESOURCES_PATH,
   type PlayWorldModuleDescriptor,
+  type PlayWorldResourceDescriptor,
   type PlayWorldEvent,
   type PlayWorldTurnProjection,
 } from '../play-world-protocol.ts'
@@ -93,6 +94,7 @@ interface StoryWorkspaceResponse {
   readonly format?: number
   readonly workspace?: StoryWorkspaceSnapshot
   readonly worldTurn?: PlayWorldTurnProjection | null
+  readonly worldModuleAvailable?: boolean | null
   readonly workspaces?: readonly StoryWorkspaceSummary[]
   readonly error?: string
 }
@@ -100,11 +102,12 @@ interface StoryWorkspaceResponse {
 interface StoryWorkspaceResult {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
+  readonly worldModuleAvailable: boolean | null
 }
 
-interface PlayWorldModulesResponse {
+interface PlayWorldResourcesResponse {
   readonly format?: number
-  readonly modules?: readonly PlayWorldModuleDescriptor[]
+  readonly worlds?: readonly PlayWorldResourceDescriptor[]
   readonly error?: string
 }
 
@@ -281,10 +284,15 @@ async function listWorkspaces(): Promise<readonly StoryWorkspaceSummary[]> {
 }
 
 function workspaceResult(value: StoryWorkspaceResponse, label: string): StoryWorkspaceResult {
-  if (value.workspace === undefined || !Object.prototype.hasOwnProperty.call(value, 'worldTurn')) {
+  if (value.workspace === undefined || !Object.prototype.hasOwnProperty.call(value, 'worldTurn')
+    || !Object.prototype.hasOwnProperty.call(value, 'worldModuleAvailable')) {
     throw new Error(`${label}响应无效`)
   }
-  return { workspace: value.workspace, worldTurn: value.worldTurn ?? null }
+  return {
+    workspace: value.workspace,
+    worldTurn: value.worldTurn ?? null,
+    worldModuleAvailable: value.worldModuleAvailable ?? null,
+  }
 }
 
 async function readWorkspace(id: string): Promise<StoryWorkspaceResult> {
@@ -324,12 +332,12 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
   return workspaceResult(value, '游玩场地保存')
 }
 
-async function listPlayWorldModules(): Promise<readonly PlayWorldModuleDescriptor[]> {
-  const response = await fetch(PLAY_WORLD_MODULES_PATH, { headers: { accept: 'application/json' } })
-  const value = await response.json() as PlayWorldModulesResponse
-  if (!response.ok) throw new Error(value.error ?? `世界模块请求失败（${response.status}）`)
-  if (value.format !== 0 || !Array.isArray(value.modules)) throw new Error('世界模块列表响应无效')
-  return value.modules
+async function listPlayWorldResources(): Promise<readonly PlayWorldResourceDescriptor[]> {
+  const response = await fetch(PLAY_WORLD_RESOURCES_PATH, { headers: { accept: 'application/json' } })
+  const value = await response.json() as PlayWorldResourcesResponse
+  if (!response.ok) throw new Error(value.error ?? `世界资源请求失败（${response.status}）`)
+  if (value.format !== 0 || !Array.isArray(value.worlds)) throw new Error('世界资源列表响应无效')
+  return value.worlds
 }
 
 async function listActorResources(): Promise<readonly RoleplayResourceDescriptor[]> {
@@ -340,11 +348,14 @@ async function listActorResources(): Promise<readonly RoleplayResourceDescriptor
   return value.entries.filter(entry => entry.kind === 'actor' && entry.availability === 'available')
 }
 
-async function installPlayWorld(workspace: StoryWorkspaceSnapshot, moduleId: string): Promise<StoryWorkspaceResult> {
+async function installPlayWorld(
+  workspace: StoryWorkspaceSnapshot,
+  resource: PlayWorldResourceDescriptor['resource'],
+): Promise<StoryWorkspaceResult> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world`, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ format: 0, revision: workspace.revision, moduleId }),
+    body: JSON.stringify({ format: 0, revision: workspace.revision, resource }),
   })
   return workspaceResult(value, '世界模块安装')
 }
@@ -1722,35 +1733,49 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   </div>
 }
 
-function PlayWorldView({ workspace, modules, turn, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
-  readonly modules: readonly PlayWorldModuleDescriptor[]
+  readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly turn: PlayWorldTurnProjection | null
+  readonly moduleAvailable: boolean | null
   readonly busy: boolean
   readonly dirty: boolean
   readonly sessionAction: 'start' | 'continue' | undefined
   readonly onAdvanceSession: (request: string) => void
-  readonly onInstall: (moduleId: string) => void
+  readonly onInstall: (resource: PlayWorldResourceDescriptor['resource']) => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
   if (workspace.world === undefined) {
     return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
       <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
-      <div className="story-world-module-grid">{modules.map(module => {
-        const ready = workspace.characters.length >= module.minCharacters && workspace.characters.length <= module.maxCharacters
-        return <article className="story-world-module-card" key={module.id}><span>{module.category === 'game' ? '游戏' : '模拟'}</span><h2>{module.name}</h2>
-          <p>{module.summary}</p><small>需要 {module.minCharacters}–{module.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
+      <div className="story-world-module-grid">{worlds.map(world => {
+        const enoughCharacters = workspace.characters.length >= world.minCharacters && workspace.characters.length <= world.maxCharacters
+        const ready = enoughCharacters && world.moduleAvailable
+        return <article className="story-world-module-card" key={`${world.resource.kind}:${world.resource.id}`}>
+          <span>{world.category === 'game' ? '游戏' : '模拟'}</span><h2>{world.name}</h2>
+          <p>{world.summary}</p><small>需要 {world.minCharacters}–{world.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
+          {!world.moduleAvailable && <small>需要安装规则模块：{world.id}</small>}
           <button className="story-studio-button story-studio-button-primary" type="button" disabled={!ready || busy || dirty}
-            onClick={() => { onInstall(module.id) }}>{ready ? '装入这个世界' : '先补齐人物'}</button></article>
-      })}{modules.length === 0 && <div className="story-studio-empty">当前没有已安装的世界模块。</div>}</div>
+            onClick={() => { onInstall(world.resource) }}>{!world.moduleAvailable ? '规则模块尚未安装' : enoughCharacters ? '装入这个世界' : '先补齐人物'}</button></article>
+      })}{worlds.length === 0 && <div className="story-studio-empty">当前没有可装入的世界资源。</div>}</div>
     </div>
+  }
+  const installedResource = worlds.find(world => workspace.worldBinding?.resource === undefined
+    ? world.id === workspace.world?.moduleId
+    : world.resource.id === workspace.worldBinding.resource.id)
+  if (moduleAvailable === false) {
+    return <div className="story-studio-view"><div className="story-studio-view-heading"><div>
+      <h1>{workspace.world.title}</h1>
+      <p>场地资料和上一局状态仍然完整保存；安装对应规则模块后即可继续。</p>
+    </div></div><div className="story-play-notice">需要安装规则模块：{workspace.world.moduleId}</div>
+      <WorldEventList events={workspace.world.events} /></div>
   }
   if (workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID && isFlyingChessWorldState(workspace.world.state)) {
     return <FlyingChessPlayView workspace={workspace} state={workspace.world.state} turn={turn} busy={busy} dirty={dirty}
       sessionAction={sessionAction} onAdvanceSession={onAdvanceSession} onRestart={onRestart} onAction={onAction} />
   }
-  return <GenericPlayWorldView workspace={workspace} module={modules.find(module => module.id === workspace.world?.moduleId)}
+  return <GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} onAdvanceSession={onAdvanceSession}
     onRestart={onRestart} onAction={onAction} />
 }
@@ -1758,10 +1783,11 @@ function PlayWorldView({ workspace, modules, turn, busy, dirty, sessionAction, o
 /** Full-screen play space backed by typed story and executable-world state. */
 export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, storyTurn, launchSourceSessionId, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
-  const [worldModules, setWorldModules] = useState<readonly PlayWorldModuleDescriptor[]>([])
+  const [playWorlds, setPlayWorlds] = useState<readonly PlayWorldResourceDescriptor[]>([])
   const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
   const [workspace, setWorkspace] = useState<StoryWorkspaceSnapshot>()
   const [worldTurn, setWorldTurn] = useState<PlayWorldTurnProjection | null>(null)
+  const [worldModuleAvailable, setWorldModuleAvailable] = useState<boolean | null>(null)
   const [view, setView] = useState<StudioView>('world')
   const [selection, setSelection] = useState<StudioSelection>()
   const [readerSourceId, setReaderSourceId] = useState<string>()
@@ -1781,6 +1807,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     const next = await readWorkspace(id)
     setWorkspace(next.workspace)
     setWorldTurn(next.worldTurn)
+    setWorldModuleAvailable(next.worldModuleAvailable)
     setDirty(false)
     setSelection(undefined)
     setReaderSourceId(undefined)
@@ -1795,6 +1822,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     if (id === undefined) {
       setWorkspace(undefined)
       setWorldTurn(null)
+      setWorldModuleAvailable(null)
       setSelection(undefined)
       setReaderSourceId(undefined)
       return
@@ -1804,17 +1832,18 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   useEffect(() => {
     let active = true
     setLoading(true)
-    void Promise.all([listWorkspaces(), listPlayWorldModules(), listActorResources()]).then(async ([next, modules, actors]) => {
+    void Promise.all([listWorkspaces(), listPlayWorldResources(), listActorResources()]).then(async ([next, worlds, actors]) => {
       const selectedId = initialWorkspaceId !== undefined && next.some(item => item.id === initialWorkspaceId)
         ? initialWorkspaceId
         : next[0]?.id
       const selected = selectedId === undefined ? undefined : await readWorkspace(selectedId)
       if (!active) return
       setItems(next)
-      setWorldModules(modules)
+      setPlayWorlds(worlds)
       setActorResources(actors)
       setWorkspace(selected?.workspace)
       setWorldTurn(selected?.worldTurn ?? null)
+      setWorldModuleAvailable(selected?.worldModuleAvailable ?? null)
       setSelection(undefined)
       setReaderSourceId(undefined)
     }).catch(reason => {
@@ -1862,6 +1891,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setItems(next)
       setWorkspace(created.workspace)
       setWorldTurn(created.worldTurn)
+      setWorldModuleAvailable(created.worldModuleAvailable)
       setDirty(false)
       setSelection(undefined)
       setReaderSourceId(undefined)
@@ -1876,18 +1906,20 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     void saveWorkspace(workspace).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
       setItems(await listWorkspaces())
       setDirty(false)
       setNotice('所有修改已保存')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
-  const installWorld = (moduleId: string): void => {
+  const installWorld = (resource: PlayWorldResourceDescriptor['resource']): void => {
     if (workspace === undefined || dirty) return
     setSaving(true)
     setError(undefined)
-    void installPlayWorld(workspace, moduleId).then(async saved => {
+    void installPlayWorld(workspace, resource).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
       setItems(await listWorkspaces())
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经装入场地`)
@@ -1900,6 +1932,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     void restartPlayWorld(workspace).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
       setItems(await listWorkspaces())
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经重新开局；旧局事件与临时状态已清空`)
@@ -1914,6 +1947,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     void dispatchPlayWorldAction(workspace, worldTurn, actionId).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
       setItems(await listWorkspaces())
       setNotice(`${action.label}已经结算`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -1925,6 +1959,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     void bindStoryCharacterActor(workspace, characterId, actorId).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
       setItems(await listWorkspaces())
       setNotice(actorId === undefined ? '人物已经改为手写档案' : '角色卡已经绑定到本局人物')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -2205,7 +2240,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     main = <div className="story-studio-empty"><span style={{ fontSize: 34 }}>✦</span><strong>创建一个游玩场地</strong><span>人物、世界规则、认知、事件与资料会在同一处持续演进。</span>
       <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建场地</button></div>
   } else if (view === 'world') {
-    main = <PlayWorldView workspace={workspace} modules={worldModules} turn={worldTurn} busy={saving} dirty={dirty}
+    main = <PlayWorldView workspace={workspace} worlds={playWorlds} turn={worldTurn} moduleAvailable={worldModuleAvailable} busy={saving} dirty={dirty}
       sessionAction={launchSourceSessionId !== undefined && onStartSession !== undefined
         ? 'start'
         : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}

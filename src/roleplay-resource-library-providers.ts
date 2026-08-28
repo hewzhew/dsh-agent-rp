@@ -61,6 +61,21 @@ function noVariant(input: RoleplayResourceMaterializationInput): void {
   }
 }
 
+function worldInfoStorySource(library: WorldInfoLibrary, resourceId: string): string {
+  const resolved = library.resolve(libraryId(resourceId, 'standalone:library:'))
+  const entries = resolved.worldInfo.lorebook.entries.map((entry, index) => {
+    const title = entry.name?.trim() || entry.comment?.trim() || `条目 ${String(index + 1)}`
+    const keys = [...entry.keys, ...entry.secondaryKeys]
+    return [
+      `## ${title}`,
+      ...(keys.length === 0 ? [] : [`关键词：${keys.join('、')}`]),
+      ...(entry.enabled ? [] : ['状态：来源中已禁用']),
+      entry.content,
+    ].join('\n')
+  })
+  return [`# ${resolved.upload.name}`, ...entries].join('\n\n')
+}
+
 function greetingIndex(input: RoleplayResourceMaterializationInput): number {
   if (input.selection.variant === undefined) return 0
   const match = /^greeting:(0|[1-9][0-9]{0,5})$/u.exec(input.selection.variant)
@@ -294,6 +309,14 @@ export function roleplayLibraryResourceProviders(libraries: {
           purpose: primaryScene ? 'scenario' : 'selected',
         }),
         title: world.upload.name,
+      }
+    },
+    projectStorySource: (selection, descriptor) => {
+      if (selection.variant !== undefined) throw new Error(`${descriptor.name} 不支持资源变体`)
+      return {
+        name: descriptor.name,
+        kind: 'reference',
+        content: worldInfoStorySource(libraries.worldInfos, selection.id),
       }
     },
   }, ...(regexProvider === undefined ? [] : [regexProvider])]

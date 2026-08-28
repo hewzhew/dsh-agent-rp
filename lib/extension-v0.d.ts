@@ -2,6 +2,7 @@ import { SessionEvent } from "@deepseek-ai/dsh-session";
 import { Context } from "@deepseek-ai/cordis";
 import { JsonValue } from "@deepseek-ai/dsh-util-values";
 import { ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
+import { JsonValue as JsonValue$1 } from "@deepseek-ai/dsh-session/types";
 import { Agent } from "@deepseek-ai/dsh-agent";
 
 /** Reusable resource categories that can be selected independently for an experience. */
@@ -34,6 +35,14 @@ interface RoleplayPersonaResourceDetail {
 interface RoleplayWorldResourceDetail {
   readonly kind: 'world';
   readonly entryCount: number;
+  /** Optional trusted rule program advertised by this world resource. */
+  readonly playWorld?: {
+    readonly moduleId: string;
+    readonly summary: string;
+    readonly category: 'game' | 'simulation';
+    readonly minCharacters: number;
+    readonly maxCharacters: number;
+  };
 }
 interface RoleplayPromptPolicyResourceDetail {
   readonly kind: 'prompt-policy';
@@ -73,6 +82,10 @@ interface RoleplayResourceProvider {
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization;
   /** Resolve one actor into a stable model-facing identity without exposing source payloads. */
   projectActor?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayActorProjection;
+  /** Resolve one world resource into a trusted executable module recipe. */
+  projectWorld?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayWorldProjection;
+  /** Resolve one selected resource into an editable local research source. */
+  projectStorySource?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayStorySourceProjection;
 }
 /** Host-only actor snapshot stored by a play-space character instance. */
 interface RoleplayActorProjection {
@@ -85,6 +98,19 @@ interface RoleplayActorProjection {
     readonly systemPrompt: string;
     readonly postHistoryInstructions: string;
   };
+}
+/** Host-resolved recipe connecting one reusable world to trusted code and supporting sources. */
+interface RoleplayWorldProjection {
+  readonly moduleId: string;
+  /** Durable browser-visible JSON; providers must not include credentials or private Host state. */
+  readonly configuration: JsonValue;
+  readonly sources: readonly RoleplayResourceSelection[];
+}
+/** Host-only source snapshot copied into a story workspace during world installation. */
+interface RoleplayStorySourceProjection {
+  readonly name: string;
+  readonly kind: 'original' | 'reference' | 'research';
+  readonly content: string;
 }
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
 interface RoleplayResourceMaterializationContext {
@@ -108,6 +134,12 @@ interface LocatedRoleplayResource {
   readonly providerId: string;
   readonly descriptor: RoleplayResourceDescriptor;
 }
+/** One world resource whose provider supplies both presentation details and an installation recipe. */
+interface LocatedPlayWorldResource extends LocatedRoleplayResource {
+  readonly detail: RoleplayWorldResourceDetail & {
+    readonly playWorld: NonNullable<RoleplayWorldResourceDetail['playWorld']>;
+  };
+}
 /**
  * Live resource directory. Providers retain their own storage and mutation policy;
  * the catalog exposes only normalized discovery metadata and exact runtime ids.
@@ -124,8 +156,14 @@ declare class RoleplayResourceCatalog {
   locate(kind: RoleplayResourceKind, id: string): LocatedRoleplayResource | undefined;
   /** Read bounded kind-specific details from the unique owning provider. */
   inspect(kind: RoleplayResourceKind, id: string): RoleplayResourceDetail;
+  /** List only world resources backed by a provider-owned executable recipe. */
+  listPlayWorlds(): readonly LocatedPlayWorldResource[];
   /** Resolve one actor selection into a bounded stable identity snapshot. */
   projectActor(selection: RoleplayResourceSelection): RoleplayActorProjection;
+  /** Resolve a world selection into one bounded trusted-module recipe. */
+  projectWorld(selection: RoleplayResourceSelection): RoleplayWorldProjection;
+  /** Copy one reusable resource into a bounded editable story source. */
+  projectStorySource(selection: RoleplayResourceSelection): RoleplayStorySourceProjection;
   /** Dispatch one selection to its owning provider and verify append-only Session semantics. */
   materialize(selection: RoleplayResourceSelection, events: readonly SessionEvent[], context: RoleplayResourceMaterializationContext): RoleplayResourceMaterialization;
 }
@@ -1239,6 +1277,11 @@ interface PlayWorldModuleDescriptor {
   readonly minCharacters: number;
   readonly maxCharacters: number;
 }
+/** Browser-safe world resource plus the availability of its trusted rule module. */
+interface PlayWorldResourceDescriptor extends PlayWorldModuleDescriptor {
+  readonly resource: RoleplayResourceSelection;
+  readonly moduleAvailable: boolean;
+}
 /** One authoritative event emitted by an executable world. */
 interface PlayWorldEvent {
   readonly id: string;
@@ -1257,6 +1300,14 @@ interface PlayWorldSnapshot {
   readonly title: string;
   readonly state: unknown;
   readonly events: readonly PlayWorldEvent[];
+}
+/** Durable installation recipe resolved by the Host from one selected world resource. */
+interface PlayWorldBinding {
+  readonly resource?: RoleplayResourceSelection;
+  readonly moduleId: string;
+  readonly configuration: JsonValue$1;
+  readonly sourceReferences: readonly RoleplayResourceSelection[];
+  readonly sourceIds: readonly string[];
 }
 /** Character-specific model input produced without revealing private world state. */
 interface PlayWorldPromptProjection {
@@ -1325,6 +1376,8 @@ declare module '@deepseek-ai/cordis' {
 /** Inputs available when a module creates or advances one world instance. */
 interface PlayWorldContext {
   readonly characters: readonly StoryCharacter[];
+  readonly configuration: JsonValue;
+  readonly sourceReferences: readonly RoleplayResourceSelection[];
 }
 /** One legal character choice whose executable payload stays inside its owning module. */
 interface PlayWorldCharacterAction {
@@ -1407,10 +1460,14 @@ declare class PlayWorldRegistry {
   register(module: PlayWorldModule): () => void;
   /** List installed modules in stable presentation order. */
   list(): readonly PlayWorldModuleDescriptor[];
+  /** Report whether one durable module owner is currently installed. */
+  has(id: string): boolean;
   /** Resolve one installed module or fail before state can be changed. */
   get(id: string): PlayWorldModule;
   /** Parse one durable world through its owning module. */
   normalize(value: unknown, context: PlayWorldContext): PlayWorldSnapshot;
+  /** Retain a validated inert snapshot when its trusted module is temporarily unavailable. */
+  normalizeStored(value: unknown, context: PlayWorldContext): PlayWorldSnapshot;
 }
 /** Register one trusted module for the lifetime of its Cordis plugin context. */
 declare function registerPlayWorldModule(ctx: Context, module: PlayWorldModule): void;
@@ -1561,4 +1618,4 @@ declare function readRoleplayArtifactAutoStageIntent(value: JsonValue | undefine
 /** Versioned public contract for independent DSH plugins extending Agent RP. */
 /** The API version encoded by the `@hewzhew/dsh-agent-rp/extension/v0` export. */
 declare const AGENT_RP_EXTENSION_API_VERSION: 0;
-export { AGENT_RP_EXTENSION_API_VERSION, PLAY_WORLD_REGISTRY_KEY, type PlayWorldCharacterAction, type PlayWorldCharacterTurn, type PlayWorldContext, type PlayWorldEvent, type PlayWorldModule, type PlayWorldModuleDescriptor, type PlayWorldPromptProjection, type PlayWorldSnapshot, type PlayWorldWorkspaceEdgeTemplate, type PlayWorldWorkspaceNodeTemplate, type PlayWorldWorkspaceOutputTemplate, type PlayWorldWorkspaceScaffold, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerPlayWorldModule, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };
+export { AGENT_RP_EXTENSION_API_VERSION, type LocatedPlayWorldResource, PLAY_WORLD_REGISTRY_KEY, type PlayWorldBinding, type PlayWorldCharacterAction, type PlayWorldCharacterTurn, type PlayWorldContext, type PlayWorldEvent, type PlayWorldModule, type PlayWorldModuleDescriptor, type PlayWorldPromptProjection, type PlayWorldResourceDescriptor, type PlayWorldSnapshot, type PlayWorldWorkspaceEdgeTemplate, type PlayWorldWorkspaceNodeTemplate, type PlayWorldWorkspaceOutputTemplate, type PlayWorldWorkspaceScaffold, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorProjection, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayStorySourceProjection, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, type RoleplayWorldProjection, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerPlayWorldModule, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };

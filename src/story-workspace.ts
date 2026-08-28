@@ -12,20 +12,26 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-session'
 import {
   createDefaultPlayWorldRegistry,
   projectPlayWorldTurn,
+  type PlayWorldContext,
   type PlayWorldRegistry,
   type PlayWorldWorkspaceScaffold,
 } from './play-world.ts'
 import type {
   PlayWorldActionRequest,
+  PlayWorldBinding,
   PlayWorldInstallRequest,
+  PlayWorldResourceDescriptor,
   PlayWorldRestartRequest,
   PlayWorldSnapshot,
   PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
-import type { RoleplayActorProjection } from './roleplay-resource-catalog.ts'
+import { RoleplayResourceCatalog, type RoleplayActorProjection } from './roleplay-resource-catalog.ts'
+import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
+import { flyingChessWorldResourceProvider } from './play-world-resource-provider.ts'
 import type {
   StoryAudience,
   StoryCitation,
@@ -95,6 +101,8 @@ const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = {
   voiceDraftReasoning: 'routine',
 }
 const DEFAULT_PLAY_WORLD_REGISTRY = createDefaultPlayWorldRegistry()
+const DEFAULT_PLAY_WORLD_RESOURCES = new RoleplayResourceCatalog()
+DEFAULT_PLAY_WORLD_RESOURCES.register(flyingChessWorldResourceProvider())
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
 interface StoredStoryCharacter extends Omit<StoryCharacter, 'profile'> {}
@@ -122,6 +130,7 @@ interface StoredStoryWorkspace {
   readonly citations: readonly StoryCitation[]
   readonly researchInbox: readonly StoryResearchItem[]
   readonly world?: PlayWorldSnapshot
+  readonly worldBinding?: PlayWorldBinding
   readonly worldActionReceipts?: readonly StoryWorldActionReceipt[]
 }
 
@@ -153,6 +162,7 @@ interface LegacyManifest {
 export interface StoryWorkspaceStoreOptions {
   readonly root?: string
   readonly worlds?: PlayWorldRegistry
+  readonly resources?: RoleplayResourceCatalog
 }
 
 /** One model-selected legal action guarded by a stable story-turn idempotency key. */
@@ -203,6 +213,21 @@ function cleanLabel(value: unknown, subject: string, max = 240): string {
   return result
 }
 
+function normalizeResourceSelection(value: unknown, kind: 'actor' | 'world', subject: string): RoleplayResourceSelection {
+  if (!isRecord(value) || value.kind !== kind || typeof value.id !== 'string'
+    || value.id.trim() === '' || value.id.trim() !== value.id || /\s/u.test(value.id)
+    || value.variant !== undefined && (typeof value.variant !== 'string'
+      || value.variant.trim() === '' || value.variant.trim() !== value.variant || /\s/u.test(value.variant))
+    || Object.keys(value).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')) {
+    throw new Error(`${subject}无效`)
+  }
+  return {
+    kind,
+    id: value.id,
+    ...(value.variant === undefined ? {} : { variant: value.variant }),
+  }
+}
+
 function requiredLabel(value: unknown, subject: string, max = 240): string {
   const result = cleanLabel(value, subject, max)
   if (result === '') throw new Error(`${subject}不能为空`)
@@ -225,6 +250,55 @@ function normalizeWorldActionReceipt(value: unknown, characterIds: ReadonlySet<s
     actionId: requiredLabel(value.actionId, '世界动作 id'),
     resultEventSeq: safeInteger(value.resultEventSeq, '世界动作决策事件序号'),
     eventSequences: value.eventSequences.map(sequence => safeInteger(sequence, '世界事件序号')),
+  }
+}
+
+function normalizeWorldBinding(value: unknown, moduleId: string): PlayWorldBinding {
+  if (value === undefined) {
+    return { moduleId, configuration: {}, sourceReferences: [], sourceIds: [] }
+  }
+  if (!isRecord(value) || value.moduleId !== moduleId || !Array.isArray(value.sourceReferences)
+    || !Array.isArray(value.sourceIds)
+    || Object.keys(value).some(key => !['resource', 'moduleId', 'configuration', 'sourceReferences', 'sourceIds'].includes(key))) {
+    throw new Error('游玩世界资源绑定无效')
+  }
+  const configuration = snapshotJsonValue(value.configuration) as JsonValue | undefined
+  if (configuration === undefined || Buffer.byteLength(JSON.stringify(configuration), 'utf8') > 1024 * 1024) {
+    throw new Error('游玩世界结构化配置无效')
+  }
+  const resource = value.resource === undefined
+    ? undefined
+    : normalizeResourceSelection(value.resource, 'world', '游玩世界资源引用')
+  const sourceReferences = value.sourceReferences.map(reference => normalizeResourceSelection(
+    reference, 'world', '游玩世界资料引用',
+  ))
+  if (new Set(sourceReferences.map(reference => JSON.stringify(reference))).size !== sourceReferences.length) {
+    throw new Error('游玩世界资料引用重复')
+  }
+  const sourceIds = value.sourceIds.map(sourceId => {
+    assertId(sourceId, SOURCE_ID_PATTERN, '游玩世界资料')
+    return sourceId as string
+  })
+  if (new Set(sourceIds).size !== sourceIds.length || sourceIds.length !== sourceReferences.length) {
+    throw new Error('游玩世界资料绑定无效')
+  }
+  return {
+    ...(resource === undefined ? {} : { resource }),
+    moduleId,
+    configuration,
+    sourceReferences,
+    sourceIds,
+  }
+}
+
+function playWorldContext(
+  characters: readonly StoryCharacter[],
+  binding: PlayWorldBinding,
+): PlayWorldContext {
+  return {
+    characters,
+    configuration: binding.configuration,
+    sourceReferences: binding.sourceReferences,
   }
 }
 
@@ -346,18 +420,7 @@ function normalizeCharacter(value: unknown): StoryCharacter {
   assertId(value.id, CHARACTER_ID_PATTERN, '人物')
   let actor: StoryCharacter['actor']
   if (value.actor !== undefined) {
-    if (!isRecord(value.actor) || value.actor.kind !== 'actor' || typeof value.actor.id !== 'string'
-      || value.actor.id.trim() === '' || value.actor.id.trim() !== value.actor.id || /\s/u.test(value.actor.id)
-      || (value.actor.variant !== undefined && (typeof value.actor.variant !== 'string'
-        || value.actor.variant.trim() === '' || value.actor.variant.trim() !== value.actor.variant || /\s/u.test(value.actor.variant)))
-      || Object.keys(value.actor).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')) {
-      throw new Error('人物绑定的角色资源无效')
-    }
-    actor = {
-      kind: 'actor',
-      id: value.actor.id,
-      ...(value.actor.variant === undefined ? {} : { variant: value.actor.variant }),
-    }
+    actor = normalizeResourceSelection(value.actor, 'actor', '人物绑定的角色资源')
   }
   return {
     id: value.id,
@@ -600,7 +663,12 @@ function researchText(value: unknown, subject: string, max = MAX_CITATION_BYTES)
 }
 
 function normalizeSourceOrigin(value: unknown): StorySourceOrigin {
-  if (!isRecord(value) || value.kind !== 'web') throw new Error('故事资料来源无效')
+  if (!isRecord(value)) throw new Error('故事资料来源无效')
+  if (value.kind === 'resource') {
+    if (Object.keys(value).some(key => key !== 'kind' && key !== 'resource')) throw new Error('故事资料来源无效')
+    return { kind: 'resource', resource: normalizeResourceSelection(value.resource, 'world', '故事资料资源引用') }
+  }
+  if (value.kind !== 'web') throw new Error('故事资料来源无效')
   const sessionId = cleanLabel(value.sessionId, '故事资料来源 Session', 240)
   if (sessionId === '') throw new Error('故事资料来源 Session 不能为空')
   return {
@@ -633,6 +701,7 @@ function normalizeResearchItem(value: unknown): StoryResearchItem {
   if (!isRecord(value)) throw new Error('研究收件箱项目不是对象')
   assertId(value.id, RESEARCH_ID_PATTERN, '研究收件箱项目')
   const origin = normalizeSourceOrigin(value)
+  if (origin.kind !== 'web') throw new Error('研究收件箱来源必须是网络结果')
   const title = cleanLabel(value.title, '研究结果标题', 240)
   if (title === '') throw new Error('研究结果标题不能为空')
   const publishedAt = value.publishedAt === undefined
@@ -709,7 +778,17 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   const characters = value.characters.map(normalizeCharacter)
   assertUnique(characters.map(character => character.id), '人物')
   const characterIds = new Set(characters.map(character => character.id))
-  const world = value.world === undefined ? undefined : worlds.normalize(value.world, { characters })
+  const rawWorldModuleId = isRecord(value.world) && typeof value.world.moduleId === 'string'
+    ? value.world.moduleId
+    : undefined
+  if (value.world !== undefined && rawWorldModuleId === undefined) throw new Error('游玩世界快照无效')
+  const worldBinding = rawWorldModuleId === undefined
+    ? undefined
+    : normalizeWorldBinding(value.worldBinding, rawWorldModuleId)
+  if (value.world === undefined && value.worldBinding !== undefined) throw new Error('游玩世界资源绑定没有对应世界')
+  const world = value.world === undefined || worldBinding === undefined
+    ? undefined
+    : worlds.normalizeStored(value.world, playWorldContext(characters, worldBinding))
   const worldActionReceipts = value.worldActionReceipts === undefined
     ? []
     : Array.isArray(value.worldActionReceipts)
@@ -760,6 +839,16 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   const sources = value.sources.map(normalizeSource)
   assertUnique(sources.map(source => source.id), '故事资料')
   const sourceIds = new Set(sources.map(source => source.id))
+  if (worldBinding !== undefined) {
+    for (const [index, sourceId] of worldBinding.sourceIds.entries()) {
+      const source = sources.find(candidate => candidate.id === sourceId)
+      const expected = worldBinding.sourceReferences[index]
+      if (source === undefined || source.origin?.kind !== 'resource'
+        || expected === undefined || JSON.stringify(source.origin.resource) !== JSON.stringify(expected)) {
+        throw new Error('游玩世界资料绑定指向不一致的故事资料')
+      }
+    }
+  }
   const citations = value.citations.map(citation => normalizeCitation(citation, sourceIds, nodeIds, factIds, eventIds))
   assertUnique(citations.map(citation => citation.id), '资料引用')
   const researchInbox = value.researchInbox.map(normalizeResearchItem)
@@ -799,6 +888,7 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
     .concat(researchInbox.flatMap(item => [item.query, item.title, item.snippet]))
   const bytes = documents.reduce((total, document) => total + Buffer.byteLength(document, 'utf8'), 0)
     + (world === undefined ? 0 : Buffer.byteLength(JSON.stringify(world), 'utf8'))
+    + (worldBinding === undefined ? 0 : Buffer.byteLength(JSON.stringify(worldBinding), 'utf8'))
     + Buffer.byteLength(JSON.stringify(worldActionReceipts), 'utf8')
   if (bytes > MAX_WORKSPACE_BYTES) throw new Error(`故事工作室不能超过 ${String(MAX_WORKSPACE_BYTES)} 字节`)
   return {
@@ -818,8 +908,18 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
     citations,
     researchInbox,
     ...(world === undefined ? {} : { world }),
+    ...(worldBinding === undefined ? {} : { worldBinding }),
     ...(worldActionReceipts.length === 0 ? {} : { worldActionReceipts }),
   }
+}
+
+/** Reconstruct the exact module context retained with one durable workspace world. */
+export function resolveStoryPlayWorldContext(workspace: StoryWorkspaceSnapshot): PlayWorldContext {
+  if (workspace.world === undefined) throw new Error('当前游玩场地没有可执行世界')
+  return playWorldContext(
+    workspace.characters,
+    workspace.worldBinding ?? normalizeWorldBinding(undefined, workspace.world.moduleId),
+  )
 }
 
 function atomicWrite(path: string, content: string): void {
@@ -890,6 +990,7 @@ function compactStored(snapshot: StoryWorkspaceSnapshot): StoredStoryWorkspace {
     citations: snapshot.citations,
     researchInbox: snapshot.researchInbox,
     ...(snapshot.world === undefined ? {} : { world: snapshot.world }),
+    ...(snapshot.worldBinding === undefined ? {} : { worldBinding: snapshot.worldBinding }),
     ...(snapshot.worldActionReceipts === undefined ? {} : { worldActionReceipts: snapshot.worldActionReceipts }),
   }
 }
@@ -1265,10 +1366,12 @@ function materializePlayWorldWorkspaceScaffold(
 export class StoryWorkspaceStore {
   readonly root: string
   readonly worlds: PlayWorldRegistry
+  readonly resources: RoleplayResourceCatalog | undefined
 
   constructor(options: StoryWorkspaceStoreOptions = {}) {
     this.root = resolve(options.root ?? dshHomePath('agent-rp', 'story-workspaces'))
     this.worlds = options.worlds ?? DEFAULT_PLAY_WORLD_REGISTRY
+    this.resources = options.resources ?? DEFAULT_PLAY_WORLD_RESOURCES
   }
 
   /** List valid workspaces newest first, migrating format 0 on first access. */
@@ -1344,6 +1447,7 @@ export class StoryWorkspaceStore {
       createdAt: current.createdAt,
       updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       ...(current.world === undefined ? {} : { world: current.world }),
+      ...(current.worldBinding === undefined ? {} : { worldBinding: current.worldBinding }),
       ...(current.worldActionReceipts === undefined ? {} : { worldActionReceipts: current.worldActionReceipts }),
     }, this.worlds)
     this.writeSnapshot(snapshot)
@@ -1351,35 +1455,98 @@ export class StoryWorkspaceStore {
     return this.get(snapshot.id)
   }
 
-  /** List executable worlds available to fresh or existing play spaces. */
-  worldModules() {
-    return this.worlds.list()
+  /** List resource-owned worlds, including recipes whose trusted module is not currently installed. */
+  worldResources(): readonly PlayWorldResourceDescriptor[] {
+    if (this.resources === undefined) return []
+    const modules = new Map(this.worlds.list().map(module => [module.id, module]))
+    return this.resources.listPlayWorlds().map(({ descriptor: resource, detail }) => {
+      const module = modules.get(detail.playWorld.moduleId)
+      if (module !== undefined && (module.summary !== detail.playWorld.summary
+        || module.category !== detail.playWorld.category
+        || module.minCharacters !== detail.playWorld.minCharacters
+        || module.maxCharacters !== detail.playWorld.maxCharacters)) {
+        throw new Error(`世界资源 ${JSON.stringify(resource.name)} 与规则模块元数据不一致`)
+      }
+      return {
+        id: detail.playWorld.moduleId,
+        resource: { kind: 'world' as const, id: resource.id },
+        name: resource.name,
+        summary: detail.playWorld.summary,
+        category: detail.playWorld.category,
+        minCharacters: detail.playWorld.minCharacters,
+        maxCharacters: detail.playWorld.maxCharacters,
+        moduleAvailable: module !== undefined,
+      }
+    }).sort((left, right) => left.name.localeCompare(right.name))
   }
 
   /** Project the current legal world choices without exposing executable module payloads. */
   worldTurn(id: string): PlayWorldTurnProjection | undefined {
     const current = this.get(id)
     if (current.world === undefined) return undefined
+    if (!this.worlds.has(current.world.moduleId)) return undefined
     const module = this.worlds.get(current.world.moduleId)
-    return projectPlayWorldTurn(module.characterTurn(current.world, { characters: current.characters }))
+    return projectPlayWorldTurn(module.characterTurn(current.world, playWorldContext(
+      current.characters,
+      current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId),
+    )))
   }
 
   /** Replace the executable world with one fresh module-owned instance. */
   installWorld(id: string, request: PlayWorldInstallRequest): StoryWorkspaceSnapshot {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
-    if (request.format !== 0 || typeof request.moduleId !== 'string') throw new Error('游玩世界安装请求无效')
-    const module = this.worlds.get(request.moduleId)
-    const context = { characters: current.characters }
+    if (request.format !== 0 || this.resources === undefined) throw new Error('游玩世界资源目录不可用')
+    const resource = normalizeResourceSelection(request.resource, 'world', '游玩世界资源引用')
+    const recipe = this.resources.projectWorld(resource)
+    const module = this.worlds.get(recipe.moduleId)
+    const projectedSources = recipe.sources.map(reference => ({
+      reference,
+      projection: this.resources!.projectStorySource(reference),
+    }))
+    const existingSources = new Map(current.sources.flatMap(source => source.origin?.kind === 'resource'
+      ? [[JSON.stringify(source.origin.resource), source] as const]
+      : []))
+    const sourceIds: string[] = []
+    const addedSources: StorySource[] = []
+    for (const { reference, projection } of projectedSources) {
+      const existing = existingSources.get(JSON.stringify(reference))
+      if (existing !== undefined) {
+        sourceIds.push(existing.id)
+        continue
+      }
+      const source: StorySource = {
+        id: createStorySourceId(),
+        name: projection.name,
+        kind: projection.kind,
+        enabled: true,
+        content: projection.content,
+        origin: { kind: 'resource', resource: reference },
+      }
+      sourceIds.push(source.id)
+      addedSources.push(source)
+    }
+    const binding: PlayWorldBinding = {
+      resource,
+      moduleId: recipe.moduleId,
+      configuration: recipe.configuration,
+      sourceReferences: recipe.sources,
+      sourceIds,
+    }
+    const context = playWorldContext(current.characters, binding)
     const world = module.create(context)
-    if (world.moduleId !== request.moduleId) throw new Error('游玩世界模块创建了另一模块的状态')
+    if (world.moduleId !== recipe.moduleId) throw new Error('游玩世界模块创建了另一模块的状态')
     const scaffold = current.graph.nodes.length === 0 || current.outputs.length === 0
       ? module.createWorkspaceScaffold?.(context)
       : undefined
     const materialized = scaffold === undefined ? undefined : materializePlayWorldWorkspaceScaffold(scaffold)
-    return this.commitWorld(current, world, [], materialized === undefined ? {} : {
-      ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
-      ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
+    return this.commitWorld(current, world, [], {
+      worldBinding: binding,
+      sources: [...current.sources, ...addedSources],
+      ...(materialized === undefined ? {} : {
+        ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
+        ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
+      }),
     })
   }
 
@@ -1389,7 +1556,8 @@ export class StoryWorkspaceStore {
     this.assertRevision(current, request.revision)
     if (request.format !== 0 || current.world === undefined) throw new Error('当前游玩场地没有可重新开始的世界')
     const module = this.worlds.get(current.world.moduleId)
-    const world = module.create({ characters: current.characters })
+    const binding = current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId)
+    const world = module.create(playWorldContext(current.characters, binding))
     if (world.moduleId !== current.world.moduleId) throw new Error('游玩世界模块重新开局时改变了状态所有者')
     const removedNodeIds = new Set(current.graph.nodes
       .filter(node => node.lifecycle === 'suggested' && node.sourceEventId !== undefined)
@@ -1442,11 +1610,13 @@ export class StoryWorkspaceStore {
     if (request.format !== 0 || typeof request.cycleId !== 'string' || typeof request.actionId !== 'string'
       || current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
     const module = this.worlds.get(current.world.moduleId)
-    const turn = module.characterTurn(current.world, { characters: current.characters })
+    const binding = current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId)
+    const context = playWorldContext(current.characters, binding)
+    const turn = module.characterTurn(current.world, context)
     if (turn === undefined || turn.id !== request.cycleId) throw new Error('游玩世界回合已经变化')
     const action = turn.actions.find(candidate => candidate.id === request.actionId)
     if (action === undefined) throw new Error('游玩世界动作不再合法')
-    const world = module.dispatch(current.world, action.action, { characters: current.characters })
+    const world = module.dispatch(current.world, action.action, context)
     if (world.moduleId !== current.world.moduleId || world.instanceId !== current.world.instanceId
       || world.events.length < current.world.events.length
       || current.world.events.some((event, index) => world.events[index]?.id !== event.id)) {
@@ -1470,13 +1640,15 @@ export class StoryWorkspaceStore {
     this.assertRevision(current, request.revision)
     if (current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
     const module = this.worlds.get(current.world.moduleId)
-    const turn = module.characterTurn(current.world, { characters: current.characters })
+    const binding = current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId)
+    const context = playWorldContext(current.characters, binding)
+    const turn = module.characterTurn(current.world, context)
     if (turn === undefined || turn.id !== request.cycleId || turn.characterId !== request.characterId) {
       throw new Error('人物选择的世界回合已经变化')
     }
     const action = turn.actions.find(candidate => candidate.id === request.actionId)
     if (action === undefined) throw new Error('人物选择的世界动作不再合法')
-    const world = module.dispatch(current.world, action.action, { characters: current.characters })
+    const world = module.dispatch(current.world, action.action, context)
     if (world.moduleId !== current.world.moduleId || world.instanceId !== current.world.instanceId
       || world.events.length < current.world.events.length
       || current.world.events.some((event, index) => world.events[index]?.id !== event.id)) {
@@ -1760,7 +1932,7 @@ export class StoryWorkspaceStore {
     current: StoryWorkspaceSnapshot,
     world: PlayWorldSnapshot,
     worldActionReceipts = current.worldActionReceipts ?? [],
-    workspacePatch: Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs'>> = {},
+    workspacePatch: Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs' | 'sources' | 'worldBinding'>> = {},
   ): StoryWorkspaceSnapshot {
     const snapshot = normalizeWorkspace({
       ...current,
@@ -1958,7 +2130,9 @@ export function compileStoryCharacterContext(
   const playerInput = cleanDocument(scene.playerInput, '本轮玩家输入')
   const worldContext = workspace.world === undefined
     ? ''
-    : worlds.get(workspace.world.moduleId).projectForCharacter(workspace.world, characterId, { characters: workspace.characters }).text
+    : worlds.get(workspace.world.moduleId).projectForCharacter(
+        workspace.world, characterId, resolveStoryPlayWorldContext(workspace),
+      ).text
   const text = [
     `# 人物：${character.name}`,
     ...(character.profile.systemPrompt.trim() === '' ? [] : ['## 扮演指令', character.profile.systemPrompt]),
@@ -2002,5 +2176,7 @@ export function compileStoryDirectorWorldContext(
   worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
 ): string {
   if (workspace.world === undefined) return ''
-  return worlds.get(workspace.world.moduleId).projectForDirector(workspace.world, { characters: workspace.characters }).text
+  return worlds.get(workspace.world.moduleId).projectForDirector(
+    workspace.world, resolveStoryPlayWorldContext(workspace),
+  ).text
 }

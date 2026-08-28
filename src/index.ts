@@ -20,6 +20,7 @@ import { installWorkspaceSettingsHttp } from './workspace-settings-http.ts'
 import { installStoryWorkspaceHttp } from './story-workspace-http.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 import { createFlyingChessWorldModule } from './flying-chess-world.ts'
+import { flyingChessWorldResourceProvider } from './play-world-resource-provider.ts'
 import {
   createDefaultPlayWorldRegistry,
   PLAY_WORLD_REGISTRY_KEY,
@@ -208,11 +209,15 @@ export {
   RoleplayResourceCatalog,
 } from './roleplay-resource-catalog.ts'
 export type {
+  LocatedPlayWorldResource,
   LocatedRoleplayResource,
+  RoleplayActorProjection,
   RoleplayResourceMaterialization,
   RoleplayResourceMaterializationContext,
   RoleplayResourceMaterializationInput,
   RoleplayResourceProvider,
+  RoleplayStorySourceProjection,
+  RoleplayWorldProjection,
 } from './roleplay-resource-catalog.ts'
 export {
   registerTavernResourcePreflightContributor,
@@ -1492,7 +1497,7 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     const regexPackLibrary = new RegexPackLibrary()
     const chatLibrary = new SillyTavernChatLibrary()
     const workspaceSettings = new WorkspaceSettingsStore()
-    const storyWorkspaces = new StoryWorkspaceStore({ worlds: playWorlds })
+    const storyWorkspaces = new StoryWorkspaceStore({ worlds: playWorlds, resources: resourceCatalog })
     const generatedImageLibrary = new GeneratedImageLibrary()
     for (const provider of roleplayLibraryResourceProviders({
       characters: characterLibrary,
@@ -1500,7 +1505,7 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
       presets: presetLibrary,
       regexPacks: regexPackLibrary,
       worldInfos: worldInfoLibrary,
-    }).concat(nativePromptPolicyResourceProvider())) ctx.effect(
+    }).concat(nativePromptPolicyResourceProvider(), flyingChessWorldResourceProvider())) ctx.effect(
       () => resourceCatalog.register(provider),
       `agent-rp: built-in resource provider ${provider.id}`,
     )

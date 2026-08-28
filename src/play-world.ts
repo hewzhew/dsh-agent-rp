@@ -1,6 +1,8 @@
 /** Registry and lifecycle boundary for executable play-space worlds. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-session'
+import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import type {
   StoryAudience,
   StoryCharacter,
@@ -33,6 +35,8 @@ declare module '@deepseek-ai/cordis' {
 /** Inputs available when a module creates or advances one world instance. */
 export interface PlayWorldContext {
   readonly characters: readonly StoryCharacter[]
+  readonly configuration: JsonValue
+  readonly sourceReferences: readonly RoleplayResourceSelection[]
 }
 
 /** One legal character choice whose executable payload stays inside its owning module. */
@@ -202,6 +206,11 @@ export class PlayWorldRegistry {
       .sort((left, right) => left.name.localeCompare(right.name))
   }
 
+  /** Report whether one durable module owner is currently installed. */
+  has(id: string): boolean {
+    return this.#modules.has(id)
+  }
+
   /** Resolve one installed module or fail before state can be changed. */
   get(id: string): PlayWorldModule {
     const registration = this.#modules.get(id)
@@ -216,6 +225,56 @@ export class PlayWorldRegistry {
       throw new Error('游玩世界快照无效')
     }
     return this.get((value as { readonly moduleId: string }).moduleId).normalize(value, context)
+  }
+
+  /** Retain a validated inert snapshot when its trusted module is temporarily unavailable. */
+  normalizeStored(value: unknown, context: PlayWorldContext): PlayWorldSnapshot {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)
+      && typeof (value as { readonly moduleId?: unknown }).moduleId === 'string'
+      && this.has((value as { readonly moduleId: string }).moduleId)) {
+      return this.normalize(value, context)
+    }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('游玩世界快照无效')
+    const record = value as Record<string, unknown>
+    if (Object.keys(record).some(key => !['format', 'instanceId', 'moduleId', 'moduleVersion', 'title', 'state', 'events'].includes(key))
+      || record.format !== 0 || typeof record.instanceId !== 'string' || record.instanceId.trim() === '' || record.instanceId.length > 240
+      || typeof record.moduleId !== 'string' || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(record.moduleId)
+      || !Number.isSafeInteger(record.moduleVersion) || Number(record.moduleVersion) < 0
+      || typeof record.title !== 'string' || record.title.trim() === '' || record.title.length > 120
+      || !Array.isArray(record.events) || record.events.length > 100_000) {
+      throw new Error('游玩世界快照无效')
+    }
+    const state = snapshotJsonValue(record.state) as JsonValue | undefined
+    if (state === undefined) throw new Error('游玩世界状态不是 JSON')
+    const events = record.events.map((item, index) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new Error('游玩世界事件无效')
+      const event = item as Record<string, unknown>
+      if (Object.keys(event).some(key => !['id', 'sequence', 'type', 'title', 'summary', 'actorId'].includes(key))
+        || typeof event.id !== 'string' || event.id.trim() === '' || event.id.length > 240
+        || event.sequence !== index || typeof event.type !== 'string' || event.type.trim() === '' || event.type.length > 120
+        || typeof event.title !== 'string' || event.title.trim() === '' || event.title.length > 240
+        || typeof event.summary !== 'string' || event.summary.length > 4000
+        || event.actorId !== undefined && (typeof event.actorId !== 'string' || event.actorId.trim() === '' || event.actorId.length > 240)) {
+        throw new Error('游玩世界事件无效')
+      }
+      return Object.freeze({
+        id: event.id,
+        sequence: index,
+        type: event.type,
+        title: event.title,
+        summary: event.summary,
+        ...(event.actorId === undefined ? {} : { actorId: event.actorId }),
+      })
+    })
+    return Object.freeze({
+      format: 0,
+      instanceId: record.instanceId,
+      moduleId: record.moduleId,
+      moduleVersion: Number(record.moduleVersion),
+      title: record.title,
+      state,
+      events: Object.freeze(events),
+    })
   }
 }
 

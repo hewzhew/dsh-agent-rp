@@ -1,7 +1,10 @@
 /** Browser-safe records for executable worlds hosted by one play space. */
 
-/** Same-origin discovery endpoint for installed world modules. */
-export const PLAY_WORLD_MODULES_PATH = '/api/agent-rp/play-world-modules'
+import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
+
+/** Same-origin discovery endpoint for resource-owned executable worlds. */
+export const PLAY_WORLD_RESOURCES_PATH = '/api/agent-rp/play-world-resources'
 
 /** Stable presentation metadata for one executable world module. */
 export interface PlayWorldModuleDescriptor {
@@ -11,6 +14,12 @@ export interface PlayWorldModuleDescriptor {
   readonly category: 'game' | 'simulation'
   readonly minCharacters: number
   readonly maxCharacters: number
+}
+
+/** Browser-safe world resource plus the availability of its trusted rule module. */
+export interface PlayWorldResourceDescriptor extends PlayWorldModuleDescriptor {
+  readonly resource: RoleplayResourceSelection
+  readonly moduleAvailable: boolean
 }
 
 /** One authoritative event emitted by an executable world. */
@@ -34,11 +43,20 @@ export interface PlayWorldSnapshot {
   readonly events: readonly PlayWorldEvent[]
 }
 
+/** Durable installation recipe resolved by the Host from one selected world resource. */
+export interface PlayWorldBinding {
+  readonly resource?: RoleplayResourceSelection
+  readonly moduleId: string
+  readonly configuration: JsonValue
+  readonly sourceReferences: readonly RoleplayResourceSelection[]
+  readonly sourceIds: readonly string[]
+}
+
 /** Request to attach a fresh executable world to one workspace revision. */
 export interface PlayWorldInstallRequest {
   readonly format: 0
   readonly revision: number
-  readonly moduleId: string
+  readonly resource: RoleplayResourceSelection
 }
 
 /** Request to recreate the current executable world and discard this playthrough's derived story state. */

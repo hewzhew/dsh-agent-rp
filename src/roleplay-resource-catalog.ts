@@ -1,7 +1,7 @@
 /** Source-neutral, read-only registry of reusable Roleplay resources. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, snapshotJsonValue, type JsonValue, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { isDeepStrictEqual } from 'node:util'
 import {
   parseRoleplayResourceDetail,
@@ -10,6 +10,7 @@ import {
   type RoleplayResourceDetail,
   type RoleplayResourceKind,
   type RoleplayResourceSelection,
+  type RoleplayWorldResourceDetail,
 } from './roleplay-resource-catalog-protocol.ts'
 
 /** Host service used by trusted plugins to publish discoverable Roleplay resources. */
@@ -32,6 +33,10 @@ export interface RoleplayResourceProvider {
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization
   /** Resolve one actor into a stable model-facing identity without exposing source payloads. */
   projectActor?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayActorProjection
+  /** Resolve one world resource into a trusted executable module recipe. */
+  projectWorld?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayWorldProjection
+  /** Resolve one selected resource into an editable local research source. */
+  projectStorySource?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayStorySourceProjection
 }
 
 /** Host-only actor snapshot stored by a play-space character instance. */
@@ -45,6 +50,21 @@ export interface RoleplayActorProjection {
     readonly systemPrompt: string
     readonly postHistoryInstructions: string
   }
+}
+
+/** Host-resolved recipe connecting one reusable world to trusted code and supporting sources. */
+export interface RoleplayWorldProjection {
+  readonly moduleId: string
+  /** Durable browser-visible JSON; providers must not include credentials or private Host state. */
+  readonly configuration: JsonValue
+  readonly sources: readonly RoleplayResourceSelection[]
+}
+
+/** Host-only source snapshot copied into a story workspace during world installation. */
+export interface RoleplayStorySourceProjection {
+  readonly name: string
+  readonly kind: 'original' | 'reference' | 'research'
+  readonly content: string
 }
 
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
@@ -73,6 +93,11 @@ export interface LocatedRoleplayResource {
   readonly descriptor: RoleplayResourceDescriptor
 }
 
+/** One world resource whose provider supplies both presentation details and an installation recipe. */
+export interface LocatedPlayWorldResource extends LocatedRoleplayResource {
+  readonly detail: RoleplayWorldResourceDetail & { readonly playWorld: NonNullable<RoleplayWorldResourceDetail['playWorld']> }
+}
+
 interface Registration {
   readonly token: symbol
   readonly id: string
@@ -80,6 +105,8 @@ interface Registration {
   readonly inspect?: NonNullable<RoleplayResourceProvider['inspect']>
   readonly materialize?: NonNullable<RoleplayResourceProvider['materialize']>
   readonly projectActor?: NonNullable<RoleplayResourceProvider['projectActor']>
+  readonly projectWorld?: NonNullable<RoleplayResourceProvider['projectWorld']>
+  readonly projectStorySource?: NonNullable<RoleplayResourceProvider['projectStorySource']>
 }
 
 const KIND_ORDER = new Map<RoleplayResourceKind, number>(
@@ -153,6 +180,8 @@ export class RoleplayResourceCatalog {
       ...(provider.inspect === undefined ? {} : { inspect: provider.inspect.bind(provider) }),
       ...(provider.materialize === undefined ? {} : { materialize: provider.materialize.bind(provider) }),
       ...(provider.projectActor === undefined ? {} : { projectActor: provider.projectActor.bind(provider) }),
+      ...(provider.projectWorld === undefined ? {} : { projectWorld: provider.projectWorld.bind(provider) }),
+      ...(provider.projectStorySource === undefined ? {} : { projectStorySource: provider.projectStorySource.bind(provider) }),
     }
     this.#providers.set(id, registration)
     return () => {
@@ -214,6 +243,20 @@ export class RoleplayResourceCatalog {
     return parseRoleplayResourceDetail(registration.inspect(located.descriptor), located.descriptor)
   }
 
+  /** List only world resources backed by a provider-owned executable recipe. */
+  listPlayWorlds(): readonly LocatedPlayWorldResource[] {
+    return Object.freeze(this.#locations('world').flatMap(located => {
+      const registration = this.#providers.get(located.providerId)
+      if (registration?.projectWorld === undefined) return []
+      if (registration.inspect === undefined) {
+        throw new Error(`Executable world provider ${JSON.stringify(located.providerId)} has no detail reader`)
+      }
+      const detail = parseRoleplayResourceDetail(registration.inspect(located.descriptor), located.descriptor)
+      if (detail.kind !== 'world' || detail.playWorld === undefined) return []
+      return [Object.freeze({ ...located, detail }) as LocatedPlayWorldResource]
+    }))
+  }
+
   /** Resolve one actor selection into a bounded stable identity snapshot. */
   projectActor(selection: RoleplayResourceSelection): RoleplayActorProjection {
     if (selection.kind !== 'actor') throw new Error('人物实例只能绑定 actor 资源')
@@ -236,6 +279,76 @@ export class RoleplayResourceCatalog {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid actor projection`)
     }
     return Object.freeze({ name: projected.name.trim(), profile: Object.freeze({ ...profile }) })
+  }
+
+  /** Resolve a world selection into one bounded trusted-module recipe. */
+  projectWorld(selection: RoleplayResourceSelection): RoleplayWorldProjection {
+    if (selection.kind !== 'world') throw new Error('游玩世界只能绑定 world 资源')
+    const located = this.locate(selection.kind, selection.id)
+    if (located === undefined) throw new Error(`Roleplay resource ${descriptorKey(selection)} is unavailable`)
+    if (located.descriptor.availability !== 'available') throw new Error(`Roleplay resource ${descriptorKey(selection)} is archived`)
+    if (selection.variant !== undefined) stableId(selection.variant, 'Roleplay resource variant')
+    const registration = this.#providers.get(located.providerId)
+    if (registration?.projectWorld === undefined) {
+      throw new Error(`世界资源 ${JSON.stringify(located.descriptor.name)} 没有可执行规则配方`)
+    }
+    const projected = registration.projectWorld(Object.freeze({ ...selection }), located.descriptor)
+    if (typeof projected !== 'object' || projected === null || Array.isArray(projected)
+      || Object.keys(projected).some(key => !['moduleId', 'configuration', 'sources'].includes(key))
+      || typeof projected.moduleId !== 'string'
+      || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(projected.moduleId)
+      || !Array.isArray(projected.sources) || projected.sources.length > 64) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid world projection`)
+    }
+    const configuration = snapshotJsonValue(projected.configuration) as JsonValue | undefined
+    if (configuration === undefined || Buffer.byteLength(JSON.stringify(configuration), 'utf8') > 1024 * 1024) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid world configuration`)
+    }
+    const sources = projected.sources.map(source => {
+      if (typeof source !== 'object' || source === null || Array.isArray(source)
+        || source.kind !== 'world' || typeof source.id !== 'string'
+        || Object.keys(source).some(key => !['kind', 'id', 'variant'].includes(key))) {
+        throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid world source reference`)
+      }
+      stableId(source.id, 'Roleplay world source id')
+      if (source.variant !== undefined) stableId(source.variant, 'Roleplay world source variant')
+      return Object.freeze({ kind: 'world' as const, id: source.id, ...(source.variant === undefined ? {} : { variant: source.variant }) })
+    })
+    if (new Set(sources.map(source => JSON.stringify(source))).size !== sources.length) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} repeated a world source reference`)
+    }
+    const detail = registration.inspect === undefined ? undefined : parseRoleplayResourceDetail(
+      registration.inspect(located.descriptor), located.descriptor,
+    )
+    if (detail?.kind === 'world' && detail.playWorld !== undefined && detail.playWorld.moduleId !== projected.moduleId) {
+      throw new Error(`世界资源 ${JSON.stringify(located.descriptor.name)} 的规则模块声明不一致`)
+    }
+    return Object.freeze({
+      moduleId: projected.moduleId,
+      configuration,
+      sources: Object.freeze(sources),
+    })
+  }
+
+  /** Copy one reusable resource into a bounded editable story source. */
+  projectStorySource(selection: RoleplayResourceSelection): RoleplayStorySourceProjection {
+    const located = this.locate(selection.kind, selection.id)
+    if (located === undefined) throw new Error(`Roleplay resource ${descriptorKey(selection)} is unavailable`)
+    if (located.descriptor.availability !== 'available') throw new Error(`Roleplay resource ${descriptorKey(selection)} is archived`)
+    if (selection.variant !== undefined) stableId(selection.variant, 'Roleplay resource variant')
+    const registration = this.#providers.get(located.providerId)
+    if (registration?.projectStorySource === undefined) {
+      throw new Error(`资源 ${JSON.stringify(located.descriptor.name)} 不能作为故事资料`)
+    }
+    const projected = registration.projectStorySource(Object.freeze({ ...selection }), located.descriptor)
+    if (typeof projected !== 'object' || projected === null || Array.isArray(projected)
+      || Object.keys(projected).some(key => !['name', 'kind', 'content'].includes(key))
+      || typeof projected.name !== 'string' || projected.name.trim() === '' || projected.name.length > 120
+      || !['original', 'reference', 'research'].includes(projected.kind)
+      || typeof projected.content !== 'string' || Buffer.byteLength(projected.content, 'utf8') > 2 * 1024 * 1024) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid story source projection`)
+    }
+    return Object.freeze({ name: projected.name.trim(), kind: projected.kind, content: projected.content })
   }
 
   /** Dispatch one selection to its owning provider and verify append-only Session semantics. */
