@@ -69,12 +69,25 @@ function parseSaveRequest(value: unknown, id: string): StoryWorkspaceSaveRequest
 function parseWorldInstallRequest(value: unknown): PlayWorldInstallRequest {
   const record = requestRecord(value)
   const resource = record.resource
+  const cast = record.cast
   if (record.format !== 0 || typeof record.revision !== 'number'
     || typeof resource !== 'object' || resource === null || Array.isArray(resource)
     || (resource as { readonly kind?: unknown }).kind !== 'world'
     || typeof (resource as { readonly id?: unknown }).id !== 'string'
     || Object.keys(resource).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
-    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'resource')) {
+    || !Array.isArray(cast) || cast.length > 64 || cast.some(selection => {
+      if (typeof selection !== 'object' || selection === null || Array.isArray(selection)) return true
+      const item = selection as Record<string, unknown>
+      const actor = item.actor
+      return typeof item.slotId !== 'string'
+        || typeof actor !== 'object' || actor === null || Array.isArray(actor)
+        || (actor as { readonly kind?: unknown }).kind !== 'actor'
+        || typeof (actor as { readonly id?: unknown }).id !== 'string'
+        || Object.keys(actor).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
+        || item.characterId !== undefined && typeof item.characterId !== 'string'
+        || Object.keys(item).some(key => key !== 'slotId' && key !== 'actor' && key !== 'characterId')
+    })
+    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'resource' && key !== 'cast')) {
     throw new Error('游玩世界安装请求字段无效')
   }
   return record as unknown as PlayWorldInstallRequest

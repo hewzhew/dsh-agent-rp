@@ -220,6 +220,11 @@
 .story-world-module-card p { color: var(--studio-muted); font-size: 11px; line-height: 1.6; margin: 0; }
 .story-world-module-card small { color: var(--studio-muted); font-size: 9px; }
 .story-world-module-card .story-studio-button { justify-self: start; margin-top: 4px; }
+.story-world-cast-slots { border-block: 1px solid var(--studio-border); display: grid; gap: 10px; padding-block: 12px; }
+.story-world-cast-slots label { align-items: center; display: grid; gap: 10px; grid-template-columns: minmax(120px, 1fr) minmax(150px, .9fr); }
+.story-world-cast-slots label > span { display: grid; gap: 3px; }
+.story-world-cast-slots b { font-size: 11px; }
+.story-world-cast-slots .story-studio-input { margin: 0; min-width: 0; }
 .story-studio-canvas { height: 100%; }
 .story-studio-canvas .react-flow__background { background: var(--studio-bg); }
 .story-studio-canvas .react-flow__controls { box-shadow: none; }
@@ -775,6 +780,7 @@
   .story-character-editor-grid,
   .story-character-knowledge-layout { grid-template-columns: 1fr; }
   .story-character-state-grid { grid-template-columns: 1fr; }
+  .story-world-cast-slots label { align-items: stretch; grid-template-columns: 1fr; }
   .story-character-fact { align-items: stretch; grid-template-columns: 1fr; }
   .story-character-fact-actions { justify-content: flex-start; }
   .story-timeline-group > summary { grid-template-columns: auto minmax(0, 1fr) auto; }

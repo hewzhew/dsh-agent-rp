@@ -255,11 +255,11 @@ function normalizeWorldActionReceipt(value: unknown, characterIds: ReadonlySet<s
 
 function normalizeWorldBinding(value: unknown, moduleId: string): PlayWorldBinding {
   if (value === undefined) {
-    return { moduleId, configuration: {}, sourceReferences: [], sourceIds: [] }
+    return { moduleId, configuration: {}, sourceReferences: [], sourceIds: [], cast: [] }
   }
   if (!isRecord(value) || value.moduleId !== moduleId || !Array.isArray(value.sourceReferences)
-    || !Array.isArray(value.sourceIds)
-    || Object.keys(value).some(key => !['resource', 'moduleId', 'configuration', 'sourceReferences', 'sourceIds'].includes(key))) {
+    || !Array.isArray(value.sourceIds) || value.cast !== undefined && !Array.isArray(value.cast)
+    || Object.keys(value).some(key => !['resource', 'moduleId', 'configuration', 'sourceReferences', 'sourceIds', 'cast'].includes(key))) {
     throw new Error('游玩世界资源绑定无效')
   }
   const configuration = snapshotJsonValue(value.configuration) as JsonValue | undefined
@@ -282,12 +282,28 @@ function normalizeWorldBinding(value: unknown, moduleId: string): PlayWorldBindi
   if (new Set(sourceIds).size !== sourceIds.length || sourceIds.length !== sourceReferences.length) {
     throw new Error('游玩世界资料绑定无效')
   }
+  const castValues = value.cast ?? []
+  if (castValues.length > 64) throw new Error('游玩世界人物槽位绑定过多')
+  const cast = castValues.map((item) => {
+    if (!isRecord(item) || Object.keys(item).some(key => key !== 'slotId' && key !== 'characterId')) {
+      throw new Error('游玩世界人物槽位绑定无效')
+    }
+    const slotId = requiredLabel(item.slotId, '游玩世界人物槽位 id')
+    if (/\s/u.test(slotId)) throw new Error('游玩世界人物槽位 id 不能包含空白')
+    assertId(item.characterId, CHARACTER_ID_PATTERN, '游玩世界人物')
+    return { slotId, characterId: item.characterId as string }
+  })
+  if (new Set(cast.map(item => item.slotId)).size !== cast.length
+    || new Set(cast.map(item => item.characterId)).size !== cast.length) {
+    throw new Error('游玩世界人物槽位绑定重复')
+  }
   return {
     ...(resource === undefined ? {} : { resource }),
     moduleId,
     configuration,
     sourceReferences,
     sourceIds,
+    cast,
   }
 }
 
@@ -295,8 +311,15 @@ function playWorldContext(
   characters: readonly StoryCharacter[],
   binding: PlayWorldBinding,
 ): PlayWorldContext {
+  const selectedCharacters = binding.cast.length === 0
+    ? characters
+    : binding.cast.map(item => {
+        const character = characters.find(candidate => candidate.id === item.characterId)
+        if (character === undefined) throw new Error(`游玩世界人物槽位 ${JSON.stringify(item.slotId)} 指向未知人物`)
+        return character
+      })
   return {
-    characters,
+    characters: selectedCharacters,
     configuration: binding.configuration,
     sourceReferences: binding.sourceReferences,
   }
@@ -1476,6 +1499,7 @@ export class StoryWorkspaceStore {
         minCharacters: detail.playWorld.minCharacters,
         maxCharacters: detail.playWorld.maxCharacters,
         moduleAvailable: module !== undefined,
+        castSlots: detail.playWorld.castSlots,
       }
     }).sort((left, right) => left.name.localeCompare(right.name))
   }
@@ -1500,6 +1524,74 @@ export class StoryWorkspaceStore {
     const resource = normalizeResourceSelection(request.resource, 'world', '游玩世界资源引用')
     const recipe = this.resources.projectWorld(resource)
     const module = this.worlds.get(recipe.moduleId)
+    if (!Array.isArray(request.cast) || request.cast.length > 64) throw new Error('游玩世界人物槽位选择无效')
+    const castSelections = request.cast.map((selection) => {
+      if (!isRecord(selection) || Object.keys(selection).some(key => !['slotId', 'actor', 'characterId'].includes(key))) {
+        throw new Error('游玩世界人物槽位选择无效')
+      }
+      const slotId = requiredLabel(selection.slotId, '游玩世界人物槽位 id')
+      if (/\s/u.test(slotId)) throw new Error('游玩世界人物槽位 id 不能包含空白')
+      const actor = normalizeResourceSelection(selection.actor, 'actor', `人物槽位 ${JSON.stringify(slotId)} 的角色资源`)
+      if (selection.characterId !== undefined) assertId(selection.characterId, CHARACTER_ID_PATTERN, '游玩世界既有人物')
+      return {
+        slotId,
+        actor,
+        ...(selection.characterId === undefined ? {} : { characterId: selection.characterId as string }),
+      }
+    })
+    if (new Set(castSelections.map(selection => selection.slotId)).size !== castSelections.length
+      || new Set(castSelections.map(selection => JSON.stringify(selection.actor))).size !== castSelections.length
+      || new Set(castSelections.flatMap(selection => selection.characterId === undefined ? [] : [selection.characterId])).size
+        !== castSelections.filter(selection => selection.characterId !== undefined).length) {
+      throw new Error('游玩世界人物槽位选择重复')
+    }
+    const slotById = new Map(recipe.castSlots.map(slot => [slot.id, slot]))
+    if (castSelections.some(selection => !slotById.has(selection.slotId))) {
+      throw new Error('游玩世界人物槽位选择包含未知槽位')
+    }
+    const selectedSlotIds = new Set(castSelections.map(selection => selection.slotId))
+    const missingRequiredSlot = recipe.castSlots.find(slot => slot.required && !selectedSlotIds.has(slot.id))
+    if (missingRequiredSlot !== undefined) {
+      throw new Error(`请为人物槽位 ${JSON.stringify(missingRequiredSlot.name)} 选择角色卡`)
+    }
+    if (recipe.castSlots.length === 0 && castSelections.length > 0
+      || recipe.castSlots.length > 0 && (castSelections.length < module.descriptor.minCharacters
+        || castSelections.length > module.descriptor.maxCharacters)) {
+      throw new Error(`游玩世界需要 ${String(module.descriptor.minCharacters)}–${String(module.descriptor.maxCharacters)} 位人物`)
+    }
+    const usedCharacterIds = new Set<string>()
+    const projectedCast = castSelections.map(selection => {
+      const projection = this.resources!.projectActor(selection.actor)
+      const existing = selection.characterId === undefined
+        ? current.characters.find(character => character.actor !== undefined
+          && JSON.stringify(character.actor) === JSON.stringify(selection.actor)
+          && !usedCharacterIds.has(character.id))
+        : current.characters.find(character => character.id === selection.characterId)
+      if (selection.characterId !== undefined && existing === undefined) {
+        throw new Error(`人物槽位 ${JSON.stringify(selection.slotId)} 指向的既有人物不存在`)
+      }
+      const character: StoryCharacter = existing === undefined
+        ? {
+            id: createStoryCharacterId(),
+            name: projection.name,
+            voiceAliases: [],
+            profile: projection.profile,
+            state: emptyCharacterState(),
+            actor: selection.actor,
+          }
+        : { ...existing, name: projection.name, profile: projection.profile, actor: selection.actor }
+      usedCharacterIds.add(character.id)
+      return { selection, character }
+    })
+    const replacements = new Map(projectedCast.map(item => [item.character.id, item.character]))
+    const characters = current.characters.map(character => replacements.get(character.id) ?? character)
+      .concat(projectedCast.flatMap(item => current.characters.some(character => character.id === item.character.id)
+        ? []
+        : [item.character]))
+    const cast = recipe.castSlots.flatMap(slot => {
+      const selected = projectedCast.find(item => item.selection.slotId === slot.id)
+      return selected === undefined ? [] : [{ slotId: slot.id, characterId: selected.character.id }]
+    })
     const projectedSources = recipe.sources.map(reference => ({
       reference,
       projection: this.resources!.projectStorySource(reference),
@@ -1532,8 +1624,9 @@ export class StoryWorkspaceStore {
       configuration: recipe.configuration,
       sourceReferences: recipe.sources,
       sourceIds,
+      cast,
     }
-    const context = playWorldContext(current.characters, binding)
+    const context = playWorldContext(characters, binding)
     const world = module.create(context)
     if (world.moduleId !== recipe.moduleId) throw new Error('游玩世界模块创建了另一模块的状态')
     const scaffold = current.graph.nodes.length === 0 || current.outputs.length === 0
@@ -1542,6 +1635,7 @@ export class StoryWorkspaceStore {
     const materialized = scaffold === undefined ? undefined : materializePlayWorldWorkspaceScaffold(scaffold)
     return this.commitWorld(current, world, [], {
       worldBinding: binding,
+      characters,
       sources: [...current.sources, ...addedSources],
       ...(materialized === undefined ? {} : {
         ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
@@ -1932,7 +2026,7 @@ export class StoryWorkspaceStore {
     current: StoryWorkspaceSnapshot,
     world: PlayWorldSnapshot,
     worldActionReceipts = current.worldActionReceipts ?? [],
-    workspacePatch: Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs' | 'sources' | 'worldBinding'>> = {},
+    workspacePatch: Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs' | 'sources' | 'characters' | 'worldBinding'>> = {},
   ): StoryWorkspaceSnapshot {
     const snapshot = normalizeWorkspace({
       ...current,
