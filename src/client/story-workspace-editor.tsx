@@ -64,6 +64,7 @@ import {
   rejectStorySuggestionBatch,
   storySuggestionBatch,
 } from '../story-suggestion-batch.ts'
+import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
@@ -759,12 +760,7 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
     }] }))
   }
   const deleteFact = (factId: string): void => {
-    update(current => ({
-      ...current,
-      facts: current.facts.filter(fact => fact.id !== factId),
-      citations: current.citations.map(citation => citation.target?.kind === 'fact' && citation.target.factId === factId
-        ? citationWithoutTarget(citation) : citation),
-    }))
+    update(current => removeStoryFact(current, factId))
   }
   const knownFacts = workspace.facts.filter(fact => fact.status !== 'refuted' && factKnownBy(workspace, fact).includes(character.id))
   const relatedEvents = workspace.events.filter(event => event.participantIds.includes(character.id)
@@ -910,6 +906,15 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
       facts: current.facts.map(fact => fact.id === factId ? transform(fact) : fact),
     }))
   }
+  const addObservation = (): void => {
+    update(current => ({
+      ...current,
+      facts: [...current.facts, createEventObservationFact(`fact-${createClientOpaqueUuid()}`, event)],
+    }))
+  }
+  const deleteObservation = (factId: string): void => {
+    update(current => removeStoryFact(current, factId))
+  }
   const toggleObserver = (fact: StoryFact, characterId: string, checked: boolean): void => {
     patchObservation(fact.id, current => ({
       ...current,
@@ -949,17 +954,31 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
       </label>)}
     </div></div>
     <hr className="story-studio-divider" />
-    <div className="story-event-observations"><strong>由此事件形成的认知</strong>
-      {observations.map(fact => <div className="story-event-observation-editor" key={fact.id}>
-        <textarea aria-label="事件人物事实" className="story-studio-input" rows={3} value={fact.text}
-          onChange={change => { patchObservation(fact.id, current => ({ ...current, text: change.target.value })) }} />
-        <div className="story-studio-checks">{workspace.characters.map(character => <label className="story-studio-check" key={character.id}>
-          <input type="checkbox" checked={fact.knownBy.includes(character.id)}
-            onChange={change => { toggleObserver(fact, character.id, change.target.checked) }} />{character.name}
-        </label>)}</div>
-      </div>)}
-      {observations.length === 0 && <p>这次事件还没有形成可供人物使用的观察。</p>}
-      <button className="story-studio-button" type="button" onClick={onOpenKnowledge}>在认知矩阵中核对</button>
+    <div className="story-event-observations">
+      <div className="story-event-observations-heading"><div><strong>由此事件形成的认知</strong>
+        <span>先写会影响后续判断的事实，再选择真正看见、听见或后来得知它的人物。</span></div>
+        <button className="story-studio-button story-studio-button-primary" type="button" onClick={addObservation}>＋ 补记认知</button>
+      </div>
+      {observations.map(fact => {
+        const effectiveKnownBy = factKnownBy(workspace, fact)
+        return <div className="story-event-observation-editor" key={fact.id}>
+          <div className="story-event-observation-main"><textarea aria-label="事件人物事实" className="story-studio-input" rows={3} value={fact.text}
+            onChange={change => { patchObservation(fact.id, current => ({ ...current, text: change.target.value })) }} />
+            <div className="story-event-observation-actions"><select className="story-studio-input" aria-label="认知状态" value={fact.status}
+              onChange={change => { patchObservation(fact.id, current => ({ ...current, status: change.target.value as StoryFact['status'] })) }}>
+              <option value="asserted">确认</option><option value="uncertain">不确定</option><option value="refuted">已否定</option>
+            </select><button className="story-studio-icon-button story-studio-danger" type="button"
+              aria-label={`删除认知：${fact.text.slice(0, 48)}`} onClick={() => { deleteObservation(fact.id) }}>×</button></div>
+          </div>
+          <div className="story-event-observation-knowers"><span>真正知情者</span><div className="story-studio-checks">{workspace.characters.map(character => <label className="story-studio-check" key={character.id}>
+            <input type="checkbox" checked={effectiveKnownBy.includes(character.id)}
+              onChange={change => { toggleObserver(fact, character.id, change.target.checked) }} />{character.name}
+          </label>)}</div></div>
+          {effectiveKnownBy.length === 0 && <small>尚未分配给任何人物 Worker。</small>}
+        </div>
+      })}
+      {observations.length === 0 && <p>从这次经历中挑出会影响人物后续判断的事实。</p>}
+      <button className="story-studio-button" type="button" onClick={onOpenKnowledge}>在全局认知审计中核对</button>
     </div>
     {suggestionCount > 0 && <>
       <hr className="story-studio-divider" />
