@@ -875,7 +875,9 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     : [])
   const sourcedVoiceBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'voice'
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
-  assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:1/u)
+  assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:2/u)
+  assert.match(sourcedVoiceBody, /\[对话上下文\]\[示例\] 魔理沙｜你问的是哪句话？/u)
+  assert.match(sourcedVoiceBody, /\[目标人物\]\[示例\] 灵梦｜你自己说过的话，还要问我？/u)
   assert.doesNotMatch(sourcedVoiceBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
 
   const constrainedWorkspace = store.get(sourced.id)
