@@ -19,7 +19,7 @@ test('registers the complete Agent RP event vocabulary for exactly the plugin li
     }, { inject: ['sessions'] }))
 
     assert.equal(AGENT_RP_SESSION_EVENT_OWNER, '@hewzhew/dsh-agent-rp')
-    assert.equal(AGENT_RP_SESSION_EVENT_TYPES.length, 35)
+    assert.equal(AGENT_RP_SESSION_EVENT_TYPES.length, 37)
     assert.deepEqual([...LEGACY_AGENT_RP_EVENT_TYPES], [...AGENT_RP_SESSION_EVENT_TYPES])
     for (const type of AGENT_RP_SESSION_EVENT_TYPES) {
       assert.equal(root.sessions.recognizesEventType(type), true, type)
