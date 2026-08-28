@@ -1416,6 +1416,23 @@ function materializePlayWorldWorkspaceScaffold(
   }
 }
 
+function missingPlayWorldWorkspaceScaffold(
+  current: StoryWorkspaceSnapshot,
+  module: PlayWorldModule,
+  context: PlayWorldContext,
+): Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs'>> {
+  const needsGraph = current.graph.nodes.length === 0
+  const needsOutputs = current.outputs.length === 0
+  if (!needsGraph && !needsOutputs) return {}
+  const scaffold = module.createWorkspaceScaffold?.(context)
+  if (scaffold === undefined) return {}
+  const materialized = materializePlayWorldWorkspaceScaffold(scaffold)
+  return {
+    ...(needsGraph ? { graph: materialized.graph } : {}),
+    ...(needsOutputs ? { outputs: materialized.outputs } : {}),
+  }
+}
+
 function assemblePlayWorldCast(
   current: StoryWorkspaceSnapshot,
   recipe: RoleplayWorldProjection,
@@ -1720,18 +1737,11 @@ export class StoryWorkspaceStore {
     const context = playWorldContext(characters, binding)
     const world = module.create(context)
     if (world.moduleId !== recipe.moduleId) throw new Error('游玩世界模块创建了另一模块的状态')
-    const scaffold = current.graph.nodes.length === 0 || current.outputs.length === 0
-      ? module.createWorkspaceScaffold?.(context)
-      : undefined
-    const materialized = scaffold === undefined ? undefined : materializePlayWorldWorkspaceScaffold(scaffold)
     return this.commitWorld(current, world, [], {
       worldBinding: binding,
       characters,
       sources,
-      ...(materialized === undefined ? {} : {
-        ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
-        ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
-      }),
+      ...missingPlayWorldWorkspaceScaffold(current, module, context),
     })
   }
 
@@ -1772,11 +1782,13 @@ export class StoryWorkspaceStore {
     const module = this.worlds.get(current.world.moduleId)
     const { characters, cast } = assemblePlayWorldCast(current, recipe, module, this.resources, request.cast, true)
     const worldBinding: PlayWorldBinding = { ...bindingBase, cast }
-    const world = module.normalize(current.world, playWorldContext(characters, worldBinding))
+    const context = playWorldContext(characters, worldBinding)
+    const world = module.normalize(current.world, context)
     return this.commitWorld(current, world, current.worldActionReceipts ?? [], {
       characters,
       worldBinding,
       sources: recoveredSources.sources,
+      ...missingPlayWorldWorkspaceScaffold(current, module, context),
     })
   }
 
