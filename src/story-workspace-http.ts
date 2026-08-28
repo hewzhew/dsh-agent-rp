@@ -14,6 +14,7 @@ import {
   type StoryWorkspaceCreateRequest,
   type StoryCharacterActorBindRequest,
   type StoryWorkspaceSaveRequest,
+  type StoryWorkspaceSnapshot,
 } from './story-workspace-protocol.ts'
 import type { RoleplayResourceCatalog } from './roleplay-resource-catalog.ts'
 import {
@@ -21,6 +22,7 @@ import {
   type PlayWorldActionRequest,
   type PlayWorldInstallRequest,
   type PlayWorldRestartRequest,
+  type PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 
@@ -84,11 +86,20 @@ function parseWorldRestartRequest(value: unknown): PlayWorldRestartRequest {
 
 function parseWorldActionRequest(value: unknown): PlayWorldActionRequest {
   const record = requestRecord(value)
-  if (record.format !== 0 || typeof record.revision !== 'number' || record.action === undefined
-    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'action')) {
+  if (record.format !== 0 || typeof record.revision !== 'number'
+    || typeof record.cycleId !== 'string' || typeof record.actionId !== 'string'
+    || Object.keys(record).some(key => !['format', 'revision', 'cycleId', 'actionId'].includes(key))) {
     throw new Error('游玩世界动作请求字段无效')
   }
   return record as unknown as PlayWorldActionRequest
+}
+
+function workspaceResponse(store: StoryWorkspaceStore, workspace: StoryWorkspaceSnapshot): {
+  readonly format: 1
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly worldTurn: PlayWorldTurnProjection | null
+} {
+  return { format: 1, workspace, worldTurn: store.worldTurn(workspace.id) ?? null }
 }
 
 function parseActorBindRequest(value: unknown, characterId: string): StoryCharacterActorBindRequest {
@@ -107,7 +118,7 @@ function parseActorBindRequest(value: unknown, characterId: string): StoryCharac
 
 function responseStatus(message: string): number {
   if (/请求过大|不能超过/u.test(message)) return 413
-  if (/当前 revision/u.test(message)) return 409
+  if (/当前 revision|回合已经变化|动作不再合法/u.test(message)) return 409
   if (/无法读取故事工作区/u.test(message)) return 404
   return 400
 }
@@ -153,35 +164,42 @@ export function installStoryWorkspaceHttp(
           return
         }
         if (request.method === 'POST' && suffix === '') {
-          json(response, 201, { format: 1, workspace: store.create(parseCreateRequest(await readJson(request))) })
+          const workspace = store.create(parseCreateRequest(await readJson(request)))
+          json(response, 201, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 2 && segments[1] === 'world') {
-          json(response, 200, { format: 1, workspace: store.installWorld(segments[0]!, parseWorldInstallRequest(await readJson(request))) })
+          const workspace = store.installWorld(segments[0]!, parseWorldInstallRequest(await readJson(request)))
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'restart') {
-          json(response, 200, { format: 1, workspace: store.restartWorld(segments[0]!, parseWorldRestartRequest(await readJson(request))) })
+          const workspace = store.restartWorld(segments[0]!, parseWorldRestartRequest(await readJson(request)))
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'actions') {
-          json(response, 200, { format: 1, workspace: store.dispatchWorldAction(segments[0]!, parseWorldActionRequest(await readJson(request))) })
+          const workspace = store.dispatchWorldAction(segments[0]!, parseWorldActionRequest(await readJson(request)))
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 4 && segments[1] === 'characters' && segments[3] === 'actor') {
           const binding = parseActorBindRequest(await readJson(request), segments[2]!)
           if (binding.actor !== undefined && resources === undefined) throw new Error('当前 Host 没有可用的角色资源目录')
-          json(response, 200, { format: 1, workspace: store.bindCharacterActor(
+          const workspace = store.bindCharacterActor(
             segments[0]!, binding, binding.actor === undefined ? undefined : resources!.projectActor(binding.actor),
-          ) })
+          )
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'GET' && id !== undefined) {
-          json(response, 200, { format: 1, workspace: store.get(id) })
+          const workspace = store.get(id)
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'PUT' && id !== undefined) {
-          json(response, 200, { format: 1, workspace: store.save(parseSaveRequest(await readJson(request), id)) })
+          const workspace = store.save(parseSaveRequest(await readJson(request), id))
+          json(response, 200, workspaceResponse(store, workspace))
           return
         }
         if (request.method === 'DELETE' && id !== undefined) {

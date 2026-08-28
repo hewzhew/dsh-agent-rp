@@ -57,6 +57,8 @@ if (hostSource.includes('"use asm"')) {
 const extension = await import('@hewzhew/dsh-agent-rp/extension/v0')
 for (const name of [
   'AGENT_RP_EXTENSION_API_VERSION',
+  'PLAY_WORLD_REGISTRY_KEY',
+  'registerPlayWorldModule',
   'registerRoleplayResourceProvider',
   'registerRoleplayRuntimeExtension',
   'roleplayToolArtifactPresentationMeta',
