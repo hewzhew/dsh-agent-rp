@@ -26,7 +26,7 @@ declare module '@deepseek-ai/dsh-client-ui-chat/client' {
 }
 
 interface StoryWorkspaceLaunchState {
-  readonly workspaceId: string
+  readonly workspaceId?: string
 }
 
 interface StoryWorkspaceReadResponse {
@@ -39,18 +39,31 @@ interface StoryWorkspaceReadResponse {
   readonly error?: string
 }
 
-function workspaceIdFromLaunchEvent(event: {
+type StoryWorkspaceSelection =
+  | { readonly kind: 'launch'; readonly workspaceId: string }
+  | { readonly kind: 'change'; readonly workspaceId?: string }
+
+function storyWorkspaceSelectionFromEvent(event: {
   readonly type: string
   readonly seq: number
   readonly data: unknown
-}): string | undefined {
-  if (event.type !== 'agent-rp/story-workspace-selection' || event.seq !== 0
+}): StoryWorkspaceSelection | undefined {
+  if (event.type !== 'agent-rp/story-workspace-selection'
     || typeof event.data !== 'object' || event.data === null || Array.isArray(event.data)) return undefined
   const data = event.data as Record<string, unknown>
-  return data.format === 0 && data.source === 'launch' && data.sourceEventSeq === undefined
-    && typeof data.workspaceId === 'string' && data.workspaceId !== ''
-    ? data.workspaceId
-    : undefined
+  if (data.format !== 0 || !(data.workspaceId === undefined
+    || (typeof data.workspaceId === 'string' && data.workspaceId !== ''))) return undefined
+  if (data.source === 'launch') {
+    return event.seq === 0 && data.sourceEventSeq === undefined && typeof data.workspaceId === 'string'
+      ? { kind: 'launch', workspaceId: data.workspaceId }
+      : undefined
+  }
+  if (data.source !== undefined || !Number.isSafeInteger(data.sourceEventSeq)
+    || Number(data.sourceEventSeq) < 0 || Number(data.sourceEventSeq) >= event.seq) return undefined
+  return {
+    kind: 'change',
+    ...(typeof data.workspaceId === 'string' ? { workspaceId: data.workspaceId } : {}),
+  }
 }
 
 /** Build the same-origin URL for one play-space launch card read. */
@@ -85,22 +98,29 @@ export async function readStoryWorkspaceLaunchSummary(
   }
 }
 
-/** Project only the launch seed, not later interactive workspace changes. */
+/** Project the play space currently selected by one launched Session. */
 export const storyWorkspaceLaunchDefinition: ConversationNodeDefinition<StoryWorkspaceLaunchState> = {
   kind: 'agent-rp-story-workspace-launch',
   target: 'chat',
   match: (event) => {
-    const workspaceId = workspaceIdFromLaunchEvent(event)
-    return workspaceId === undefined ? null : { id: 'launch', role: 'start' }
+    const selection = storyWorkspaceSelectionFromEvent(event)
+    return selection === undefined ? null : {
+      id: 'launch',
+      role: selection.kind === 'launch' ? 'start' : 'update',
+    }
   },
   start: (_context, match) => {
-    const workspaceId = workspaceIdFromLaunchEvent(match.event)
-    if (workspaceId === undefined) throw new Error('游玩场地启动节点无效')
-    return { workspaceId }
+    const selection = storyWorkspaceSelectionFromEvent(match.event)
+    if (selection?.kind !== 'launch') throw new Error('游玩场地启动节点无效')
+    return { workspaceId: selection.workspaceId }
   },
-  update: context => context.state,
+  update: (context, match) => {
+    const selection = storyWorkspaceSelectionFromEvent(match.event)
+    if (selection?.kind !== 'change') return context.state
+    return selection.workspaceId === undefined ? {} : { workspaceId: selection.workspaceId }
+  },
   buildViewNode: (context): ChatConversationViewNode | null => {
-    if (context.start === undefined || context.state === undefined) return null
+    if (context.start === undefined || context.state?.workspaceId === undefined) return null
     return {
       key: context.key,
       kind: 'agent-rp-story-workspace-launch',
