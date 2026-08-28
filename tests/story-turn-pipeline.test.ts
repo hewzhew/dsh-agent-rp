@@ -25,7 +25,9 @@ const activeNodeId = 'node-00000000-0000-4000-8000-000000000002'
 const secretId = 'node-00000000-0000-4000-8000-000000000003'
 const aliceFactId = 'fact-00000000-0000-4000-8000-000000000001'
 const bobFactId = 'fact-00000000-0000-4000-8000-000000000002'
+const sharedFactId = 'fact-00000000-0000-4000-8000-000000000003'
 const historyEventId = 'event-00000000-0000-4000-8000-000000000001'
+const bobHistoryEventId = 'event-00000000-0000-4000-8000-000000000002'
 const sectionId = 'output-00000000-0000-4000-8000-000000000001'
 const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
@@ -131,19 +133,49 @@ function workspace(): StoryWorkspaceSnapshot {
         audience: 'director',
         knowledgeMode: 'override',
         knownBy: [bobId],
-        source: { kind: 'manual' },
+        source: { kind: 'event', eventId: bobHistoryEventId, evidence: '只有柏舟看见站牌背面反光。' },
+      },
+      {
+        id: sharedFactId,
+        text: '两人都看见雨停了。',
+        status: 'asserted',
+        audience: 'public',
+        knowledgeMode: 'override',
+        knownBy: [aliceId, bobId],
+        source: { kind: 'event', eventId: historyEventId, evidence: '雨声停了。' },
+      },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        id: `fact-00000000-0000-4000-8000-0000000001${String(index).padStart(2, '0')}`,
+        text: `两人共同记得的车站细节 ${String(index + 1)}。`,
+        status: 'asserted' as const,
+        audience: 'public' as const,
+        knowledgeMode: 'override' as const,
+        knownBy: [aliceId, bobId],
+        source: { kind: 'manual' as const },
+      })),
+    ],
+    events: [
+      {
+        id: historyEventId,
+        key: 'fixture-history',
+        turn: 0,
+        title: '雨停',
+        summary: '两人都看见雨停了。',
+        evidence: '雨声停了。',
+        participantIds: [aliceId, bobId],
+        nodeId: activeNodeId,
+      },
+      {
+        id: bobHistoryEventId,
+        key: 'fixture-bob-history',
+        turn: 0,
+        title: '站牌反光',
+        summary: '只有柏舟看见站牌背面反光。',
+        evidence: '柏舟独自绕到站牌背面。',
+        participantIds: [bobId],
+        nodeId: activeNodeId,
       },
     ],
-    events: [{
-      id: historyEventId,
-      key: 'fixture-history',
-      turn: 0,
-      title: '雨停',
-      summary: '两人都看见雨停了。',
-      evidence: '雨声停了。',
-      participantIds: [aliceId, bobId],
-      nodeId: activeNodeId,
-    }],
     outputs: [
       { id: sectionId, name: '正文', kind: 'prose', enabled: true, instructions: '保持第三人称。' },
       { id: characterSectionId, name: '阿梨视角', kind: 'character', enabled: true, characterId: aliceId, instructions: '只写阿梨能表现出的内容。' },
@@ -251,6 +283,7 @@ test('runs logged story stages while keeping each character request privately sc
   const characterSystems: string[] = []
   const sectionSystems: string[] = []
   const sectionBodies: string[] = []
+  const historyBodies: string[] = []
   const researchBodies: string[] = []
   let directorBody = ''
   let directorSystem = ''
@@ -325,7 +358,15 @@ test('runs logged story stages while keeping each character request privately sc
           .map(match => match[1]!))]
         const candidateSeeds = targetSeedIds.slice(0, Math.min(2, targetSeedIds.length))
         let text: string
-        if (system.includes('剧情研究 Worker')) {
+        if (system.includes('单个人物的历史检索 Worker')) {
+          historyBodies.push(body)
+          text = JSON.stringify({
+            references: body.includes(`${aliceId}\\t阿梨`)
+              ? [`story:fact:${bobFactId}`]
+              : [...new Set(body.match(/story:(?:event|fact):[A-Za-z0-9:_-]+/gu) ?? [])],
+          })
+        }
+        else if (system.includes('剧情研究 Worker')) {
           researchBodies.push(body)
           if (researchBodies.length === 1) {
             text = JSON.stringify({
@@ -512,11 +553,11 @@ test('runs logged story stages while keeping each character request privately sc
   const result = await runStoryTurnPipeline(input)
   const briefEvent = session.events.find(event => event.type === 'agent-rp/story-turn-brief')
 
-  assert.equal(calls, 14)
+  assert.equal(calls, 16)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 3)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 6)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 8)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
@@ -526,12 +567,14 @@ test('runs logged story stages while keeping each character request privately sc
     .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
     .every(request => request.dispatch.maxTokens === 2_048), true)
-  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 11)
+  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 13)
   assert.equal(characterBodies.length, 2)
+  assert.equal(historyBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
   assert.match(webQuery, /旧车站徽章 原著设定/u)
   assert.equal(researchBodies.length, 2)
   assert.doesNotMatch(researchBodies.join('\n'), /这不是玩家要求/u)
+  assert.doesNotMatch(historyBodies.join('\n'), /这不是玩家要求/u)
   assert.doesNotMatch(characterBodies.join('\n'), /这不是玩家要求/u)
   assert.doesNotMatch(directorBody, /这不是玩家要求/u)
   assert.match(researchBodies[0]!, /story:public-history/u)
@@ -546,6 +589,15 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /不确定.*无法核验的徽章传闻.*无可核验依据/u)
   assert.doesNotMatch(webQuery, /超过轮数上限/u)
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
+  assert.match(historyBodies[0]!, /阿梨知道徽章/u)
+  assert.match(historyBodies[0]!, /两人都看见雨停/u)
+  assert.doesNotMatch(historyBodies[0]!, /柏舟藏起了车票|只有柏舟看见站牌背面反光/u)
+  assert.match(historyBodies[1]!, /柏舟藏起了车票/u)
+  assert.match(historyBodies[1]!, /只有柏舟看见站牌背面反光/u)
+  assert.doesNotMatch(historyBodies[1]!, /阿梨知道徽章/u)
+  assert.match(characterBodies[0]!, /<retrieved_history>[\s\S]*两人都看见雨停/u)
+  assert.doesNotMatch(characterBodies[0]!, /只有柏舟看见站牌背面反光/u)
+  assert.match(characterBodies[1]!, /<retrieved_history>[\s\S]*只有柏舟看见站牌背面反光/u)
   assert.match(characterBodies[0]!, /先把眼前的事说清楚/u)
   assert.doesNotMatch(characterBodies[0]!, /<voice_evidence>|local:source-|#seed-/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
@@ -695,18 +747,22 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 14)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 14)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 16)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 16)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
+  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+  assert.deepEqual(stageRequests.filter(request => request.stage === 'history').map(request => request.subjectId), [aliceId, bobId])
+  assert.ok(stageRequests.findLastIndex(request => request.stage === 'history')
+    < stageRequests.findIndex(request => request.stage === 'character'))
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
     || !('ignorable' in event)), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 14)
+  assert.equal(calls, 16)
 })
 
 test('stops malformed research output and falls back to exact local evidence', async () => {
