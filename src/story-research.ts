@@ -6,13 +6,14 @@ import { splitStorySourcePassages } from './story-source.ts'
 /** One bounded local passage with a stable reference usable by the research Worker. */
 export interface StorySourceExcerpt {
   readonly reference: string
+  readonly ordinal: number
   readonly sourceId: string
   readonly sourceName: string
   readonly locator: string
   readonly text: string
 }
 
-interface RankedExcerpt extends Omit<StorySourceExcerpt, 'reference'> {
+interface RankedExcerpt extends Omit<StorySourceExcerpt, 'reference' | 'ordinal'> {
   readonly sourceIndex: number
   readonly chunkIndex: number
   readonly score: number
@@ -75,6 +76,7 @@ export function searchStoryWorkspaceSourceExcerpts(
     if (remaining <= header.length) return false
     const value: StorySourceExcerpt = {
       reference,
+      ordinal: excerpt.chunkIndex,
       sourceId: excerpt.sourceId,
       sourceName: excerpt.sourceName,
       locator: excerpt.locator,

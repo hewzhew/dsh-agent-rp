@@ -33,7 +33,8 @@ import type {
   StoryTurnMaterialization,
   StoryWorkspaceSnapshot,
 } from './story-workspace-protocol.ts'
-import { searchStoryWorkspaceSourceExcerpts } from './story-research.ts'
+import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './story-research.ts'
+import { splitStorySourcePassages } from './story-source.ts'
 
 /** Ordered model responsibilities before the visible character request. */
 export type StoryTurnStage = 'world-action' | 'cast' | 'research' | 'character' | 'director' | 'section' | 'voice' | 'editor' | 'continuity'
@@ -1831,12 +1832,8 @@ function normalizedWebUrl(value: string): string | undefined {
   }
 }
 
-function localResearchEvidence(
-  input: RunStoryTurnPipelineInput,
-  query: string,
-  maxCharacters: number,
-): readonly StoryResearchEvidence[] {
-  return searchStoryWorkspaceSourceExcerpts(input.workspace, query, maxCharacters).map(excerpt => ({
+function localExcerptEvidence(excerpt: StorySourceExcerpt): StoryResearchEvidence {
+  return {
     reference: excerpt.reference,
     kind: 'local',
     label: researchEvidenceLabel(`${excerpt.sourceName} · ${excerpt.locator}`),
@@ -1847,7 +1844,66 @@ function localResearchEvidence(
       quote: excerpt.text,
       note: '',
     },
-  }))
+  }
+}
+
+function localResearchEvidence(
+  input: RunStoryTurnPipelineInput,
+  query: string,
+  maxCharacters: number,
+): readonly StoryResearchEvidence[] {
+  return searchStoryWorkspaceSourceExcerpts(input.workspace, query, maxCharacters).map(localExcerptEvidence)
+}
+
+const VOICE_SOURCE_CONTEXT_RADIUS = 4
+const VOICE_SOURCE_CONTEXT_CHARACTERS = 6_000
+
+function sourceLocatorSection(locator: string): string {
+  return locator.replace(/(?:^| · )第 \d+ 段$/u, '')
+}
+
+function localVoiceEvidence(
+  input: RunStoryTurnPipelineInput,
+  characterName: string,
+  query: string,
+  maxCharacters: number,
+): readonly StoryResearchEvidence[] {
+  const excerpts = searchStoryWorkspaceSourceExcerpts(input.workspace, query, maxCharacters)
+  const sources = new Map(input.workspace.sources.map(source => [source.id, source]))
+  const passageCache = new Map<string, ReturnType<typeof splitStorySourcePassages>>()
+  const seenGroups = new Set<string>()
+  return excerpts.flatMap(excerpt => {
+    const evidence = localExcerptEvidence(excerpt)
+    const direct = voiceEvidenceParts(characterName, excerpt.text)
+    if (direct.targetLines.length === 0) return [evidence]
+    const source = sources.get(excerpt.sourceId)
+    if (source === undefined) return [evidence]
+    let passages = passageCache.get(source.id)
+    if (passages === undefined) {
+      passages = splitStorySourcePassages(source)
+      passageCache.set(source.id, passages)
+    }
+    const center = passages[excerpt.ordinal]
+    if (center === undefined) return [evidence]
+    const section = sourceLocatorSection(center.locator)
+    const selected = [center]
+    let characters = center.text.length
+    for (let distance = 1; distance <= VOICE_SOURCE_CONTEXT_RADIUS; distance += 1) {
+      for (const ordinal of [excerpt.ordinal - distance, excerpt.ordinal + distance]) {
+        const candidate = passages[ordinal]
+        if (candidate === undefined || sourceLocatorSection(candidate.locator) !== section
+          || characters + candidate.text.length > VOICE_SOURCE_CONTEXT_CHARACTERS) continue
+        selected.push(candidate)
+        characters += candidate.text.length
+      }
+    }
+    selected.sort((left, right) => left.ordinal - right.ordinal)
+    const parts = voiceEvidenceParts(characterName, selected.map(passage => passage.text).join('\n'))
+    const groupKey = [source.id, section, ...parts.targetLines.map(line => `${line.variant}:${line.speaker}:${line.dialogue}`)].join('\n')
+    if (seenGroups.has(groupKey)) return []
+    seenGroups.add(groupKey)
+    return [{ ...evidence, label: `${evidence.label}（含相邻对话）`, voiceParts: parts }]
+  })
 }
 
 function researchSourceCitations(
@@ -2775,7 +2831,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         playerInput,
         worldOutcome,
       ].filter(value => value !== '').join('\n')
-      const relevantSourceEvidence = character === undefined ? [] : localResearchEvidence(input, [
+      const relevantSourceEvidence = character === undefined ? [] : localVoiceEvidence(input, character.name, [
         character.name,
         voiceQuery,
       ].join('\n'), 20_000)
