@@ -1476,6 +1476,48 @@ function assemblePlayWorldCast(
   return { characters, cast }
 }
 
+function materializePlayWorldSources(
+  resources: RoleplayResourceCatalog,
+  currentSources: readonly StorySource[],
+  references: readonly RoleplayResourceSelection[],
+): { readonly sourceIds: readonly string[]; readonly sources: readonly StorySource[] } {
+  const existingSources = new Map(currentSources.flatMap(source => source.origin?.kind === 'resource'
+    ? [[JSON.stringify(source.origin.resource), source] as const]
+    : []))
+  const sourceIds: string[] = []
+  const addedSources: StorySource[] = []
+  for (const reference of references) {
+    const projection = resources.projectStorySource(reference)
+    const existing = existingSources.get(JSON.stringify(reference))
+    if (existing !== undefined) {
+      sourceIds.push(existing.id)
+      continue
+    }
+    const source: StorySource = {
+      id: createStorySourceId(),
+      name: projection.name,
+      kind: projection.kind,
+      enabled: true,
+      content: projection.content,
+      origin: { kind: 'resource', resource: reference },
+    }
+    sourceIds.push(source.id)
+    addedSources.push(source)
+  }
+  return { sourceIds, sources: [...currentSources, ...addedSources] }
+}
+
+function recoverPlayWorldResource(
+  resources: RoleplayResourceCatalog,
+  moduleId: string,
+): RoleplayResourceSelection {
+  const candidates = resources.listPlayWorlds().filter(({ descriptor, detail }) =>
+    descriptor.availability === 'available' && detail.playWorld.moduleId === moduleId)
+  if (candidates.length === 0) throw new Error('当前游玩世界没有可更新的人物配方')
+  if (candidates.length > 1) throw new Error('当前游玩世界对应多个资源配方，无法自动选择人物来源')
+  return { kind: 'world', id: candidates[0]!.descriptor.id }
+}
+
 /** Local workspace store whose accepted ids cannot escape its configured root. */
 export class StoryWorkspaceStore {
   readonly root: string
@@ -1616,32 +1658,7 @@ export class StoryWorkspaceStore {
     const recipe = this.resources.projectWorld(resource)
     const module = this.worlds.get(recipe.moduleId)
     const { characters, cast } = assemblePlayWorldCast(current, recipe, module, this.resources, request.cast, false)
-    const projectedSources = recipe.sources.map(reference => ({
-      reference,
-      projection: this.resources!.projectStorySource(reference),
-    }))
-    const existingSources = new Map(current.sources.flatMap(source => source.origin?.kind === 'resource'
-      ? [[JSON.stringify(source.origin.resource), source] as const]
-      : []))
-    const sourceIds: string[] = []
-    const addedSources: StorySource[] = []
-    for (const { reference, projection } of projectedSources) {
-      const existing = existingSources.get(JSON.stringify(reference))
-      if (existing !== undefined) {
-        sourceIds.push(existing.id)
-        continue
-      }
-      const source: StorySource = {
-        id: createStorySourceId(),
-        name: projection.name,
-        kind: projection.kind,
-        enabled: true,
-        content: projection.content,
-        origin: { kind: 'resource', resource: reference },
-      }
-      sourceIds.push(source.id)
-      addedSources.push(source)
-    }
+    const { sourceIds, sources } = materializePlayWorldSources(this.resources, current.sources, recipe.sources)
     const binding: PlayWorldBinding = {
       resource,
       moduleId: recipe.moduleId,
@@ -1660,7 +1677,7 @@ export class StoryWorkspaceStore {
     return this.commitWorld(current, world, [], {
       worldBinding: binding,
       characters,
-      sources: [...current.sources, ...addedSources],
+      sources,
       ...(materialized === undefined ? {} : {
         ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
         ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
@@ -1672,25 +1689,45 @@ export class StoryWorkspaceStore {
   updateWorldCast(id: string, request: PlayWorldCastUpdateRequest): StoryWorkspaceSnapshot {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
-    if (request.format !== 0 || this.resources === undefined || current.world === undefined
-      || current.worldBinding?.resource === undefined) {
+    if (request.format !== 0 || this.resources === undefined || current.world === undefined) {
       throw new Error('当前游玩世界没有可更新的人物配方')
     }
-    const resource = normalizeResourceSelection(current.worldBinding.resource, 'world', '游玩世界资源引用')
+    const existingBinding = current.worldBinding
+    const resource = existingBinding?.resource === undefined
+      ? recoverPlayWorldResource(this.resources, current.world.moduleId)
+      : normalizeResourceSelection(existingBinding.resource, 'world', '游玩世界资源引用')
     const recipe = this.resources.projectWorld(resource)
-    if (recipe.moduleId !== current.world.moduleId || current.worldBinding.moduleId !== current.world.moduleId) {
+    if (recipe.moduleId !== current.world.moduleId
+      || existingBinding !== undefined && existingBinding.moduleId !== current.world.moduleId) {
       throw new Error('当前游玩世界资源与状态所有者不一致')
     }
-    const currentCastBySlot = new Map(current.worldBinding.cast.map(binding => [binding.slotId, binding.characterId]))
+    const recoveredSources = existingBinding?.resource === undefined
+      ? materializePlayWorldSources(this.resources, current.sources, recipe.sources)
+      : { sourceIds: existingBinding.sourceIds, sources: current.sources }
+    const bindingBase: PlayWorldBinding = existingBinding?.resource === undefined
+      ? {
+          resource,
+          moduleId: recipe.moduleId,
+          configuration: recipe.configuration,
+          sourceReferences: recipe.sources,
+          sourceIds: recoveredSources.sourceIds,
+          cast: existingBinding?.cast ?? [],
+        }
+      : existingBinding
+    const currentCastBySlot = new Map(bindingBase.cast.map(binding => [binding.slotId, binding.characterId]))
     if (currentCastBySlot.size > 0 && (request.cast.length !== currentCastBySlot.size
       || request.cast.some(selection => selection.characterId !== currentCastBySlot.get(selection.slotId)))) {
       throw new Error('人物来源更新必须保留当前槽位中的人物')
     }
     const module = this.worlds.get(current.world.moduleId)
     const { characters, cast } = assemblePlayWorldCast(current, recipe, module, this.resources, request.cast, true)
-    const worldBinding: PlayWorldBinding = { ...current.worldBinding, cast }
+    const worldBinding: PlayWorldBinding = { ...bindingBase, cast }
     const world = module.normalize(current.world, playWorldContext(characters, worldBinding))
-    return this.commitWorld(current, world, current.worldActionReceipts ?? [], { characters, worldBinding })
+    return this.commitWorld(current, world, current.worldActionReceipts ?? [], {
+      characters,
+      worldBinding,
+      sources: recoveredSources.sources,
+    })
   }
 
   /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */

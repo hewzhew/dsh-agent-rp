@@ -412,15 +412,16 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   }), /必须保留当前槽位中的人物/u)
   const storyPath = join(root, installed.id, 'story.json')
   const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as {
-    worldBinding: { cast: unknown[] }
+    worldBinding?: unknown
     characters: { actor?: unknown }[]
   }
-  stored.worldBinding.cast = []
+  delete stored.worldBinding
   stored.characters = stored.characters.map(({ actor: _actor, ...character }) => character)
   writeFileSync(storyPath, `${JSON.stringify(stored, null, 2)}\n`)
   writeFileSync(join(root, installed.id, 'characters', reimuId, 'description.md'), '旧灵梦档案')
   writeFileSync(join(root, installed.id, 'characters', marisaId, 'description.md'), '旧魔理沙档案')
   const legacy = store.get(installed.id)
+  assert.equal(legacy.worldBinding?.resource, undefined)
   const beforeWorld = structuredClone(legacy.world)
   const beforeEvents = structuredClone(legacy.events)
   const beforeGraph = structuredClone(legacy.graph)
@@ -444,6 +445,11 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   assert.deepEqual(upgraded.world, beforeWorld)
   assert.deepEqual(upgraded.events, beforeEvents)
   assert.deepEqual(upgraded.graph, beforeGraph)
+  assert.deepEqual(upgraded.worldBinding?.resource, { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID })
+  assert.equal(upgraded.worldBinding?.moduleId, FLYING_CHESS_WORLD_MODULE_ID)
+  assert.deepEqual(upgraded.worldBinding?.configuration, { format: 0, ruleset: 'classic-24' })
+  assert.deepEqual(upgraded.worldBinding?.sourceReferences, [])
+  assert.deepEqual(upgraded.worldBinding?.sourceIds, [])
   assert.deepEqual(upgraded.worldBinding?.cast, [{ slotId: 'reimu', characterId: reimuId }, {
     slotId: 'marisa', characterId: marisaId,
   }])
@@ -452,7 +458,7 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   assert.deepEqual((upgraded.world?.state as FlyingChessWorldState).playerOrder, [reimuId, marisaId])
 })
 
-test('persists resource recipes and keeps their worlds readable while a rule module is unavailable', async (context) => {
+test('persists resource recipes, restores legacy sources, and keeps worlds readable without a rule module', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-resource-recipe-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
@@ -535,6 +541,29 @@ test('persists resource recipes and keeps their worlds readable while a rule mod
   assert.throws(() => unavailable.restartWorld(installed.id, {
     format: 0, revision: retained.revision,
   }), /规则模块.*未安装|游玩世界模块.*未安装/u)
+
+  const storyPath = join(root, installed.id, 'story.json')
+  const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as {
+    worldBinding?: unknown
+    sources: unknown[]
+  }
+  delete stored.worldBinding
+  stored.sources = []
+  writeFileSync(storyPath, `${JSON.stringify(stored, null, 2)}\n`)
+  rmSync(join(root, installed.id, 'sources', `${installed.sources[0]!.id}.md`), { force: true })
+  const legacy = store.get(installed.id)
+  assert.equal(legacy.worldBinding?.resource, undefined)
+  assert.equal(legacy.sources.length, 0)
+  const restored = store.updateWorldCast(legacy.id, { format: 0, revision: legacy.revision, cast: [] })
+  assert.deepEqual(restored.world, installed.world)
+  assert.deepEqual(restored.worldBinding?.resource, { kind: 'world', id: worldResourceId })
+  assert.deepEqual(restored.worldBinding?.configuration, { format: 0, limit: 2 })
+  assert.deepEqual(restored.worldBinding?.sourceReferences, [{ kind: 'world', id: sourceResourceId }])
+  assert.deepEqual(restored.worldBinding?.sourceIds, [restored.sources[0]!.id])
+  assert.equal(restored.sources[0]?.content, '# 计数规则\n\n每次合法动作只推进一步。')
+  assert.deepEqual(restored.sources[0]?.origin, {
+    kind: 'resource', resource: { kind: 'world', id: sourceResourceId },
+  })
 })
 
 test('serves and dispatches third-party world turns without action payloads', async (context) => {
