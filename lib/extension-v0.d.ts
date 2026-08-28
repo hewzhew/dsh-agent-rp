@@ -97,6 +97,8 @@ interface RoleplayResourceProvider {
 /** Host-only actor snapshot stored by a play-space character instance. */
 interface RoleplayActorProjection {
   readonly name: string;
+  /** Source-card names used to recognize this character in imported original-language dialogue. */
+  readonly voiceAliases: readonly string[];
   readonly profile: {
     readonly description: string;
     readonly personality: string;

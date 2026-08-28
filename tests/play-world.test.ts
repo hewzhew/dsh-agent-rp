@@ -218,6 +218,9 @@ function fixtureFlyingChessCastResources(): RoleplayResourceCatalog {
       if (name === undefined) throw new Error('测试角色不存在')
       return {
         name,
+        voiceAliases: selection.id === 'actor:reimu'
+          ? ['博麗霊夢', '霊夢']
+          : ['霧雨魔理沙', '魔理沙'],
         profile: {
           description: `${name}的测试角色卡描述。`,
           personality: `${name}的测试角色卡性格。`,
@@ -367,6 +370,7 @@ test('assembles declared world cast slots from actor resources without leaking u
   assert.ok(marisa)
   assert.equal(installed.characters.length, 3)
   assert.equal(installed.characters.find(candidate => candidate.id === reimuId)?.profile.description, '博丽灵梦的测试角色卡描述。')
+  assert.deepEqual(installed.characters.find(candidate => candidate.id === reimuId)?.voiceAliases, ['博麗霊夢', '霊夢'])
   assert.equal(installed.characters.find(candidate => candidate.id === observerId)?.name, '旁观者')
   assert.deepEqual(installed.worldBinding?.cast, [{ slotId: 'reimu', characterId: reimuId }, {
     slotId: 'marisa', characterId: marisa.id,
@@ -455,6 +459,8 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   }])
   assert.equal(upgraded.characters.find(candidate => candidate.id === reimuId)?.profile.description, '博丽灵梦的测试角色卡描述。')
   assert.equal(upgraded.characters.find(candidate => candidate.id === marisaId)?.profile.description, '雾雨魔理沙的测试角色卡描述。')
+  assert.deepEqual(upgraded.characters.find(candidate => candidate.id === reimuId)?.voiceAliases, ['博麗霊夢', '霊夢'])
+  assert.deepEqual(upgraded.characters.find(candidate => candidate.id === marisaId)?.voiceAliases, ['霧雨魔理沙', '魔理沙'])
   assert.deepEqual((upgraded.world?.state as FlyingChessWorldState).playerOrder, [reimuId, marisaId])
 })
 
@@ -956,7 +962,11 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
     revision: renamed.revision,
     characterId: first,
     actor: { kind: 'actor', id: 'actor:reimu' },
-  }, { name: '博丽灵梦', profile: character(first, '博丽灵梦', '博丽神社的巫女。').profile })
+  }, {
+    name: '博丽灵梦',
+    voiceAliases: ['博麗霊夢'],
+    profile: character(first, '博丽灵梦', '博丽神社的巫女。').profile,
+  })
   assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
   assert.deepEqual(bound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   const detached = store.bindCharacterActor(bound.id, {

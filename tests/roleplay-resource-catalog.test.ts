@@ -150,7 +150,7 @@ test('maps all reusable Host libraries onto the exact references written into a 
     spec: 'chara_card_v2',
     spec_version: '2.0',
     data: {
-      name: '白露', description: '钟表匠', personality: '沉静', scenario: '海城',
+      name: '白露', nickname: '露露', description: '钟表匠', personality: '沉静', scenario: '海城',
       first_mes: '门还没锁。', mes_example: '', creator_notes: '', system_prompt: '',
       post_history_instructions: '', alternate_greetings: [], tags: [], creator: 'fixture',
       character_version: '1', extensions: {},
@@ -224,7 +224,8 @@ test('maps all reusable Host libraries onto the exact references written into a 
     openings: [{ id: 'greeting:0', label: '默认开场', preview: '门还没锁。', truncated: false }],
   })
   const actorProjection = catalog.projectActor({ kind: 'actor', id: characterLibraryRoleplayResourceId(card.id) })
-  assert.equal(actorProjection.name, '白露')
+  assert.equal(actorProjection.name, '露露')
+  assert.deepEqual(actorProjection.voiceAliases, ['白露'])
   assert.match(actorProjection.profile.description, /钟表匠/u)
   assert.match(actorProjection.profile.personality, /沉静/u)
   assert.deepEqual(catalog.inspect('persona', persona.id), {

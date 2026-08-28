@@ -43,6 +43,8 @@ export interface RoleplayResourceProvider {
 /** Host-only actor snapshot stored by a play-space character instance. */
 export interface RoleplayActorProjection {
   readonly name: string
+  /** Source-card names used to recognize this character in imported original-language dialogue. */
+  readonly voiceAliases: readonly string[]
   readonly profile: {
     readonly description: string
     readonly personality: string
@@ -274,13 +276,21 @@ export class RoleplayResourceCatalog {
     const profile = projected?.profile
     if (typeof projected !== 'object' || projected === null || typeof projected.name !== 'string'
       || projected.name.trim() === '' || projected.name.length > 120 || typeof profile !== 'object' || profile === null
+      || !Array.isArray(projected.voiceAliases) || projected.voiceAliases.length > 32
+      || projected.voiceAliases.some(alias => typeof alias !== 'string' || alias.trim() === ''
+        || alias.trim() !== alias || alias.length > 120)
+      || new Set(projected.voiceAliases).size !== projected.voiceAliases.length
       || !['description', 'personality', 'scenario', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions']
         .every(field => typeof profile[field as keyof typeof profile] === 'string')
       || Object.keys(profile).some(field => !['description', 'personality', 'scenario', 'exampleDialogue', 'systemPrompt', 'postHistoryInstructions'].includes(field))
       || Buffer.byteLength(Object.values(profile).join('\n'), 'utf8') > 2 * 1024 * 1024) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid actor projection`)
     }
-    return Object.freeze({ name: projected.name.trim(), profile: Object.freeze({ ...profile }) })
+    return Object.freeze({
+      name: projected.name.trim(),
+      voiceAliases: Object.freeze([...projected.voiceAliases]),
+      profile: Object.freeze({ ...profile }),
+    })
   }
 
   /** Resolve a world selection into one bounded trusted-module recipe. */
