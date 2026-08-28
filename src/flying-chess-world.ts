@@ -33,6 +33,12 @@ function characterMap(context: PlayWorldContext): ReadonlyMap<string, string> {
 }
 
 function requirePlayers(context: PlayWorldContext): readonly string[] {
+  if (!isRecord(context.configuration)
+    || !(Object.keys(context.configuration).length === 0
+      || exactKeys(context.configuration, ['format', 'ruleset'])
+      && context.configuration.format === 0 && context.configuration.ruleset === 'classic-24')) {
+    throw new Error('飞行棋世界配置无效')
+  }
   if (context.characters.length < 2 || context.characters.length > 4) {
     throw new Error('飞行棋需要 2 至 4 位人物')
   }

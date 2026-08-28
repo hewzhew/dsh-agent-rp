@@ -1,6 +1,6 @@
 /** Public records for the typed Agent RP play space. */
 
-import type { PlayWorldSnapshot } from './play-world-protocol.ts'
+import type { PlayWorldBinding, PlayWorldSnapshot } from './play-world-protocol.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 
 /** Same-origin collection endpoint for local story workspaces. */
@@ -196,7 +196,7 @@ export interface StorySource {
 }
 
 /** Network provenance retained when an inbox result becomes a durable source. */
-export interface StorySourceOrigin {
+export interface StoryWebSourceOrigin {
   readonly kind: 'web'
   readonly url: string
   readonly query: string
@@ -205,8 +205,14 @@ export interface StorySourceOrigin {
   readonly resultEventSeq: number
 }
 
+/** Durable provenance for a network result or reusable Host resource copied into the workspace. */
+export type StorySourceOrigin = StoryWebSourceOrigin | {
+  readonly kind: 'resource'
+  readonly resource: RoleplayResourceSelection
+}
+
 /** One network result waiting for the player to keep or dismiss it. */
-export interface StoryResearchItem extends StorySourceOrigin {
+export interface StoryResearchItem extends StoryWebSourceOrigin {
   readonly id: string
   readonly title: string
   readonly snippet: string
@@ -269,6 +275,8 @@ export interface StoryWorkspaceSnapshot {
   readonly researchInbox: readonly StoryResearchItem[]
   /** Executable authoritative world; mutations use the dedicated action endpoint. */
   readonly world?: PlayWorldSnapshot
+  /** Host-resolved resource recipe retained independently from module-owned state. */
+  readonly worldBinding?: PlayWorldBinding
   /** Recent idempotency receipts for character-selected executable-world actions. */
   readonly worldActionReceipts?: readonly StoryWorldActionReceipt[]
 }

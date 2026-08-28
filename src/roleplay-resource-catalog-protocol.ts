@@ -40,6 +40,14 @@ export interface RoleplayPersonaResourceDetail {
 export interface RoleplayWorldResourceDetail {
   readonly kind: 'world'
   readonly entryCount: number
+  /** Optional trusted rule program advertised by this world resource. */
+  readonly playWorld?: {
+    readonly moduleId: string
+    readonly summary: string
+    readonly category: 'game' | 'simulation'
+    readonly minCharacters: number
+    readonly maxCharacters: number
+  }
 }
 
 export interface RoleplayPromptPolicyResourceDetail {
@@ -121,11 +129,27 @@ export function parseRoleplayResourceDetail(
     return Object.freeze({ kind: 'persona', description: detail.description })
   }
   if (detail.kind === 'world') {
-    if (!exactDetailKeys(detail, ['kind', 'entryCount'])
+    if (!exactDetailKeys(detail, ['kind', 'entryCount', 'playWorld'])
       || !Number.isSafeInteger(detail.entryCount) || detail.entryCount < 0) {
       throw new Error(`Roleplay world ${JSON.stringify(reference.id)} returned invalid details`)
     }
-    return Object.freeze({ kind: 'world', entryCount: detail.entryCount })
+    const playWorld = detail.playWorld
+    if (playWorld !== undefined && (typeof playWorld !== 'object' || playWorld === null
+      || !exactDetailKeys(playWorld, ['moduleId', 'summary', 'category', 'minCharacters', 'maxCharacters'])
+      || typeof playWorld.moduleId !== 'string'
+      || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(playWorld.moduleId)
+      || typeof playWorld.summary !== 'string' || playWorld.summary.trim() === '' || playWorld.summary.length > 500
+      || playWorld.category !== 'game' && playWorld.category !== 'simulation'
+      || !Number.isSafeInteger(playWorld.minCharacters) || playWorld.minCharacters < 1
+      || !Number.isSafeInteger(playWorld.maxCharacters) || playWorld.maxCharacters < playWorld.minCharacters
+      || playWorld.maxCharacters > 64)) {
+      throw new Error(`Roleplay world ${JSON.stringify(reference.id)} returned invalid play-world details`)
+    }
+    return Object.freeze({
+      kind: 'world',
+      entryCount: detail.entryCount,
+      ...(playWorld === undefined ? {} : { playWorld: Object.freeze({ ...playWorld }) }),
+    })
   }
   if (detail.kind === 'prompt-policy') {
     if (!exactDetailKeys(detail, ['kind', 'moduleCount', 'enabledModuleCount'])

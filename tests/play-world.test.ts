@@ -12,6 +12,8 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
 import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
 import { PlayWorldRegistry, type PlayWorldModule } from '../src/play-world.ts'
+import { RoleplayResourceCatalog } from '../src/roleplay-resource-catalog.ts'
+import { FLYING_CHESS_WORLD_RESOURCE_ID } from '../src/play-world-resource-provider.ts'
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { installStoryWorkspaceHttp } from '../src/story-workspace-http.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
@@ -26,6 +28,7 @@ import {
   createStoryNodeId,
   createStoryOutputId,
   createStorySourceId,
+  resolveStoryPlayWorldContext,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 
@@ -76,7 +79,7 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
         moduleVersion: 0,
         title: name,
         state: { step: 0, characterId },
-        events: [{ id: 'counter-event-0', sequence: 1, type: 'counter.started', title: '开始', summary: '计数开始。' }],
+        events: [{ id: 'counter-event-0', sequence: 0, type: 'counter.started', title: '开始', summary: '计数开始。' }],
       }
     },
     normalize(value, context) {
@@ -110,7 +113,7 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
         state: { ...state, step: next },
         events: [...current.events, {
           id: `counter-event-${String(next)}`,
-          sequence: current.events.length + 1,
+          sequence: current.events.length,
           type: 'counter.advanced',
           title: `推进到 ${String(next)}`,
           summary: `计数值变为 ${String(next)}。`,
@@ -147,6 +150,51 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
       return events.map(event => `${event.title}。`).join('')
     },
   }
+}
+
+function fixtureWorldResourceId(moduleId: string): string {
+  return moduleId === FLYING_CHESS_WORLD_MODULE_ID
+    ? FLYING_CHESS_WORLD_RESOURCE_ID
+    : `world:${moduleId}`
+}
+
+function fixtureWorldResources(worlds: PlayWorldRegistry): RoleplayResourceCatalog {
+  const catalog = new RoleplayResourceCatalog()
+  catalog.register({
+    id: 'fixture:play-world-resources',
+    list: () => worlds.list().map(module => ({
+      id: fixtureWorldResourceId(module.id),
+      kind: 'world',
+      name: module.name,
+      availability: 'available',
+    })),
+    inspect: descriptor => {
+      const moduleId = descriptor.id === FLYING_CHESS_WORLD_RESOURCE_ID
+        ? FLYING_CHESS_WORLD_MODULE_ID
+        : descriptor.id.slice('world:'.length)
+      const module = worlds.list().find(candidate => candidate.id === moduleId)
+      if (module === undefined) throw new Error('测试世界模块不存在')
+      return {
+        kind: 'world',
+        entryCount: 0,
+        playWorld: {
+          moduleId: module.id,
+          summary: module.summary,
+          category: module.category,
+          minCharacters: module.minCharacters,
+          maxCharacters: module.maxCharacters,
+        },
+      }
+    },
+    projectWorld: selection => ({
+      moduleId: selection.id === FLYING_CHESS_WORLD_RESOURCE_ID
+        ? FLYING_CHESS_WORLD_MODULE_ID
+        : selection.id.slice('world:'.length),
+      configuration: {},
+      sources: [],
+    }),
+  })
+  return catalog
 }
 
 type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
@@ -212,14 +260,14 @@ test('runs an unrecognized world through browser-safe action ids', (context) => 
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(counterWorldModule())
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '第三方世界' })
   const actorId = createStoryCharacterId()
   const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
   const installed = store.installWorld(prepared.id, {
     format: 0,
     revision: prepared.revision,
-    moduleId: 'fixture/counter',
+    resource: { kind: 'world', id: fixtureWorldResourceId('fixture/counter') },
   })
   const firstTurn = store.worldTurn(installed.id)
   assert.deepEqual(firstTurn, {
@@ -247,19 +295,100 @@ test('runs an unrecognized world through browser-safe action ids', (context) => 
   assert.equal(store.worldTurn(finished.id), undefined)
 })
 
+test('persists resource recipes and keeps their worlds readable while a rule module is unavailable', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-resource-recipe-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(counterWorldModule())
+  const resources = new RoleplayResourceCatalog()
+  const worldResourceId = 'world:fixture/composed'
+  const sourceResourceId = 'world:fixture/lore'
+  resources.register({
+    id: 'fixture:composed-world',
+    list: () => [{
+      id: worldResourceId, kind: 'world', name: '带资料的计数世界', availability: 'available',
+    }, {
+      id: sourceResourceId, kind: 'world', name: '计数世界资料', availability: 'available',
+    }],
+    inspect: descriptor => descriptor.id === worldResourceId
+      ? {
+          kind: 'world',
+          entryCount: 0,
+          playWorld: {
+            moduleId: 'fixture/counter',
+            summary: '验证第三方世界模块的安全动作投影。',
+            category: 'simulation',
+            minCharacters: 1,
+            maxCharacters: 2,
+          },
+        }
+      : { kind: 'world', entryCount: 1 },
+    projectWorld: selection => {
+      if (selection.id !== worldResourceId) throw new Error('这个世界资源没有规则配方')
+      return {
+        moduleId: 'fixture/counter',
+        configuration: { format: 0, limit: 2 },
+        sources: [{ kind: 'world', id: sourceResourceId }],
+      }
+    },
+    projectStorySource: (selection, descriptor) => {
+      if (selection.id !== sourceResourceId) throw new Error('这个世界资源不是资料')
+      return { name: descriptor.name, kind: 'reference', content: '# 计数规则\n\n每次合法动作只推进一步。' }
+    },
+  })
+  const store = new StoryWorkspaceStore({ root, worlds, resources })
+  const created = store.create({ format: 2, name: '资源组合场地' })
+  const actorId = createStoryCharacterId()
+  const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    resource: { kind: 'world', id: worldResourceId },
+  })
+  assert.deepEqual(installed.worldBinding, {
+    resource: { kind: 'world', id: worldResourceId },
+    moduleId: 'fixture/counter',
+    configuration: { format: 0, limit: 2 },
+    sourceReferences: [{ kind: 'world', id: sourceResourceId }],
+    sourceIds: [installed.sources[0]!.id],
+  })
+  assert.equal(installed.sources[0]?.content, '# 计数规则\n\n每次合法动作只推进一步。')
+  assert.deepEqual(installed.sources[0]?.origin, {
+    kind: 'resource', resource: { kind: 'world', id: sourceResourceId },
+  })
+  assert.deepEqual(new StoryWorkspaceStore({ root, worlds, resources }).get(installed.id), installed)
+
+  const unavailable = new StoryWorkspaceStore({ root, worlds: new PlayWorldRegistry(), resources })
+  const retained = unavailable.get(installed.id)
+  assert.deepEqual(retained.worldBinding, installed.worldBinding)
+  assert.deepEqual(retained.world, installed.world)
+  assert.equal(unavailable.worldTurn(installed.id), undefined)
+  assert.equal(unavailable.worldResources().find(world => world.resource.id === worldResourceId)?.moduleAvailable, false)
+  const unavailableRoute = storyWorkspaceRoute(unavailable)
+  const unavailableRead = await invokeStoryWorkspaceRoute(
+    unavailableRoute, 'GET', `/api/agent-rp/story-workspaces/${encodeURIComponent(installed.id)}`,
+  )
+  assert.equal(unavailableRead.status, 200)
+  assert.equal((unavailableRead.body as { readonly worldModuleAvailable?: unknown }).worldModuleAvailable, false)
+  assert.equal((unavailableRead.body as { readonly worldTurn?: unknown }).worldTurn, null)
+  assert.throws(() => unavailable.restartWorld(installed.id, {
+    format: 0, revision: retained.revision,
+  }), /规则模块.*未安装|游玩世界模块.*未安装/u)
+})
+
 test('serves and dispatches third-party world turns without action payloads', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-custom-play-world-http-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(counterWorldModule())
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: 'HTTP 第三方世界' })
   const actorId = createStoryCharacterId()
   const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
   const installed = store.installWorld(prepared.id, {
     format: 0,
     revision: prepared.revision,
-    moduleId: 'fixture/counter',
+    resource: { kind: 'world', id: fixtureWorldResourceId('fixture/counter') },
   })
   const route = storyWorkspaceRoute(store)
   const path = `/api/agent-rp/story-workspaces/${encodeURIComponent(installed.id)}`
@@ -295,7 +424,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   const rolls = [6, 1]
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift() ?? 1 }))
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '博丽神社飞行棋' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
@@ -328,7 +457,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   const installed = store.installWorld(withCharacters.id, {
     format: 0,
     revision: withCharacters.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const initial = installed.world?.state as FlyingChessWorldState
   assert.equal(initial.currentPlayerId, reimuId)
@@ -337,9 +466,11 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.throws(() => worlds.get(FLYING_CHESS_WORLD_MODULE_ID).normalize({
     ...installed.world,
     state: { ...initial, pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [] } },
-  }, { characters: withCharacters.characters }), /合法棋子集合无效/u)
+  }, resolveStoryPlayWorldContext(installed)), /合法棋子集合无效/u)
 
-  const initialTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(installed.world!, { characters: installed.characters })
+  const initialTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(
+    installed.world!, resolveStoryPlayWorldContext(installed),
+  )
   assert.equal(initialTurn?.characterId, reimuId)
   assert.deepEqual(initialTurn?.actions.map(action => action.id), ['roll'])
   const rollRequest = {
@@ -360,7 +491,9 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(pending.pendingRoll?.legalPieceIds.length, 4)
   assert.equal(rolled.world?.events.at(-1)?.type, 'die.rolled')
 
-  const moveTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(rolled.world!, { characters: rolled.characters })
+  const moveTurn = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).characterTurn(
+    rolled.world!, resolveStoryPlayWorldContext(rolled),
+  )
   const moveAction = moveTurn?.actions[0]
   assert.match(moveAction?.label ?? '', /移动 1 号飞机/u)
   const pieceId = pending.pendingRoll?.legalPieceIds[0]
@@ -382,7 +515,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(worlds.get(FLYING_CHESS_WORLD_MODULE_ID).renderEventNarrative(
     moved.world!,
     [2, 3],
-    { characters: moved.characters },
+    resolveStoryPlayWorldContext(moved),
   ), '博丽灵梦掷出 6。博丽灵梦把 1 号飞机推进到航线第 1 步。')
 
   const manualRollTurn = store.worldTurn(moved.id)
@@ -526,7 +659,7 @@ test('scaffolds fresh world authoring surfaces without replacing authored work',
   const scaffolded = store.installWorld(withCharacters.id, {
     format: 0,
     revision: withCharacters.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   assert.equal(scaffolded.graph.nodes.length, 1)
   assert.equal(scaffolded.graph.nodes[0]?.title, '幻想乡飞行棋对局')
@@ -573,7 +706,7 @@ test('scaffolds fresh world authoring surfaces without replacing authored work',
   const preserved = store.installWorld(configured.id, {
     format: 0,
     revision: configured.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   assert.deepEqual(preserved.graph, configured.graph)
   assert.deepEqual(preserved.outputs, configured.outputs)
@@ -597,7 +730,7 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   const installed = store.installWorld(withCharacters.id, {
     format: 0,
     revision: withCharacters.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const launch = parseAgentRpSessionLaunchRequest({
     format: 0,
@@ -645,7 +778,7 @@ test('lets the current private character Worker complete one world turn exactly 
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule({ rollDie: () => 6 }))
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '人物自动行动' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
@@ -659,7 +792,7 @@ test('lets the current private character Worker complete one world turn exactly 
   const installed = store.installWorld(withCharacters.id, {
     format: 0,
     revision: withCharacters.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const session = Session.create(SessionId('character-world-action'))
   session.append('request/header', {
@@ -718,7 +851,7 @@ test('writes a manually completed world result before another character acts', a
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '手动规则结果' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
@@ -735,7 +868,7 @@ test('writes a manually completed world result before another character acts', a
   const installed = store.installWorld(configured.id, {
     format: 0,
     revision: configured.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const withoutMap = store.save({ ...editable(installed), graph: { nodes: [], edges: [] } })
   const manualTurn = store.worldTurn(withoutMap.id)
@@ -805,7 +938,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '权威世界结算' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
@@ -829,7 +962,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   const installed = store.installWorld(configured.id, {
     format: 0,
     revision: configured.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const session = Session.create(SessionId('grounded-world-turn'))
   session.append('request/header', {
@@ -1019,7 +1152,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
-  const store = new StoryWorkspaceStore({ root, worlds })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '权威世界对白' })
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
@@ -1050,7 +1183,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const installed = store.installWorld(configured.id, {
     format: 0,
     revision: configured.revision,
-    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
   })
   const session = Session.create(SessionId('host-world-dialogue'))
   session.append('request/header', {

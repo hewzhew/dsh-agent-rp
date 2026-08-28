@@ -69,6 +69,7 @@ test('orders providers deterministically, rejects collisions, and follows Cordis
     },
   })
   assert.equal(catalog.locate('actor', 'actor:missing'), undefined)
+  assert.deepEqual(catalog.listPlayWorlds(), [])
 
   const duplicate = catalog.register({
     id: 'fixture:duplicate',
@@ -234,6 +235,13 @@ test('maps all reusable Host libraries onto the exact references written into a 
   })
   assert.deepEqual(catalog.inspect('world', worldInfoLibraryRoleplayResourceId(world.id)), {
     kind: 'world', entryCount: 1,
+  })
+  assert.deepEqual(catalog.projectStorySource({
+    kind: 'world', id: worldInfoLibraryRoleplayResourceId(world.id),
+  }), {
+    name: '海城',
+    kind: 'reference',
+    content: '# 海城\n\n## 条目 1\n海城终年多雾。',
   })
 
   characters.archive(card.id)

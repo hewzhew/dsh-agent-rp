@@ -13,6 +13,7 @@ import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActMode
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
+  resolveStoryPlayWorldContext,
   compileStoryDirectorWorldContext,
   storyDirectorMap,
   storyFactKnownBy,
@@ -2358,7 +2359,7 @@ function renderWorldNarrative(input: RunStoryTurnPipelineInput, sequences: reado
   return input.store.worlds.get(input.workspace.world.moduleId).renderEventNarrative(
     input.workspace.world,
     sequences,
-    { characters: input.workspace.characters },
+    resolveStoryPlayWorldContext(input.workspace),
   )
 }
 
@@ -2436,7 +2437,7 @@ async function advanceStoryWorld(
   let workspace = input.store.get(input.workspace.id)
   if (workspace.world === undefined) return workspace
   const module = input.store.worlds.get(workspace.world.moduleId)
-  let turn = module.characterTurn(workspace.world, { characters: workspace.characters })
+  let turn = module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))
   if (turn === undefined) return workspace
   const runKey = worldActionRunKey({ ...input, workspace }, workspace.world.instanceId)
   const receipts = (workspace.worldActionReceipts ?? [])
@@ -2454,7 +2455,7 @@ async function advanceStoryWorld(
   for (; sequence < MAX_WORLD_ACTIONS_PER_STORY_TURN; sequence += 1) {
     input.signal.throwIfAborted()
     if (workspace.world === undefined) return workspace
-    const currentTurn = module.characterTurn(workspace.world, { characters: workspace.characters })
+    const currentTurn = module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))
     if (currentTurn === undefined || currentTurn.id !== cycleId) return workspace
     if (currentTurn.actions.length === 0 || currentTurn.actions.length > 128) throw new Error('世界模块返回了无效的可用动作数量')
     const actionIds = currentTurn.actions.map((action, index) => {
@@ -2506,7 +2507,7 @@ async function advanceStoryWorld(
     workspace = input.store.dispatchWorldCharacterAction(workspace.id, request)
   }
   if (workspace.world !== undefined
-    && module.characterTurn(workspace.world, { characters: workspace.characters })?.id === cycleId) {
+    && module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))?.id === cycleId) {
     throw new Error('一个人物世界回合需要过多连续动作')
   }
   return workspace

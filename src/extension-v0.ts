@@ -8,10 +8,14 @@ export {
   ROLEPLAY_RESOURCE_CATALOG_KEY,
 } from './roleplay-resource-catalog.ts'
 export type {
+  LocatedPlayWorldResource,
+  RoleplayActorProjection,
   RoleplayResourceMaterialization,
   RoleplayResourceMaterializationContext,
   RoleplayResourceMaterializationInput,
   RoleplayResourceProvider,
+  RoleplayStorySourceProjection,
+  RoleplayWorldProjection,
 } from './roleplay-resource-catalog.ts'
 export {
   ROLEPLAY_RESOURCE_KINDS,
@@ -60,9 +64,11 @@ export type {
   PlayWorldWorkspaceScaffold,
 } from './play-world.ts'
 export type {
+  PlayWorldBinding,
   PlayWorldEvent,
   PlayWorldModuleDescriptor,
   PlayWorldPromptProjection,
+  PlayWorldResourceDescriptor,
   PlayWorldSnapshot,
 } from './play-world-protocol.ts'
 

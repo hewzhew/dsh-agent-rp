@@ -837,7 +837,8 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     }],
     researchInbox: [],
   })
-  assert.equal(accepted.sources.find(source => source.id === acceptedSourceId)?.origin?.url, 'https://example.test/badge')
+  const acceptedOrigin = accepted.sources.find(source => source.id === acceptedSourceId)?.origin
+  assert.equal(acceptedOrigin?.kind === 'web' ? acceptedOrigin.url : undefined, 'https://example.test/badge')
   assert.equal(accepted.researchInbox.length, 0)
 
   const replayed = store.materializeTurn(workspace.id, {
