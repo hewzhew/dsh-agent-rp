@@ -153,6 +153,7 @@ import {
   characterLibraryJson,
   fetchCharacterRuntimeDetail,
   fetchCharacterWorldInfoPage,
+  importCharacterFile,
   notifyCharacterLibraryChanged,
   updateCharacterEdits,
   updateCharacterRemoteResource,
@@ -12793,23 +12794,6 @@ export function apply(ctx: ClientContext): void {
       throw new Error(value.error ?? `角色卡删除失败（${response.status}）`)
     }
     notifyCharacterLibraryChanged(id)
-  }
-  const importCharacterFile = async (file: File): Promise<CharacterLibraryImportResult> => {
-    const response = await fetch(`${CHARACTER_LIBRARY_PATH}/import?filename=${encodeURIComponent(file.name)}`, {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': file.type || 'application/octet-stream' },
-      body: file,
-    })
-    const value = await response.json() as {
-      readonly error?: string
-      readonly format?: 0
-      readonly entry?: CharacterLibraryDetail
-      readonly outcome?: CharacterLibraryImportResult['outcome']
-    }
-    if (!response.ok || value.entry === undefined || value.outcome === undefined) {
-      throw new Error(value.error ?? `角色卡导入失败（${response.status}）`)
-    }
-    return { entry: value.entry, outcome: value.outcome }
   }
   const launchRoleplaySession = async (
     request: AgentRpSessionLaunchRequest,
