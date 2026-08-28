@@ -60,9 +60,20 @@ test('projects live story stages and resets progress at the next turn', () => {
     format: 0,
     requestId: 'history-1',
     requestSeq: historyRequest.seq,
-    result: { kind: 'failure', failure: 'provider' },
+    result: {
+      kind: 'failure',
+      failure: 'provider',
+      detail: { code: 'RATE_LIMIT', message: '请求过快', status: 429, providerRetryAfterMs: 1_000 },
+    },
   }))
-  assert.equal(definition.wire.view(state).storyTurn?.requests[0]?.status, 'failed')
+  assert.deepEqual(definition.wire.view(state).storyTurn?.requests[0], {
+    requestId: 'history-1',
+    stage: 'history',
+    subjectId: 'reimu',
+    status: 'failed',
+    failure: 'provider',
+    detail: { code: 'RATE_LIMIT', message: '请求过快', status: 429, providerRetryAfterMs: 1_000 },
+  })
 
   state = definition.apply(state, appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
     format: 1,

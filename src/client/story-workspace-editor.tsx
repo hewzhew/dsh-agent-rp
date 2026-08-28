@@ -270,7 +270,7 @@ function storyTurnProgressText(
   const latest = progress.requests.at(-1)
   if (latest === undefined) return '正在准备故事流水线'
   return latest.status === 'failed'
-    ? `${storyTurnStageLabels[latest.stage]}已降级，正在继续后续步骤`
+    ? `${storyTurnStageLabels[latest.stage]}已降级${latest.detail === undefined ? '' : `（${latest.detail.code}）`}，正在继续后续步骤`
     : `${storyTurnStageLabels[latest.stage]}完成，正在进入下一阶段`
 }
 
@@ -1757,11 +1757,16 @@ function PlaySessionAction({ workspace, sessionAction, busy, currentName, launch
   const pendingCharacterResult = hasPendingCharacterWorldResult(workspace)
   const latestPendingEvent = pendingWorldEvents.at(-1)
   const latestEvent = workspace.world?.events.at(-1)
+  const outputReady = inspectStoryPlayWorldReadiness(workspace).enabledProseOutputCount > 0
   return <section className="story-play-session-action">
-    <div className="story-play-session-copy"><strong>{pendingCharacterResult
+    <div className="story-play-session-copy"><strong>{!outputReady
+      ? '先为正文选择保存位置'
+      : pendingCharacterResult
       ? '把刚才的规则结果写成场面'
       : sessionAction === 'start' ? '让人物开始第一回合' : `让${currentName}行动`}</strong>
-      <span>{pendingCharacterResult
+      <span>{!outputReady
+        ? '至少启用一个“正文”分区，人物行动、场景描写与授权对白才有明确的写入位置。'
+        : pendingCharacterResult
         ? `“${latestPendingEvent?.title ?? '已结算事件'}”尚未进入正文；先写入这次真实结果，再轮到下一步。`
         : latestEvent === undefined ? '当前人物只会从规则程序给出的合法动作中选择；结算后再写成场面。' : `从“${latestEvent.title}”之后继续，由规则程序结算下一步。`}</span>
       {sessionAction === 'start' && launchTargets.length > 0 && <label className="story-play-session-target"><span>会话保存到</span>
@@ -1769,10 +1774,10 @@ function PlaySessionAction({ workspace, sessionAction, busy, currentName, launch
           {launchTargets.map(target => <option key={target.id} value={target.id}>{target.title}</option>)}
         </select></label>}
     </div>
-    <label className="story-play-session-input"><span>希望这一回合怎样发展？</span><textarea value={turnDirection} maxLength={4_000}
+    <label className="story-play-session-input"><span>希望这一回合怎样发展？</span><textarea value={turnDirection} maxLength={4_000} disabled={!outputReady}
       placeholder="可以留空，让当前人物依据自己的认知选择；也可以补充一句方向。"
       onChange={event => { setTurnDirection(event.target.value) }} /></label>
-    <button className="story-studio-button story-studio-button-primary" type="button" disabled={busy || (sessionAction === 'start' && launchTargetId === undefined)}
+    <button className="story-studio-button story-studio-button-primary" type="button" disabled={!outputReady || busy || (sessionAction === 'start' && launchTargetId === undefined)}
       onClick={() => { onAdvanceSession(resolveStoryTurnRequest(workspace, turnDirection)) }}>
       {pendingCharacterResult ? '写入本回合' : sessionAction === 'start' ? '开始游玩' : `让${currentName}行动并续写`}
     </button>
@@ -1789,7 +1794,7 @@ function readinessCharacterNames(characters: readonly StoryCharacter[]): string 
   return characters.map(character => character.name).join('、')
 }
 
-function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources }: {
+function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onOpenOutputs }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly configureDisabled: boolean
   readonly onConfigureCast: (() => void) | undefined
@@ -1797,6 +1802,7 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
+  readonly onOpenOutputs: () => void
 }) {
   const readiness = inspectStoryPlayWorldReadiness(workspace)
   const participantCount = readiness.participants.length
@@ -1806,7 +1812,9 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
   const firstMissingDialogue = readiness.missingDialogue[0]
   const firstParticipant = readiness.participants[0]
   const openActor = onConfigureCast ?? (firstParticipant === undefined ? undefined : () => { onOpenCharacter(firstParticipant.id) })
-  const evidenceSummary = participantCount === 0
+  const evidenceSummary = readiness.enabledProseOutputCount === 0
+    ? '先在输出布局中启用至少一个正文分区；没有正文去处时，场地不会开始或续写。'
+    : participantCount === 0
     ? '先为这个世界选择参与人物，再补充各自的角色卡与原著证据。'
     : readiness.missingActors.length > 0
       ? `先为${readinessCharacterNames(readiness.missingActors)}绑定角色卡；绑定只更新人物档案，棋局状态保持原样。`
@@ -1819,6 +1827,8 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
           : '人物档案、角色样本和原著声音已经覆盖当前全部参与者。'
   return <section className="story-play-evidence" aria-label="场地准备状态">
     <div className="story-play-evidence-items">
+      <button className="story-play-evidence-chip" type="button" data-ready={readiness.enabledProseOutputCount > 0}
+        onClick={onOpenOutputs}><small>正文输出</small><strong>{readiness.enabledProseOutputCount}</strong></button>
       <button className="story-play-evidence-chip" type="button" data-ready={readiness.missingActors.length === 0}
         disabled={openActor === undefined || configureDisabled} onClick={openActor}><small>角色卡</small><strong>{actorCount}/{participantCount}</strong></button>
       <button className="story-play-evidence-chip" type="button" data-ready={readiness.missingDialogue.length === 0}
@@ -1830,6 +1840,7 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
         onClick={onOpenSources}><small>原著资料</small><strong>{readiness.originalSourceCount}</strong></button>
     </div>
     <div className="story-play-evidence-actions">
+      {readiness.enabledProseOutputCount === 0 && <button className="story-studio-button story-studio-button-primary" type="button" onClick={onOpenOutputs}>配置输出布局</button>}
       {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={configureDisabled} onClick={onConfigureCast}>
         {readiness.missingActors.length > 0 ? '补人物来源' : '人物来源'}</button>}
       {firstMissingDialogue !== undefined && <button className="story-studio-button" type="button"
@@ -1843,7 +1854,7 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1860,6 +1871,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
+  readonly onOpenOutputs: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1888,7 +1900,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
     </div>
     <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
       onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
-      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
+      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} onOpenOutputs={onOpenOutputs} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={currentName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -1931,7 +1943,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1949,6 +1961,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
+  readonly onOpenOutputs: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1986,7 +1999,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
     </div>
     <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
       onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
-      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
+      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} onOpenOutputs={onOpenOutputs} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={characterName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -2279,7 +2292,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onImportSourceUrl, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onImportSourceUrl, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2301,6 +2314,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
+  readonly onOpenOutputs: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -2338,6 +2352,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
       launchUnavailableReason={launchUnavailableReason} onLaunchTargetChange={onLaunchTargetChange}
       onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
       onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+      onOpenOutputs={onOpenOutputs}
       onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
@@ -2347,6 +2362,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
     onConfigureCast={configureCast} onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
     onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+    onOpenOutputs={onOpenOutputs}
     onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
@@ -2619,6 +2635,12 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   }
   const advanceSession = (request: string): void => {
     if (workspace === undefined || dirty) return
+    if (inspectStoryPlayWorldReadiness(workspace).enabledProseOutputCount === 0) {
+      setError('先在输出布局中启用至少一个正文分区，再开始或继续游玩。')
+      setView('outputs')
+      setSelection(undefined)
+      return
+    }
     setSaving(true)
     setError(undefined)
     const pending = sessionId !== undefined && onContinueSession !== undefined
@@ -2931,6 +2953,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       onInstall={installWorld} onUpdateCast={saveWorldCast}
       onOpenCharacter={id => { select({ kind: 'character', id }) }}
       onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
+      onOpenOutputs={() => { setView('outputs'); setSelection(undefined) }}
       onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}

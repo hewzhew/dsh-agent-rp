@@ -24,6 +24,14 @@ export type AgentRpStoryTurnStage =
   | 'editor'
   | 'continuity'
 
+/** Bounded Host diagnostic for a failed story Worker stage. */
+export interface AgentRpStoryTurnFailureDetail {
+  readonly code: string
+  readonly message: string
+  readonly status?: number
+  readonly providerRetryAfterMs?: number
+}
+
 /** Browser-visible progress reconstructed from logged story stage events. */
 export interface AgentRpStoryTurnProgress {
   readonly workspaceId: string
@@ -35,6 +43,8 @@ export interface AgentRpStoryTurnProgress {
     readonly stage: AgentRpStoryTurnStage
     readonly subjectId?: string
     readonly status: 'running' | 'succeeded' | 'failed'
+    readonly failure?: 'aborted' | 'provider' | 'unknown'
+    readonly detail?: AgentRpStoryTurnFailureDetail
   }[]
 }
 

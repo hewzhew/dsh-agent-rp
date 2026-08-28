@@ -152,6 +152,24 @@ const STORY_TURN_STAGES = new Set([
   'director', 'section', 'voice', 'editor', 'continuity',
 ])
 
+const MAX_STORY_STAGE_FAILURE_CODE_LENGTH = 128
+const MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH = 2_000
+
+function validStoryTurnFailureDetail(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const detail = value as Record<string, unknown>
+  return typeof detail.code === 'string' && detail.code.length > 0
+    && detail.code.length <= MAX_STORY_STAGE_FAILURE_CODE_LENGTH
+    && typeof detail.message === 'string' && detail.message.length > 0
+    && detail.message.length <= MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH
+    && (detail.status === undefined
+      || (typeof detail.status === 'number' && Number.isSafeInteger(detail.status)
+        && detail.status >= 100 && detail.status <= 599))
+    && (detail.providerRetryAfterMs === undefined
+      || (typeof detail.providerRetryAfterMs === 'number'
+        && Number.isFinite(detail.providerRetryAfterMs) && detail.providerRetryAfterMs > 0))
+}
+
 function validStoryTurnProgress(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
@@ -167,6 +185,9 @@ function validStoryTurnProgress(value: unknown): boolean {
       && typeof item.stage === 'string' && STORY_TURN_STAGES.has(item.stage)
       && (item.subjectId === undefined || typeof item.subjectId === 'string')
       && (item.status === 'running' || item.status === 'succeeded' || item.status === 'failed')
+      && (item.failure === undefined || (item.status === 'failed'
+        && (item.failure === 'aborted' || item.failure === 'provider' || item.failure === 'unknown')))
+      && (item.detail === undefined || (item.status === 'failed' && validStoryTurnFailureDetail(item.detail)))
   })
 }
 
@@ -209,11 +230,25 @@ function applyStoryTurnProgress(
     if (current === undefined) return current
     const status = event.data.result.kind === 'success' ? 'succeeded' as const : 'failed' as const
     const index = current.requests.findIndex(item => item.requestId === event.data.requestId)
-    if (index < 0 || current.requests[index]?.status === status) return current
+    if (index < 0) return current
     return {
       ...current,
       requests: current.requests.map((request, requestIndex) => requestIndex === index
-        ? { ...request, status }
+        ? event.data.result.kind === 'success'
+          ? {
+              requestId: request.requestId,
+              stage: request.stage,
+              ...(request.subjectId === undefined ? {} : { subjectId: request.subjectId }),
+              status,
+            }
+          : {
+              ...request,
+              status,
+              failure: event.data.result.failure,
+              ...(validStoryTurnFailureDetail(event.data.result.detail)
+                ? { detail: event.data.result.detail }
+                : {}),
+            }
         : request),
     }
   }

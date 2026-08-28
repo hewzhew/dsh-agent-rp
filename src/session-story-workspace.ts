@@ -4,6 +4,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
+import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 
 /** User-authored selection event applied before later story turns. */
@@ -41,6 +42,12 @@ function parseRequest(rawInput: string): StoryWorkspaceCommandRequest {
     throw new Error('故事工作区命令字段无效')
   }
   return record as unknown as StoryWorkspaceCommandRequest
+}
+
+function assertStoryWorkspaceOutputReady(workspace: StoryWorkspaceSnapshot): void {
+  if (!workspace.outputs.some(output => output.enabled && output.kind === 'prose')) {
+    throw new Error('请先在输出布局中启用至少一个正文分区')
+  }
 }
 
 /** Return the latest explicitly selected story workspace, including a later clear. */
@@ -81,6 +88,7 @@ export function createStoryWorkspaceSessionSeed(
   const workspace = store.get(workspaceId)
   if (workspace.world === undefined) throw new Error('请先给游玩场地装入一个世界模块')
   if (workspace.characters.length === 0) throw new Error('游玩场地至少需要一位人物')
+  assertStoryWorkspaceOutputReady(workspace)
   const time = Date.now()
   return {
     title: workspace.name,
@@ -107,7 +115,7 @@ export function executeStoryWorkspaceCommand(
   },
 ): { readonly kind: 'success'; readonly sourceEventSeq: number } {
   const request = parseRequest(invocation.rawInput)
-  if (request.workspaceId !== null) store.get(request.workspaceId)
+  if (request.workspaceId !== null) assertStoryWorkspaceOutputReady(store.get(request.workspaceId))
   const source = invocation.agent.session.events.findLast(event => event.type === 'command/run'
     && String(event.data.commandId) === String(invocation.commandId))
   if (source?.type !== 'command/run' || source.data.name !== 'rp-story-workspace'

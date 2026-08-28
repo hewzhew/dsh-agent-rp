@@ -4,9 +4,10 @@ import { isFlyingChessWorldState } from '../flying-chess-protocol.ts'
 import type { StoryCharacter, StoryWorkspaceSnapshot } from '../story-workspace-protocol.ts'
 import { parseStoryVoiceDocument, storyVoiceSpeakerMatches } from '../story-voice-evidence.ts'
 
-/** Evidence coverage for the characters participating in one installed world. */
+/** Output and evidence readiness for one installed world. */
 export interface StoryPlayWorldReadiness {
   readonly participants: readonly StoryCharacter[]
+  readonly enabledProseOutputCount: number
   readonly originalSourceCount: number
   readonly missingActors: readonly StoryCharacter[]
   readonly missingDialogue: readonly StoryCharacter[]
@@ -27,13 +28,14 @@ export function storyPlayWorldParticipants(workspace: StoryWorkspaceSnapshot): r
   })
 }
 
-/** Inspect actual actor, profile-dialogue, and original-source coverage for the installed cast. */
+/** Inspect output, actor, profile-dialogue, and original-source readiness for the installed cast. */
 export function inspectStoryPlayWorldReadiness(workspace: StoryWorkspaceSnapshot): StoryPlayWorldReadiness {
   const participants = storyPlayWorldParticipants(workspace)
   const originalSources = workspace.sources.filter(source => source.enabled && source.kind === 'original')
   const originalVoiceLines = originalSources.flatMap(source => parseStoryVoiceDocument(source.content).orderedLines)
   return {
     participants,
+    enabledProseOutputCount: workspace.outputs.filter(output => output.enabled && output.kind === 'prose').length,
     originalSourceCount: originalSources.length,
     missingActors: participants.filter(character => character.actor === undefined),
     missingDialogue: participants.filter(character => character.profile.exampleDialogue.trim() === ''),
