@@ -1,12 +1,16 @@
 /** Versioned browser contract for independent DSH plugins extending Agent RP UI. */
 
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PlayWorldSnapshot, PlayWorldTurnProjection } from './play-world-protocol.ts'
 
 /** The API version encoded by the `@hewzhew/dsh-agent-rp/client-extension/v0` export. */
 export const AGENT_RP_CLIENT_EXTENSION_API_VERSION = 0 as const
 
 /** Ordered external sections rendered inside the Agent RP sidebar workbench. */
 export const AGENT_RP_WORKBENCH_SECTION_SLOT = 'agent-rp.workbench.section' as const
+
+/** Module-id-keyed browser view rendered inside an installed executable world. */
+export const AGENT_RP_PLAY_WORLD_VIEW_SLOT = 'agent-rp.play-world.view' as const
 
 /** Client Cordis service used by independent plugins to install ST extension bundles. */
 export const AGENT_RP_ST_EXTENSION_SERVICE = 'agentRpStExtensions' as const
@@ -49,6 +53,23 @@ export interface AgentRpWorkbenchSectionOwnerProps {
   readonly closeWorkbench: () => void
 }
 
+/** Public identity for one character participating in an executable world. */
+export interface AgentRpPlayWorldViewCharacter {
+  readonly id: string
+  readonly name: string
+}
+
+/** Browser-safe state and actions supplied to one module-owned world view. */
+export interface AgentRpPlayWorldViewOwnerProps {
+  readonly world: PlayWorldSnapshot
+  readonly characters: readonly AgentRpPlayWorldViewCharacter[]
+  readonly turn: PlayWorldTurnProjection | null
+  readonly busy: boolean
+  readonly dirty: boolean
+  /** Dispatch one action id from the current Host-projected legal turn. */
+  readonly dispatchAction: (actionId: string) => void
+}
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Trusted client plugins can add complete task rows without receiving Agent RP private state. */
@@ -57,8 +78,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'root'
       owner: AgentRpWorkbenchSectionOwnerProps
     }
+    /** Trusted client plugins can render the module-owned body of an installed world. */
+    'agent-rp.play-world.view': {
+      kind: 'keyed'
+      scope: 'root'
+      owner: AgentRpPlayWorldViewOwnerProps
+    }
   }
 }
 
 /** Props received by a registered Agent RP workbench section component. */
 export type AgentRpWorkbenchSectionProps = PropsRuntime<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>
+
+/** Props received by a client view registered under its Host world module id. */
+export type AgentRpPlayWorldViewProps = PropsRuntime<typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>

@@ -70,10 +70,15 @@ if (extension.AGENT_RP_EXTENSION_API_VERSION !== 0) {
 }
 
 const clientExtension = await import('@hewzhew/dsh-agent-rp/client-extension/v0')
-for (const name of ['AGENT_RP_CLIENT_EXTENSION_API_VERSION', 'AGENT_RP_WORKBENCH_SECTION_SLOT']) {
+for (const name of [
+  'AGENT_RP_CLIENT_EXTENSION_API_VERSION',
+  'AGENT_RP_PLAY_WORLD_VIEW_SLOT',
+  'AGENT_RP_WORKBENCH_SECTION_SLOT',
+]) {
   if (!(name in clientExtension)) throw new Error(`Published client-extension/v0 export is missing ${name}`)
 }
 if (clientExtension.AGENT_RP_CLIENT_EXTENSION_API_VERSION !== 0
+  || clientExtension.AGENT_RP_PLAY_WORLD_VIEW_SLOT !== 'agent-rp.play-world.view'
   || clientExtension.AGENT_RP_WORKBENCH_SECTION_SLOT !== 'agent-rp.workbench.section') {
   throw new Error('Published client-extension/v0 reports the wrong contract')
 }

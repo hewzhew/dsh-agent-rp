@@ -45,6 +45,37 @@ export function apply(ctx: ClientContext): void {
 
 浏览器协议文件很小，可以由扩展的构建器打入自己的 client bundle。`dsh.client.inject` 只是客户端模块图的依赖说明，不负责激活顺序；Slot 声明等待由上面的 `ctx.slots.inject()` 完成。
 
+## 可执行世界原生视图
+
+Host 通过 `registerPlayWorldModule()` 注册规则模块后，同一插件的浏览器面可以用模块 id 作为 key 注册 `agent-rp.play-world.view`。Agent RP 保留世界标题、人物来源、原著准备、会话推进与重新开局的共用外壳；插件只替换模块专属的状态与操作区。没有对应 key 时自动使用通用行动列表和世界事件视图。
+
+```ts
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import {
+  AGENT_RP_PLAY_WORLD_VIEW_SLOT,
+  type AgentRpPlayWorldViewProps,
+} from '@hewzhew/dsh-agent-rp/client-extension/v0'
+
+export const inject = ['slots']
+
+function WorldView(props: AgentRpPlayWorldViewProps) {
+  const action = props.turn?.actions[0]
+  return action === undefined ? null : <button
+    disabled={props.busy || props.dirty}
+    onClick={() => { props.dispatchAction(action.id) }}
+  >{action.label}</button>
+}
+
+export function apply(ctx: ClientContext): void {
+  ctx.slots.inject(AGENT_RP_PLAY_WORLD_VIEW_SLOT, () => ctx.slots.register({
+    name: AGENT_RP_PLAY_WORLD_VIEW_SLOT,
+    key: 'community.worldbook',
+  }, WorldView))
+}
+```
+
+视图只收到该世界的浏览器安全快照、参与人物的 id 与名称、Host 投影的当前合法行动及动作提交函数。它不读取故事图、人物档案、私有认知或 Agent RP 内部 React 状态；动作 id 仍由 Host 对当前 cycle 重新验证，客户端视图不能携带或执行模块私有 payload。
+
 ## 安装型 ST 扩展实验接口
 
 功能分支中的 `agentRpStExtensions` 客户端服务接收独立插件已经打包完成的 ESM 与可选 CSS。注册发生在插件的浏览器 `apply()` 中；把服务键加入 `inject` 后，Cordis 会等待 Agent RP 提供浏览器注册表，调用方的 effect 则负责在插件卸载时撤销扩展。
