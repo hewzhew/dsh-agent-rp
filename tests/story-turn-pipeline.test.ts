@@ -347,8 +347,8 @@ test('runs logged story stages while keeping each character request privately sc
           characterSystems.push(system)
           characterBodies.push(body)
           const evidence = body.match(/character:[^"\\]+:example-dialogue/u)?.[0] ?? 'missing'
-          const conversationEvidence = body.match(/local:source-[0-9a-f-]+:3/u)?.[0] ?? 'missing-context'
-          const voiceNotesEvidence = body.match(/local:source-[0-9a-f-]+:4/u)?.[0] ?? 'missing-notes'
+          const targetSeed = targetSeedIds.find(id => id.startsWith(`${evidence}#seed-`)) ?? 'missing-target-seed'
+          const contextSeed = contextSeedIds[0] ?? 'missing-context-seed'
           text = body.includes('阿梨知道徽章')
             ? JSON.stringify({
               observation: '看见玩家举起徽章。',
@@ -359,7 +359,7 @@ test('runs logged story stages while keeping each character request privately sc
                 focus: '先确认眼前的刻痕。',
                 effect: '让对方暂缓结论，先确认刻痕。',
               },
-              voiceEvidence: [evidence, conversationEvidence, voiceNotesEvidence, 'character:invented:example-dialogue'],
+              voiceEvidence: [targetSeed, contextSeed, 'character:invented:example-dialogue'],
               insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
             })
             : JSON.stringify({
@@ -546,6 +546,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /focus 不是完整论点/u)
   assert.match(characterSystems[0]!, /一个对象、区别或直接答案/u)
   assert.match(characterSystems[0]!, /effect.*不会交给声音 Worker/u)
+  assert.match(characterSystems[0]!, /资料项编号.*\[目标人物\].*seed ID/u)
+  assert.match(characterSystems[0]!, /\[对话上下文\].*seed ID.*不能引用/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(characterSystems[0]!, /futureChoice.*下一轮仍会因此改变/u)
@@ -555,7 +557,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /发言焦点：先确认眼前的刻痕/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
-  assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
+  assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]\\n- 持久私有变化/u)
+  assert.doesNotMatch(directorBody, /语气依据：[^"\\]*#seed-/u)
   assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
