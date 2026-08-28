@@ -1658,7 +1658,45 @@ function WorldEventList({ events }: { readonly events: readonly PlayWorldEvent[]
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onRestart, onAction }: {
+function playWorldParticipants(workspace: StoryWorkspaceSnapshot): readonly StoryCharacter[] {
+  const ids = workspace.world !== undefined && isFlyingChessWorldState(workspace.world.state)
+    ? workspace.world.state.playerOrder
+    : (workspace.worldBinding?.cast.length ?? 0) > 0
+      ? workspace.worldBinding?.cast.map(binding => binding.characterId) ?? []
+      : workspace.characters.map(character => character.id)
+  const characters = new Map(workspace.characters.map(character => [character.id, character]))
+  return [...new Set(ids)].flatMap(id => {
+    const character = characters.get(id)
+    return character === undefined ? [] : [character]
+  })
+}
+
+function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onOpenSources }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly configureDisabled: boolean
+  readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenSources: () => void
+}) {
+  const participants = playWorldParticipants(workspace)
+  const actorCount = participants.filter(character => character.actor !== undefined).length
+  const dialogueCount = participants.filter(character => character.profile.exampleDialogue.trim() !== '').length
+  const localSourceCount = workspace.sources.filter(source => source.enabled && source.kind !== 'web').length
+  const missingActor = actorCount < participants.length
+  const missingVoice = dialogueCount < participants.length
+  return <section className="story-play-evidence" aria-label="场地准备状态">
+    <div className="story-play-evidence-items">
+      <span className="story-play-evidence-chip" data-ready={!missingActor}><small>角色卡</small><strong>{actorCount}/{participants.length}</strong></span>
+      <span className="story-play-evidence-chip" data-ready={!missingVoice}><small>说话样本</small><strong>{dialogueCount}/{participants.length}</strong></span>
+      <span className="story-play-evidence-chip" data-ready={localSourceCount > 0}><small>本地资料</small><strong>{localSourceCount}</strong></span>
+    </div>
+    <div className="story-play-evidence-actions">
+      {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={configureDisabled} onClick={onConfigureCast}>人物来源</button>}
+      <button className="story-studio-button" type="button" onClick={onOpenSources}>{missingVoice || localSourceCount === 0 ? '添加原著' : '查看原著'}</button>
+    </div>
+  </section>
+}
+
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1671,6 +1709,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1686,8 +1725,6 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
           {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button" type="button"
             disabled={busy || dirty || !legalActionIds.has('roll')} onClick={() => { onAction('roll') }}>亲自掷骰</button>}
           {state.pendingRoll !== undefined && <span className="story-die" aria-label={`骰点 ${state.pendingRoll.value}`}>{state.pendingRoll.value}</span>}
-          {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={busy || dirty}
-            onClick={onConfigureCast}>人物来源</button>}
           <button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
             if (!restartArmed) {
               setRestartArmed(true)
@@ -1699,6 +1736,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
         </div>
       </div>
     </div>
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={currentName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -1741,7 +1779,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1754,6 +1792,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1765,8 +1804,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
     <div className="story-play-heading"><div><span>世界游玩 · {module?.category === 'simulation' ? '模拟' : '游戏'}</span>
       <h1>{workspace.world?.title}</h1><p>{module?.summary ?? '这个世界由已安装模块维护权威状态与合法动作。'}</p></div>
       <div className="story-play-turn"><small>{turn === null ? '当前状态' : '当前行动'}</small><strong>{characterName}</strong>
-        <div className="story-play-turn-actions">{onConfigureCast !== undefined && <button className="story-studio-button" type="button"
-          disabled={busy || dirty} onClick={onConfigureCast}>人物来源</button>}<button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
+        <div className="story-play-turn-actions"><button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
           if (!restartArmed) {
             setRestartArmed(true)
             return
@@ -1775,6 +1813,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
           onRestart()
         }}>{restartArmed ? '确认重新开始' : '重新开始'}</button></div></div>
     </div>
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={characterName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -2037,7 +2076,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2054,6 +2093,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
+  readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -2090,13 +2130,13 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
       sessionAction={sessionAction} launchTargets={launchTargets} launchTargetId={launchTargetId}
       launchUnavailableReason={launchUnavailableReason} onLaunchTargetChange={onLaunchTargetChange}
       onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
-      onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+      onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} launchTargets={launchTargets}
     launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
-    onConfigureCast={configureCast} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+    onConfigureCast={configureCast} onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
@@ -2638,6 +2678,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       onLaunchTargetChange={setLaunchTargetId}
       onAdvanceSession={advanceSession}
       onImportActor={importWorldActor} onInstall={installWorld} onUpdateCast={saveWorldCast}
+      onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
       onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}
