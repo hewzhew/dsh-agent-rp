@@ -69,6 +69,10 @@ import {
 } from '../story-suggestion-batch.ts'
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
+import {
+  parseStoryVoiceDocument,
+  storyVoiceSpeakerMatches,
+} from '../story-voice-evidence.ts'
 import { groupStoryTimeline, type StoryTimelineGroup } from '../story-timeline.ts'
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from '../story-world-events.ts'
@@ -1236,9 +1240,22 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
 }) {
   const passages = splitStorySourcePassages(source)
   const citations = workspace.citations.filter(citation => citation.sourceId === source.id)
+  const voiceDocument = parseStoryVoiceDocument(source.content)
+  const voiceMatches = workspace.characters.flatMap(character => {
+    const names = [character.name, ...(character.voiceAliases ?? [])]
+    const lines = voiceDocument.orderedLines.filter(line => storyVoiceSpeakerMatches(names, line.speaker))
+    const primaryLines = lines.filter(line => line.variant !== 'translation')
+    const count = primaryLines.length > 0 ? primaryLines.length : lines.length
+    return count === 0 ? [] : [{ character, count }]
+  })
   return <div className="story-source-reader">
     <div className="story-studio-view-heading"><div><button className="story-source-back" type="button" onClick={onBack}>← 资料库</button>
       <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div></div>
+    {source.kind === 'original' && <div className="story-source-voice-status" data-empty={voiceMatches.length === 0}>
+      <strong>人物声音</strong>{voiceMatches.length === 0
+        ? <span>没有识别到人物署名台词；可在人物档案补充原作署名。</span>
+        : <div>{voiceMatches.map(({ character, count }) => <span key={character.id}>{character.name}<b>{count} 句</b></span>)}</div>}
+    </div>}
     {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
       {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
         key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
@@ -1680,18 +1697,24 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
   const participants = playWorldParticipants(workspace)
   const actorCount = participants.filter(character => character.actor !== undefined).length
   const dialogueCount = participants.filter(character => character.profile.exampleDialogue.trim() !== '').length
-  const localSourceCount = workspace.sources.filter(source => source.enabled && source.kind !== 'web').length
+  const originalSources = workspace.sources.filter(source => source.enabled && source.kind === 'original')
+  const originalVoiceLines = originalSources.flatMap(source => parseStoryVoiceDocument(source.content).orderedLines)
+  const sourceVoiceCount = participants.filter(character => {
+    const names = [character.name, ...(character.voiceAliases ?? [])]
+    return originalVoiceLines.some(line => storyVoiceSpeakerMatches(names, line.speaker))
+  }).length
   const missingActor = actorCount < participants.length
-  const missingVoice = dialogueCount < participants.length
+  const missingSourceVoice = sourceVoiceCount < participants.length
   return <section className="story-play-evidence" aria-label="场地准备状态">
     <div className="story-play-evidence-items">
       <span className="story-play-evidence-chip" data-ready={!missingActor}><small>角色卡</small><strong>{actorCount}/{participants.length}</strong></span>
-      <span className="story-play-evidence-chip" data-ready={!missingVoice}><small>说话样本</small><strong>{dialogueCount}/{participants.length}</strong></span>
-      <span className="story-play-evidence-chip" data-ready={localSourceCount > 0}><small>本地资料</small><strong>{localSourceCount}</strong></span>
+      <span className="story-play-evidence-chip" data-ready={dialogueCount === participants.length}><small>角色样本</small><strong>{dialogueCount}/{participants.length}</strong></span>
+      <span className="story-play-evidence-chip" data-ready={!missingSourceVoice}><small>原著声音</small><strong>{sourceVoiceCount}/{participants.length}</strong></span>
+      <span className="story-play-evidence-chip" data-ready={originalSources.length > 0}><small>原著资料</small><strong>{originalSources.length}</strong></span>
     </div>
     <div className="story-play-evidence-actions">
       {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={configureDisabled} onClick={onConfigureCast}>人物来源</button>}
-      <button className="story-studio-button" type="button" onClick={onOpenSources}>{missingVoice || localSourceCount === 0 ? '添加原著' : '查看原著'}</button>
+      <button className="story-studio-button" type="button" onClick={onOpenSources}>{missingSourceVoice || originalSources.length === 0 ? '添加原著' : '查看原著'}</button>
     </div>
   </section>
 }
