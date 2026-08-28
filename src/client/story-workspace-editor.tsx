@@ -33,6 +33,7 @@ import {
 } from '../flying-chess-protocol.ts'
 import {
   PLAY_WORLD_RESOURCES_PATH,
+  type PlayWorldCastSelection,
   type PlayWorldModuleDescriptor,
   type PlayWorldResourceDescriptor,
   type PlayWorldEvent,
@@ -351,11 +352,12 @@ async function listActorResources(): Promise<readonly RoleplayResourceDescriptor
 async function installPlayWorld(
   workspace: StoryWorkspaceSnapshot,
   resource: PlayWorldResourceDescriptor['resource'],
+  cast: readonly PlayWorldCastSelection[],
 ): Promise<StoryWorkspaceResult> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world`, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ format: 0, revision: workspace.revision, resource }),
+    body: JSON.stringify({ format: 0, revision: workspace.revision, resource, cast }),
   })
   return workspaceResult(value, '世界模块安装')
 }
@@ -1733,32 +1735,97 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   </div>
 }
 
-function PlayWorldView({ workspace, worlds, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
+function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty, onInstall }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly world: PlayWorldResourceDescriptor
+  readonly actorResources: readonly RoleplayResourceDescriptor[]
+  readonly busy: boolean
+  readonly dirty: boolean
+  readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
+}) {
+  const [actorBySlot, setActorBySlot] = useState<Readonly<Record<string, string>>>(() => Object.fromEntries(
+    world.castSlots.flatMap(slot => {
+      const exact = actorResources.find(actor => actor.name === slot.name)
+      return exact === undefined ? [] : [[slot.id, exact.id]]
+    }),
+  ))
+  const selectedCount = world.castSlots.filter(slot => actorBySlot[slot.id] !== undefined).length
+  const selectedActorIds = new Set(Object.values(actorBySlot))
+  const repeatsActor = selectedActorIds.size !== selectedCount
+  const missingRequired = world.castSlots.some(slot => slot.required && actorBySlot[slot.id] === undefined)
+  const enoughLegacyCharacters = world.castSlots.length === 0
+    && workspace.characters.length >= world.minCharacters && workspace.characters.length <= world.maxCharacters
+  const ready = world.moduleAvailable && (world.castSlots.length === 0
+    ? enoughLegacyCharacters
+    : !missingRequired && !repeatsActor && selectedCount >= world.minCharacters && selectedCount <= world.maxCharacters)
+  const install = (): void => {
+    const usedCharacterIds = new Set<string>()
+    const cast = world.castSlots.flatMap(slot => {
+      const actorId = actorBySlot[slot.id]
+      if (actorId === undefined) return []
+      const existing = workspace.characters.find(character => !usedCharacterIds.has(character.id)
+        && (character.actor?.id === actorId || character.name === slot.name))
+      if (existing !== undefined) usedCharacterIds.add(existing.id)
+      return [{
+        slotId: slot.id,
+        actor: { kind: 'actor' as const, id: actorId },
+        ...(existing === undefined ? {} : { characterId: existing.id }),
+      }]
+    })
+    onInstall(world.resource, cast)
+  }
+  return <article className="story-world-module-card">
+    <span>{world.category === 'game' ? '游戏' : '模拟'}</span><h2>{world.name}</h2>
+    <p>{world.summary}</p>
+    {world.castSlots.length === 0
+      ? <small>需要 {world.minCharacters}–{world.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
+      : <div className="story-world-cast-slots">{world.castSlots.map(slot => <label key={slot.id}>
+        <span><b>{slot.name}</b><small>{slot.required ? '必需' : '可选'} · {slot.description}</small></span>
+        <select className="story-studio-input" value={actorBySlot[slot.id] ?? ''} onChange={event => {
+          const actorId = event.target.value
+          setActorBySlot(current => {
+            const next = { ...current }
+            if (actorId === '') delete next[slot.id]
+            else next[slot.id] = actorId
+            return next
+          })
+        }}>
+          <option value="">{slot.required ? '选择角色卡' : '不加入'}</option>
+          {actorResources.map(actor => <option value={actor.id} key={actor.id}
+            disabled={actorBySlot[slot.id] !== actor.id && selectedActorIds.has(actor.id)}>{actor.name}</option>)}
+        </select>
+      </label>)}</div>}
+    {world.castSlots.length > 0 && actorResources.length === 0 && <small>资源中心还没有可用角色卡；先导入人物卡，再回来装入世界。</small>}
+    {repeatsActor && <small>同一张角色卡不能同时扮演多个世界人物。</small>}
+    {!world.moduleAvailable && <small>需要安装规则模块：{world.id}</small>}
+    <button className="story-studio-button story-studio-button-primary" type="button" disabled={!ready || busy || dirty}
+      onClick={install}>{!world.moduleAvailable ? '规则模块尚未安装'
+        : ready ? '用这些人物装入世界'
+          : world.castSlots.length === 0 ? '先补齐人物' : '先选择必需角色卡'}</button>
+  </article>
+}
+
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
+  readonly actorResources: readonly RoleplayResourceDescriptor[]
   readonly turn: PlayWorldTurnProjection | null
   readonly moduleAvailable: boolean | null
   readonly busy: boolean
   readonly dirty: boolean
   readonly sessionAction: 'start' | 'continue' | undefined
   readonly onAdvanceSession: (request: string) => void
-  readonly onInstall: (resource: PlayWorldResourceDescriptor['resource']) => void
+  readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
   if (workspace.world === undefined) {
     return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
       <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
-      <div className="story-world-module-grid">{worlds.map(world => {
-        const enoughCharacters = workspace.characters.length >= world.minCharacters && workspace.characters.length <= world.maxCharacters
-        const ready = enoughCharacters && world.moduleAvailable
-        return <article className="story-world-module-card" key={`${world.resource.kind}:${world.resource.id}`}>
-          <span>{world.category === 'game' ? '游戏' : '模拟'}</span><h2>{world.name}</h2>
-          <p>{world.summary}</p><small>需要 {world.minCharacters}–{world.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
-          {!world.moduleAvailable && <small>需要安装规则模块：{world.id}</small>}
-          <button className="story-studio-button story-studio-button-primary" type="button" disabled={!ready || busy || dirty}
-            onClick={() => { onInstall(world.resource) }}>{!world.moduleAvailable ? '规则模块尚未安装' : enoughCharacters ? '装入这个世界' : '先补齐人物'}</button></article>
-      })}{worlds.length === 0 && <div className="story-studio-empty">当前没有可装入的世界资源。</div>}</div>
+      <div className="story-world-module-grid">{worlds.map(world => <PlayWorldInstallerCard workspace={workspace} world={world}
+        actorResources={actorResources} busy={busy} dirty={dirty} onInstall={onInstall}
+        key={`${world.resource.kind}:${world.resource.id}`} />)}
+      {worlds.length === 0 && <div className="story-studio-empty">当前没有可装入的世界资源。</div>}</div>
     </div>
   }
   const installedResource = worlds.find(world => workspace.worldBinding?.resource === undefined
@@ -1912,11 +1979,11 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setNotice('所有修改已保存')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
-  const installWorld = (resource: PlayWorldResourceDescriptor['resource']): void => {
+  const installWorld = (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]): void => {
     if (workspace === undefined || dirty) return
     setSaving(true)
     setError(undefined)
-    void installPlayWorld(workspace, resource).then(async saved => {
+    void installPlayWorld(workspace, resource, cast).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
@@ -2240,7 +2307,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     main = <div className="story-studio-empty"><span style={{ fontSize: 34 }}>✦</span><strong>创建一个游玩场地</strong><span>人物、世界规则、认知、事件与资料会在同一处持续演进。</span>
       <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建场地</button></div>
   } else if (view === 'world') {
-    main = <PlayWorldView workspace={workspace} worlds={playWorlds} turn={worldTurn} moduleAvailable={worldModuleAvailable} busy={saving} dirty={dirty}
+    main = <PlayWorldView workspace={workspace} worlds={playWorlds} actorResources={actorResources} turn={worldTurn} moduleAvailable={worldModuleAvailable} busy={saving} dirty={dirty}
       sessionAction={launchSourceSessionId !== undefined && onStartSession !== undefined
         ? 'start'
         : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}

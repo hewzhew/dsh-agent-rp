@@ -10,6 +10,7 @@ import {
   type RoleplayResourceDetail,
   type RoleplayResourceKind,
   type RoleplayResourceSelection,
+  type RoleplayWorldCastSlotDetail,
   type RoleplayWorldResourceDetail,
 } from './roleplay-resource-catalog-protocol.ts'
 
@@ -58,6 +59,7 @@ export interface RoleplayWorldProjection {
   /** Durable browser-visible JSON; providers must not include credentials or private Host state. */
   readonly configuration: JsonValue
   readonly sources: readonly RoleplayResourceSelection[]
+  readonly castSlots: readonly RoleplayWorldCastSlotDetail[]
 }
 
 /** Host-only source snapshot copied into a story workspace during world installation. */
@@ -294,10 +296,11 @@ export class RoleplayResourceCatalog {
     }
     const projected = registration.projectWorld(Object.freeze({ ...selection }), located.descriptor)
     if (typeof projected !== 'object' || projected === null || Array.isArray(projected)
-      || Object.keys(projected).some(key => !['moduleId', 'configuration', 'sources'].includes(key))
+      || Object.keys(projected).some(key => !['moduleId', 'configuration', 'sources', 'castSlots'].includes(key))
       || typeof projected.moduleId !== 'string'
       || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(projected.moduleId)
-      || !Array.isArray(projected.sources) || projected.sources.length > 64) {
+      || !Array.isArray(projected.sources) || projected.sources.length > 64
+      || !Array.isArray(projected.castSlots)) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid world projection`)
     }
     const configuration = snapshotJsonValue(projected.configuration) as JsonValue | undefined
@@ -317,16 +320,37 @@ export class RoleplayResourceCatalog {
     if (new Set(sources.map(source => JSON.stringify(source))).size !== sources.length) {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} repeated a world source reference`)
     }
+    const castSlots = projected.castSlots.map((slot, index) => {
+      if (typeof slot !== 'object' || slot === null || Array.isArray(slot)
+        || Object.keys(slot).some(key => !['id', 'name', 'description', 'required'].includes(key))) {
+        throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slot ${index}`)
+      }
+      const id = stableId(slot.id, 'Roleplay world cast slot id')
+      if (typeof slot.name !== 'string' || slot.name.trim() === '' || slot.name.length > 120
+        || typeof slot.description !== 'string' || slot.description.length > 500
+        || typeof slot.required !== 'boolean') {
+        throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slot ${JSON.stringify(id)}`)
+      }
+      return Object.freeze({ id, name: slot.name.trim(), description: slot.description, required: slot.required })
+    })
+    if (castSlots.length > 64 || new Set(castSlots.map(slot => slot.id)).size !== castSlots.length) {
+      throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned invalid cast slots`)
+    }
     const detail = registration.inspect === undefined ? undefined : parseRoleplayResourceDetail(
       registration.inspect(located.descriptor), located.descriptor,
     )
     if (detail?.kind === 'world' && detail.playWorld !== undefined && detail.playWorld.moduleId !== projected.moduleId) {
       throw new Error(`世界资源 ${JSON.stringify(located.descriptor.name)} 的规则模块声明不一致`)
     }
+    if (detail?.kind === 'world' && detail.playWorld !== undefined
+      && !isDeepStrictEqual(detail.playWorld.castSlots, castSlots)) {
+      throw new Error(`世界资源 ${JSON.stringify(located.descriptor.name)} 的人物槽位声明不一致`)
+    }
     return Object.freeze({
       moduleId: projected.moduleId,
       configuration,
       sources: Object.freeze(sources),
+      castSlots: Object.freeze(castSlots),
     })
   }
 

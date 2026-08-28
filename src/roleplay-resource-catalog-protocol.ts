@@ -37,6 +37,14 @@ export interface RoleplayPersonaResourceDetail {
   readonly description: string
 }
 
+/** One browser-visible role opening declared by an executable world recipe. */
+export interface RoleplayWorldCastSlotDetail {
+  readonly id: string
+  readonly name: string
+  readonly description: string
+  readonly required: boolean
+}
+
 export interface RoleplayWorldResourceDetail {
   readonly kind: 'world'
   readonly entryCount: number
@@ -47,6 +55,7 @@ export interface RoleplayWorldResourceDetail {
     readonly category: 'game' | 'simulation'
     readonly minCharacters: number
     readonly maxCharacters: number
+    readonly castSlots: readonly RoleplayWorldCastSlotDetail[]
   }
 }
 
@@ -135,20 +144,40 @@ export function parseRoleplayResourceDetail(
     }
     const playWorld = detail.playWorld
     if (playWorld !== undefined && (typeof playWorld !== 'object' || playWorld === null
-      || !exactDetailKeys(playWorld, ['moduleId', 'summary', 'category', 'minCharacters', 'maxCharacters'])
+      || !exactDetailKeys(playWorld, ['moduleId', 'summary', 'category', 'minCharacters', 'maxCharacters', 'castSlots'])
       || typeof playWorld.moduleId !== 'string'
       || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(playWorld.moduleId)
       || typeof playWorld.summary !== 'string' || playWorld.summary.trim() === '' || playWorld.summary.length > 500
       || playWorld.category !== 'game' && playWorld.category !== 'simulation'
       || !Number.isSafeInteger(playWorld.minCharacters) || playWorld.minCharacters < 1
       || !Number.isSafeInteger(playWorld.maxCharacters) || playWorld.maxCharacters < playWorld.minCharacters
-      || playWorld.maxCharacters > 64)) {
+      || playWorld.maxCharacters > 64 || !Array.isArray(playWorld.castSlots)
+      || playWorld.castSlots.length > playWorld.maxCharacters)) {
       throw new Error(`Roleplay world ${JSON.stringify(reference.id)} returned invalid play-world details`)
+    }
+    const castSlots = playWorld?.castSlots.map((slot, index) => {
+      if (typeof slot !== 'object' || slot === null || Array.isArray(slot)
+        || !exactDetailKeys(slot, ['id', 'name', 'description', 'required'])) {
+        throw new Error(`Roleplay world ${JSON.stringify(reference.id)} cast slot ${index} is invalid`)
+      }
+      const id = detailId(slot.id, `Roleplay world ${JSON.stringify(reference.id)} cast slot id`)
+      if (typeof slot.name !== 'string' || slot.name.trim() === '' || slot.name.length > 120
+        || typeof slot.description !== 'string' || slot.description.length > 500
+        || typeof slot.required !== 'boolean') {
+        throw new Error(`Roleplay world ${JSON.stringify(reference.id)} cast slot ${JSON.stringify(id)} is invalid`)
+      }
+      return Object.freeze({ id, name: slot.name.trim(), description: slot.description, required: slot.required })
+    }) ?? []
+    const requiredCastCount = castSlots.filter(slot => slot.required).length
+    if (new Set(castSlots.map(slot => slot.id)).size !== castSlots.length
+      || castSlots.length > 0 && requiredCastCount < (playWorld?.minCharacters ?? 0)
+      || requiredCastCount > (playWorld?.maxCharacters ?? 0)) {
+      throw new Error(`Roleplay world ${JSON.stringify(reference.id)} returned invalid cast slots`)
     }
     return Object.freeze({
       kind: 'world',
       entryCount: detail.entryCount,
-      ...(playWorld === undefined ? {} : { playWorld: Object.freeze({ ...playWorld }) }),
+      ...(playWorld === undefined ? {} : { playWorld: Object.freeze({ ...playWorld, castSlots: Object.freeze(castSlots) }) }),
     })
   }
   if (detail.kind === 'prompt-policy') {

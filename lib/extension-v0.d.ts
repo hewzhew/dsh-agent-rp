@@ -32,6 +32,13 @@ interface RoleplayPersonaResourceDetail {
   readonly kind: 'persona';
   readonly description: string;
 }
+/** One browser-visible role opening declared by an executable world recipe. */
+interface RoleplayWorldCastSlotDetail {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly required: boolean;
+}
 interface RoleplayWorldResourceDetail {
   readonly kind: 'world';
   readonly entryCount: number;
@@ -42,6 +49,7 @@ interface RoleplayWorldResourceDetail {
     readonly category: 'game' | 'simulation';
     readonly minCharacters: number;
     readonly maxCharacters: number;
+    readonly castSlots: readonly RoleplayWorldCastSlotDetail[];
   };
 }
 interface RoleplayPromptPolicyResourceDetail {
@@ -105,6 +113,7 @@ interface RoleplayWorldProjection {
   /** Durable browser-visible JSON; providers must not include credentials or private Host state. */
   readonly configuration: JsonValue;
   readonly sources: readonly RoleplayResourceSelection[];
+  readonly castSlots: readonly RoleplayWorldCastSlotDetail[];
 }
 /** Host-only source snapshot copied into a story workspace during world installation. */
 interface RoleplayStorySourceProjection {
@@ -1281,6 +1290,7 @@ interface PlayWorldModuleDescriptor {
 interface PlayWorldResourceDescriptor extends PlayWorldModuleDescriptor {
   readonly resource: RoleplayResourceSelection;
   readonly moduleAvailable: boolean;
+  readonly castSlots: readonly RoleplayWorldCastSlotDetail[];
 }
 /** One authoritative event emitted by an executable world. */
 interface PlayWorldEvent {
@@ -1308,6 +1318,12 @@ interface PlayWorldBinding {
   readonly configuration: JsonValue$1;
   readonly sourceReferences: readonly RoleplayResourceSelection[];
   readonly sourceIds: readonly string[];
+  readonly cast: readonly PlayWorldCastBinding[];
+}
+/** Durable association between one recipe slot and its play-space character instance. */
+interface PlayWorldCastBinding {
+  readonly slotId: string;
+  readonly characterId: string;
 }
 /** Character-specific model input produced without revealing private world state. */
 interface PlayWorldPromptProjection {

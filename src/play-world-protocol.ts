@@ -1,7 +1,10 @@
 /** Browser-safe records for executable worlds hosted by one play space. */
 
 import type { JsonValue } from '@deepseek-ai/dsh-session/types'
-import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
+import type {
+  RoleplayResourceSelection,
+  RoleplayWorldCastSlotDetail,
+} from './roleplay-resource-catalog-protocol.ts'
 
 /** Same-origin discovery endpoint for resource-owned executable worlds. */
 export const PLAY_WORLD_RESOURCES_PATH = '/api/agent-rp/play-world-resources'
@@ -20,6 +23,7 @@ export interface PlayWorldModuleDescriptor {
 export interface PlayWorldResourceDescriptor extends PlayWorldModuleDescriptor {
   readonly resource: RoleplayResourceSelection
   readonly moduleAvailable: boolean
+  readonly castSlots: readonly RoleplayWorldCastSlotDetail[]
 }
 
 /** One authoritative event emitted by an executable world. */
@@ -50,6 +54,21 @@ export interface PlayWorldBinding {
   readonly configuration: JsonValue
   readonly sourceReferences: readonly RoleplayResourceSelection[]
   readonly sourceIds: readonly string[]
+  readonly cast: readonly PlayWorldCastBinding[]
+}
+
+/** Durable association between one recipe slot and its play-space character instance. */
+export interface PlayWorldCastBinding {
+  readonly slotId: string
+  readonly characterId: string
+}
+
+/** Actor selection used to fill one recipe slot while installing a fresh world. */
+export interface PlayWorldCastSelection {
+  readonly slotId: string
+  readonly actor: RoleplayResourceSelection
+  /** Existing character to update in place so authored graph references remain stable. */
+  readonly characterId?: string
 }
 
 /** Request to attach a fresh executable world to one workspace revision. */
@@ -57,6 +76,7 @@ export interface PlayWorldInstallRequest {
   readonly format: 0
   readonly revision: number
   readonly resource: RoleplayResourceSelection
+  readonly cast: readonly PlayWorldCastSelection[]
 }
 
 /** Request to recreate the current executable world and discard this playthrough's derived story state. */
