@@ -37,6 +37,12 @@ import type {
 } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './story-research.ts'
 import { splitStorySourcePassages } from './story-source.ts'
+import {
+  normalizeStoryVoiceSpeakerName,
+  parseStoryVoiceEvidence,
+  type StoryVoiceEvidenceLine,
+  type StoryVoiceEvidenceParts,
+} from './story-voice-evidence.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from './story-world-events.ts'
 
 /** Ordered model responsibilities before the visible character request. */
@@ -359,20 +365,6 @@ interface StoryCharacterVoiceEvidence {
   readonly characterName: string
   readonly speakerNames: readonly string[]
   readonly evidence: readonly StoryResearchEvidence[]
-}
-
-interface StoryVoiceEvidenceParts {
-  readonly orderedLines: readonly StoryVoiceEvidenceLine[]
-  readonly targetLines: readonly StoryVoiceEvidenceLine[]
-  readonly contextLines: readonly StoryVoiceEvidenceLine[]
-  readonly notes: string
-}
-
-interface StoryVoiceEvidenceLine {
-  readonly speaker: string
-  readonly dialogue: string
-  readonly owner: 'target' | 'context'
-  readonly variant: 'original' | 'translation' | 'example'
 }
 
 interface StoryVoiceEvidenceUnit {
@@ -776,65 +768,11 @@ function renderDirectorDecision(
   }).join('\n\n')
 }
 
-const LABELED_DIALOGUE_PATTERN = /([\p{L}·・]{1,16})(?:\s*[：:]\s*[“"]([^”"\r\n]+)[”"]|\s*[：:]?\s*[「『]([^」』\r\n]+)[」』])/gu
-
-function normalizeSpeakerName(value: string): string {
-  return value.normalize('NFKC').replace(/[\s·・]/gu, '')
-}
-
-function isTargetSpeaker(characterNames: readonly string[], speaker: string): boolean {
-  const candidate = normalizeSpeakerName(speaker)
-  return candidate.length >= 2
-    && characterNames.some(characterName => {
-      const target = normalizeSpeakerName(characterName)
-      return target === candidate || target.endsWith(candidate) || candidate.endsWith(target)
-    })
-}
-
-function voiceEvidenceParts(characterNames: readonly string[], text: string): StoryVoiceEvidenceParts {
-  const orderedLines: StoryVoiceEvidenceLine[] = []
-  const targetLines: StoryVoiceEvidenceLine[] = []
-  const contextLines: StoryVoiceEvidenceLine[] = []
-  const seen = new Set<string>()
-  const noteParts: string[] = []
-  let cursor = 0
-  let translated = false
-  for (const match of text.matchAll(LABELED_DIALOGUE_PATTERN)) {
-    const index = match.index
-    if (index === undefined) continue
-    const prose = text.slice(cursor, index)
-    noteParts.push(prose)
-    if (/参考译文\s*[：:]?/u.test(prose)) translated = true
-    cursor = index + match[0].length
-    const speaker = match[1]!.trim()
-    const dialogue = (match[2] ?? match[3] ?? '').trim()
-    const owner = isTargetSpeaker(characterNames, speaker) ? 'target' : 'context'
-    const variant = translated
-      ? 'translation'
-      : /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(dialogue) ? 'original' : 'example'
-    const key = `${variant}\u0000${normalizeSpeakerName(speaker)}\u0000${dialogue}`
-    if (dialogue === '' || seen.has(key)) continue
-    seen.add(key)
-    const line: StoryVoiceEvidenceLine = { speaker, dialogue, owner, variant }
-    orderedLines.push(line)
-    if (owner === 'target') targetLines.push(line)
-    else contextLines.push(line)
-  }
-  noteParts.push(text.slice(cursor))
-  const notes = noteParts.join('')
-    .replace(/参考译文\s*[：:]?/gu, '')
-    .split(/\r?\n/u)
-    .map(line => line.trim())
-    .filter(line => line !== '')
-    .join('\n')
-  return { orderedLines, targetLines, contextLines, notes }
-}
-
 function resolvedVoiceEvidenceParts(
   characterNames: readonly string[],
   item: StoryResearchEvidence,
 ): StoryVoiceEvidenceParts {
-  return item.voiceParts ?? voiceEvidenceParts(characterNames, item.text)
+  return item.voiceParts ?? parseStoryVoiceEvidence(characterNames, item.text)
 }
 
 function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoiceEvidenceUnit[] {
@@ -846,7 +784,7 @@ function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoice
     const aligned = translations[index]
     const sameOwner = (candidate: StoryVoiceEvidenceLine): boolean => candidate.owner === line.owner
       && (line.owner === 'target'
-        || normalizeSpeakerName(candidate.speaker) === normalizeSpeakerName(line.speaker))
+        || normalizeStoryVoiceSpeakerName(candidate.speaker) === normalizeStoryVoiceSpeakerName(line.speaker))
     const translationIndex = aligned !== undefined
       && unusedTranslations.has(index)
       && sameOwner(aligned)
@@ -922,7 +860,7 @@ function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryV
     const unitIds: string[] = []
     return units.flatMap((unit, index): readonly StoryVoiceSeedUnit[] => {
       const preferred = voiceEvidenceUnitText(unit)
-      const key = `${unit.owner}\u0000${normalizeSpeakerName(unit.lines[0]?.speaker ?? '')}\u0000${normalizedComparableText(preferred)}`
+      const key = `${unit.owner}\u0000${normalizeStoryVoiceSpeakerName(unit.lines[0]?.speaker ?? '')}\u0000${normalizedComparableText(preferred)}`
       const existingId = renderedUnitIds.get(key)
       if (existingId !== undefined) {
         unitIds.push(existingId)
@@ -2116,7 +2054,7 @@ function localVoiceEvidence(
   const seenGroups = new Set<string>()
   return excerpts.flatMap(excerpt => {
     const evidence = localExcerptEvidence(excerpt)
-    const direct = voiceEvidenceParts(characterNames, excerpt.text)
+    const direct = parseStoryVoiceEvidence(characterNames, excerpt.text)
     if (direct.targetLines.length === 0) return [evidence]
     const source = sources.get(excerpt.sourceId)
     if (source === undefined) return [evidence]
@@ -2140,7 +2078,7 @@ function localVoiceEvidence(
       }
     }
     selected.sort((left, right) => left.ordinal - right.ordinal)
-    const parts = voiceEvidenceParts(characterNames, selected.map(passage => passage.text).join('\n'))
+    const parts = parseStoryVoiceEvidence(characterNames, selected.map(passage => passage.text).join('\n'))
     const groupKey = [source.id, section, ...parts.targetLines.map(line => `${line.variant}:${line.speaker}:${line.dialogue}`)].join('\n')
     if (seenGroups.has(groupKey)) return []
     seenGroups.add(groupKey)
