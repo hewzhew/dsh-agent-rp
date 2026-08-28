@@ -905,10 +905,10 @@ function groundDirectorSpeechPlans(
   }
 }
 
-const VOICE_EVIDENCE_MAX_ITEMS = 6
-const VOICE_EVIDENCE_MAX_ANCHORS = 8
-const VOICE_EVIDENCE_MAX_LINES = 36
-const VOICE_EVIDENCE_MAX_CHARACTERS = 4_200
+const VOICE_EVIDENCE_MAX_ITEMS = 4
+const VOICE_EVIDENCE_MAX_ANCHORS = 4
+const VOICE_EVIDENCE_MAX_LINES = 24
+const VOICE_EVIDENCE_MAX_CHARACTERS = 2_800
 const VOICE_EVIDENCE_MAX_NOTES_CHARACTERS = 600
 
 function selectSpeechVoiceEvidence(
@@ -1114,6 +1114,30 @@ function textBigrams(text: string): ReadonlySet<string> {
   return new Set(Array.from({ length: Math.max(0, text.length - 1) }, (_value, index) => text.slice(index, index + 2)))
 }
 
+function substantiallyRestatesText(value: string, source: string, minimumLength = 4): boolean {
+  const candidate = normalizedComparableText(value)
+  const normalizedSource = normalizedComparableText(source)
+  if (candidate.length < minimumLength || normalizedSource.length < minimumLength) return false
+  if (normalizedSource.includes(candidate)) return true
+  const candidateBigrams = textBigrams(candidate)
+  const sourceBigrams = textBigrams(normalizedSource)
+  const comparable = Math.min(candidateBigrams.size, sourceBigrams.size)
+  if (comparable < minimumLength) return false
+  const overlap = [...candidateBigrams].filter(pair => sourceBigrams.has(pair)).length
+  return overlap / comparable >= 0.35
+}
+
+function suppressForbiddenWorldOutcomeSpeech(
+  decision: StoryCharacterDecision,
+  playerInput: string,
+  worldOutcome: string,
+): StoryCharacterDecision {
+  if (decision.speech === undefined || worldOutcome === ''
+    || !/(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u.test(playerInput)
+    || !substantiallyRestatesText(decision.speech.focus, worldOutcome)) return decision
+  return { ...decision, speech: undefined }
+}
+
 function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCharacterVoiceEvidence[]): boolean {
   const candidate = normalizedComparableText(replacement)
   const excerpts = evidence.flatMap(character => character.evidence.flatMap(item =>
@@ -1284,24 +1308,12 @@ function appendMissingApprovedDialogue(text: string, approved: ReadonlySet<strin
 }
 
 function insightRestatesSpeech(value: string, speech: StoryCharacterSpeechIntent): boolean {
-  const candidate = normalizedComparableText(value)
-  if (candidate.length < 6) return false
   return [
     speech.respondsTo,
     speech.focus,
     speech.effect,
     `${speech.respondsTo}${speech.focus}${speech.effect}`,
-  ].some(source => {
-    const normalizedSource = normalizedComparableText(source)
-    if (normalizedSource.length < 6) return false
-    if (candidate.includes(normalizedSource) || normalizedSource.includes(candidate)) return true
-    const candidateBigrams = textBigrams(candidate)
-    const sourceBigrams = textBigrams(normalizedSource)
-    const comparable = Math.min(candidateBigrams.size, sourceBigrams.size)
-    if (comparable < 6) return false
-    const overlap = [...candidateBigrams].filter(pair => sourceBigrams.has(pair)).length
-    return overlap / comparable >= 0.35
-  })
+  ].some(source => substantiallyRestatesText(value, source, 6))
 }
 
 function parseCharacterInsights(
@@ -2621,9 +2633,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       if (decision.text === undefined) return undefined
       try {
         const parsed = parseCharacterDecision(decision.text)
-        const permitted = publicResponseAllowed
+        const scoped = publicResponseAllowed
           ? parsed
           : { ...parsed, action: '', speech: undefined }
+        const permitted = suppressForbiddenWorldOutcomeSpeech(scoped, playerInput, worldOutcome)
         return {
           characterId: character.id,
           decision: permitted,
@@ -2712,10 +2725,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       const character = enabledCharacters.find(candidate => candidate.id === speech.characterId)
       const priorDialogue = renderDialogueDraft(directorDecision, enabledCharacters, dialogueByReference)
       const voiceQuery = [
-        playerInput,
         speech.intent.respondsTo,
         speech.intent.focus,
         priorDialogue,
+        playerInput,
         worldOutcome,
       ].filter(value => value !== '').join('\n')
       const relevantSourceEvidence = character === undefined ? [] : localResearchEvidence(input, [

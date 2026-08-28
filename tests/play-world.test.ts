@@ -688,7 +688,19 @@ test('assembles a grounded world result and approved dialogue without unowned mo
         } else if (system.includes('剧情研究 Worker')) {
           text = JSON.stringify({ findings: [], followUps: [] })
         } else if (system.includes('指定人物认知')) {
-          text = body.includes('# 人物：博丽灵梦')
+          text = body.includes('# 人物：博丽灵梦') && body.includes('不要复述棋局事实')
+            ? JSON.stringify({
+              observation: '本轮规则结果已经公开。',
+              action: '',
+              speech: {
+                respondsTo: '魔理沙要求她评价刚完成的规则结果。',
+                move: 'inform',
+                focus: '刚刚掷骰结果为1。',
+                effect: '让魔理沙承认刚刚掷骰结果为1。',
+              },
+              insights: [],
+            })
+            : body.includes('# 人物：博丽灵梦')
             ? JSON.stringify({
               observation: '听见魔理沙追问。',
               action: '',
@@ -866,4 +878,34 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
   assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:1/u)
   assert.doesNotMatch(sourcedVoiceBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
+
+  const constrainedWorkspace = store.get(sourced.id)
+  const constrainedSession = Session.create(SessionId('host-world-dialogue-no-world-restatement'))
+  constrainedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 32_768 } },
+  })
+  constrainedSession.append('turn/start', { turn: 4 })
+  constrainedSession.append('step/start', { turn: 4, step: 1 })
+  const constrainedAgent = {
+    id: constrainedSession.id,
+    options: { provider: 'fixture', model: 'fixture' },
+    session: constrainedSession,
+  } as Agent
+  const constrainedResult = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: constrainedAgent,
+    store,
+    workspace: constrainedWorkspace,
+    turn: 4,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '继续当前人物的合法回合；不要复述棋局事实。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(constrainedResult.publicDialogues?.length ?? 0, 0)
+  assert.equal(constrainedSession.events.some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'voice'), false)
 })

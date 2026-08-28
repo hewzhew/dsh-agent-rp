@@ -175,6 +175,10 @@ function workspace(): StoryWorkspaceSnapshot {
           '阿梨：“花期还没有到。”',
           '# 书库旧话',
           '阿梨：“那本书不在这一层。”',
+          ...Array.from({ length: 40 }, (_, index) => [
+            `# 无关长篇 ${String(index + 1)}`,
+            `阿梨：“${'这段闲谈不涉及眼前判断。'.repeat(24)}”`,
+          ].join('\n')),
           '# 判断前提',
           [
             '原文：',
@@ -484,7 +488,11 @@ test('runs logged story stages while keeping each character request privately sc
     options: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 },
     session,
   } as Agent
-  const message = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '玩家举起徽章。' }] })
+  const longPlayerPrelude = Array.from({ length: 140 }, (_, index) => `占位词${String(index + 1)}`).join(' ')
+  const message = createUserMessage({
+    source: { kind: 'user' },
+    content: [{ type: 'text', text: `${longPlayerPrelude}\n玩家举起徽章。` }],
+  })
   const runtimeContext = createUserMessage({
     source: { kind: 'plugin', plugin: 'dsh-agent-rp-runtime' },
     content: [{ type: 'text', text: 'Current runtime context: 这不是玩家要求。' }],
@@ -589,14 +597,15 @@ test('runs logged story stages while keeping each character request privately sc
     voiceBody.indexOf('<voice_evidence>'),
     voiceBody.indexOf('</voice_evidence>'),
   )
-  assert.ok((voiceEvidenceBody.match(/\[(?:目标人物|对话上下文)\]/gu)?.length ?? 0) <= 36)
+  assert.ok((voiceEvidenceBody.match(/\[(?:目标人物|对话上下文)\]/gu)?.length ?? 0) <= 24)
+  assert.ok((voiceBody.match(/\[seed:/gu)?.length ?? 0) <= 24)
   assert.ok(voiceEvidenceBody.length < 7_000)
   const firstSpeechPlan = voiceBody.slice(
     voiceBody.indexOf(`## [speech:${sectionId}:1]`),
     voiceBody.indexOf(`## [speech:${sectionId}:2]`),
   )
   assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:2/u)
-  assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:12/u)
+  assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:52/u)
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
   assert.doesNotMatch(voiceBody, /柏舟藏起了车票/u)
