@@ -41,3 +41,29 @@ test('ranks reply meaning before frequent full-name speaker labels', () => {
   ])
   assert.equal(selected.some(candidate => candidate.text.includes('今天照常巡查神社')), false)
 })
+
+test('uses only explicit original-work sources as character voice evidence', () => {
+  const common = {
+    enabled: true,
+    content: '博麗霊夢：「这句署名台词不能自动冒充原作。」',
+  }
+  const selected = searchStoryVoiceSourceExcerpts([
+    { id: 'source-reference', name: '百科参考', kind: 'reference', ...common },
+    { id: 'source-research', name: '网络研究摘录', kind: 'research', ...common },
+    { id: 'source-web', name: '搜索范围', kind: 'web', ...common },
+    {
+      id: 'source-original',
+      name: '原作对话',
+      kind: 'original',
+      enabled: true,
+      content: '博麗霊夢：「先把原文看清楚。」',
+    },
+  ], ['博丽灵梦', '博麗霊夢'], {
+    primary: '先确认原文。',
+    context: '有人拿研究摘录代替原作。',
+  })
+
+  assert.deepEqual(selected.map(item => item.sourceId), ['source-original'])
+  assert.match(selected[0]?.text ?? '', /先把原文看清楚/u)
+  assert.doesNotMatch(selected[0]?.text ?? '', /不能自动冒充原作/u)
+})

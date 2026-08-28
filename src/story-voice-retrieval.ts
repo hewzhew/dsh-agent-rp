@@ -273,14 +273,14 @@ function searchIndexedStoryVoiceSources(
   return selected
 }
 
-/** One turn-local index that parses every enabled local source exactly once. */
+/** One turn-local index that parses every enabled original-work source exactly once. */
 export class StoryVoiceSourceIndex {
   readonly #sources: readonly IndexedSource[]
 
-  /** @param sources Editable local and web sources available to this story turn. */
+  /** @param sources Editable sources available to this story turn; only `original` sources may establish character voice. */
   constructor(sources: readonly StorySource[]) {
     this.#sources = sources.flatMap((source, sourceIndex) => {
-      if (!source.enabled || source.kind === 'web') return []
+      if (!source.enabled || source.kind !== 'original') return []
       return [{ source, sourceIndex, passages: indexSourcePassages(source) }]
     })
   }
