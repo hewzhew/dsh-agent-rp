@@ -673,6 +673,9 @@ test('assembles a grounded world result and approved dialogue without unowned mo
       stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages ?? [])
+        const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
+          .map(match => match[1]!))]
+        const candidateSeeds = targetSeedIds.slice(0, Math.min(2, targetSeedIds.length))
         let text: string
         if (system.includes('结构化世界行动 Worker')) {
           text = JSON.stringify({ actionId: 'roll' })
@@ -710,7 +713,13 @@ test('assembles a grounded world result and approved dialogue without unowned mo
             { sectionId: historyId, beats: [], speech: [] },
           ] })
         } else if (system.includes('人物自己的对白 Worker')) {
-          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, move: 'answer', dialogue: '“你自己把两句话接在一起，还问我是哪句？”' }] })
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            move: 'answer',
+            seedLineIds: candidateSeeds,
+            mechanics: '先把对方的问题翻回其已经说过的话',
+            dialogue: '“你自己把两句话接在一起，还问我是哪句？”',
+          }] })
         } else if (system.includes('对白审校 Worker')) {
           text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '你自己把两句话接在一起，还问我是哪句？' }] })
         } else {

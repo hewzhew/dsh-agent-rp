@@ -304,6 +304,17 @@ interface StoryVoiceEvidenceUnit {
   readonly owner: StoryVoiceEvidenceLine['owner']
 }
 
+interface StoryVoiceSeedUnit extends StoryVoiceEvidenceUnit {
+  readonly id: string
+  readonly reference: string
+}
+
+interface StoryDialogueCandidate {
+  readonly dialogue: string
+  readonly seedLineIds: readonly string[]
+  readonly mechanics: string
+}
+
 interface StoryWebSearchGateway {
   search(request: { readonly query: string; readonly maxResults: number }, signal?: AbortSignal): Promise<{
     readonly content?: string
@@ -817,18 +828,26 @@ function selectVoiceEvidenceParts(
   }
 }
 
+function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryVoiceSeedUnit[] {
+  const renderedUnits = new Set<string>()
+  return character.evidence.flatMap(item => voiceEvidenceUnits(resolvedVoiceEvidenceParts(
+    character.characterName,
+    item,
+  )).flatMap((unit, index): readonly StoryVoiceSeedUnit[] => {
+    const preferred = voiceEvidenceUnitText(unit)
+    const key = `${unit.owner}\u0000${normalizeSpeakerName(unit.lines[0]?.speaker ?? '')}\u0000${normalizedDialogue(preferred)}`
+    if (renderedUnits.has(key)) return []
+    renderedUnits.add(key)
+    return [{ ...unit, id: `${item.reference}#seed-${String(index + 1)}`, reference: item.reference }]
+  }))
+}
+
 function renderVoiceEvidenceItem(
   characterName: string,
   item: StoryResearchEvidence,
-  renderedLines: Set<string>,
+  seeds: readonly StoryVoiceSeedUnit[],
 ): string {
   const parts = resolvedVoiceEvidenceParts(characterName, item)
-  const orderedLines = parts.orderedLines.filter(line => {
-    const key = `${line.owner}\u0000${normalizeSpeakerName(line.speaker)}\u0000${normalizedDialogue(line.dialogue)}`
-    if (renderedLines.has(key)) return false
-    renderedLines.add(key)
-    return true
-  })
   const variantLabel = (variant: StoryVoiceEvidenceLine['variant']): string => {
     if (variant === 'original') return '原文'
     if (variant === 'translation') return '参考译文'
@@ -837,9 +856,9 @@ function renderVoiceEvidenceItem(
   return [
     `### [${item.reference}] [${item.kind}] ${item.label}`,
     '<voice_exchange>',
-    ...(orderedLines.length === 0
+    ...(seeds.length === 0
       ? ['（该项没有新增逐字台词）']
-      : orderedLines.map(line => `- [${line.owner === 'target' ? '目标人物' : '对话上下文'}][${variantLabel(line.variant)}] ${line.speaker}｜${line.dialogue}`)),
+      : seeds.flatMap(seed => seed.lines.map(line => `- [seed:${seed.id}][${line.owner === 'target' ? '目标人物' : '对话上下文'}][${variantLabel(line.variant)}] ${line.speaker}｜${line.dialogue}`))),
     '</voice_exchange>',
     ...(parts.notes === '' ? [] : ['<voice_notes>', parts.notes, '</voice_notes>']),
   ].join('\n')
@@ -1056,7 +1075,7 @@ function renderDialogueDraft(
 function renderDialogueCandidates(
   decision: StoryDirectorDecision,
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
-  candidatesByReference: ReadonlyMap<string, readonly string[]>,
+  candidatesByReference: ReadonlyMap<string, readonly StoryDialogueCandidate[]>,
 ): string {
   const characterById = new Map(characters.map(character => [character.id, character.name]))
   return decision.sections.flatMap(section => section.speech.flatMap(speech => {
@@ -1065,7 +1084,11 @@ function renderDialogueCandidates(
     return [[
       `## [${speech.reference}]`,
       `- 人物：${characterById.get(speech.characterId) ?? speech.characterId}`,
-      ...candidates.map((dialogue, index) => `- 候选 ${String(index + 1)}：${dialogue}`),
+      ...candidates.map((candidate, index) => [
+        `- 候选 ${String(index + 1)}：${candidate.dialogue}`,
+        `  - seed：${candidate.seedLineIds.map(id => `[${id}]`).join(' ')}`,
+        `  - 句法与接话机制：${candidate.mechanics}`,
+      ].join('\n')),
     ].join('\n')]
   })).join('\n\n')
 }
@@ -1073,6 +1096,17 @@ function renderDialogueCandidates(
 const QUOTED_DIALOGUE_LINE_PATTERN = /^(?:“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*")$/u
 const QUOTED_DIALOGUE_SPAN_PATTERN = /“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*"/u
 const DIALOGUE_QUOTE_CHARACTER_PATTERN = /[“”「」『』"]/u
+const DIALOGUE_QUOTE_PAIRS = [['“', '”'], ['「', '」'], ['『', '』'], ['"', '"']] as const
+
+function normalizeDialogueCandidate(raw: string): string | undefined {
+  if (raw === '') return ''
+  if (/[\r\n]/u.test(raw)) return undefined
+  if (QUOTED_DIALOGUE_LINE_PATTERN.test(raw)) return raw
+  if (DIALOGUE_QUOTE_CHARACTER_PATTERN.test(raw[0] ?? '')
+    || DIALOGUE_QUOTE_CHARACTER_PATTERN.test(raw.at(-1) ?? '')) return undefined
+  const pair = DIALOGUE_QUOTE_PAIRS.find(([opening, closing]) => !raw.includes(opening) && !raw.includes(closing))
+  return pair === undefined ? undefined : `${pair[0]}${raw}${pair[1]}`
+}
 const VOICE_MOVES = new Set<StoryVoiceMove>([
   'answer', 'assert', 'challenge', 'correct', 'command', 'question', 'warn', 'tease', 'refuse', 'inform', 'propose',
 ])
@@ -1080,14 +1114,15 @@ const VOICE_DRAFT_SYSTEM = [
   '你是 character_context 中这个人物自己的对白 Worker，只能使用该人物获准拥有的认知、当前可见世界状态和已经公开的 prior_approved_dialogue。不得读取或推断导演故事图、其他人物档案和私有知识。',
   'speech_plan 是此人物先前作出的结构化说话决定。“回应前提”是它要接住的已公开事实或判断，“对话动作”是它对对方做的事，“传达内容”是最小语义目标。这三项都不是可以直接改写成台词的底稿；候选必须在对话中完成对应动作，不必逐项把前提和内容说全。',
   '若 prior_approved_dialogue 非空，候选必须直接接住其中最后一句已经提出的前提或判断；如果它与 speech_plan 不再兼容，返回空字符串，不能强行转话题。若 prior_approved_dialogue 为空，只能回应 speech_plan 指向的已发生可见事实。',
-  '<voice_exchange> 按原作相邻顺序保存证据：[目标人物] 是此人物自己的原句，[对话上下文] 只用于理解对方说了什么以及自己的原句怎样接住它，不能模仿对方；<voice_notes> 是资料分析。比较多条 [目标人物] 原句的推理方式、省略方式和接话节奏，不要提取一句显眼表达当作口癖。',
+  '<voice_exchange> 按原作相邻顺序保存证据，每个 seed ID 表示一条本人发言及其原文、参考译文或示例变体：[目标人物] seed 才能用于候选的声音映射，[对话上下文] seed 只用于理解对方说了什么以及自己的原句怎样接住它，不能引用为自己的声音；<voice_notes> 是资料分析。比较多条 [目标人物] seed 的分句次序、转折方式、省略方式和回答时机，不要提取一句显眼表达当作口癖。',
+  '每个非空候选必须列出 seedLineIds 和 mechanics。seedLineIds 只能逐字引用输入中的 [目标人物] seed ID；有两条以上可用本人 seed 时至少引用两条，否则引用全部可用本人 seed。mechanics 用一句短语说明候选具体借用了这些 seed 共同支持的哪种分句或接话机制，不写性格标签、话题相似或“符合语气”。seed 只约束句子机制，不提供当前场景缺少的事实。',
   '为同一个 required_reference 提供至多三个真正不同的候选；候选必须采用不同的推理落点或接话结构，不能只是近义改写、增删语气词或变换长短。若只能把“回应前提”“传达内容”或可见事实改写成普通问句、纠正句或胜负套话，只返回一项空字符串。',
-  '每个候选选择一个对话动作：answer 回答、assert 断言、challenge 质疑、correct 纠正、command 命令、question 提问、warn 提醒、tease 打趣、refuse 拒绝、inform 告知、propose 提议；move 说明句子怎样作用于对方，不是话题标签。',
+  '每个候选的 move 必须逐字复制 speech_plan 已决定的对话动作：answer 回答、assert 断言、challenge 质疑、correct 纠正、command 命令、question 提问、warn 提醒、tease 打趣、refuse 拒绝、inform 告知、propose 提议。声音阶段不能把既定动作改成另一种。',
   '熟人对白默认省略姓名和背景说明。角色差异必须来自推理方式、句子结构和接话关系；禁止搬用只在 [对话上下文] 或原作事件中出现、而当前场景没有的具体名词、比喻和意象，也禁止现代网络说法和可替换姓名复用的套路。不要凭空制造物件、动物、身体意象或临时类比，也不要把“自信”“争胜”“调侃”等抽象标签扩写成炫耀、威胁或热血套话。',
   '不应开口、前提不成立、已公开的上一句与说话决定不兼容，或证据不足时返回空字符串。不得照抄、拼接、近似复述或只替换名词改写原句。',
-  '每一项 reference 都必须逐字复制 required_reference；每个 dialogue 必须是由一对中文引号包围的单行完整对白，或空字符串。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"上述十一种动作之一","dialogue":"“候选一”"},{"reference":"同一 required_reference","move":"另一动作或同一动作","dialogue":"“候选二”"},{"reference":"同一 required_reference","move":"另一动作或同一动作","dialogue":"“候选三”"}]}。不要使用 Markdown 围栏。',
+  '每一项 reference 都必须逐字复制 required_reference；每个 dialogue 必须是由一对中文引号包围的单行完整对白，或空字符串。空字符串使用空 seedLineIds 和空 mechanics。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"speech_plan 中既定动作","seedLineIds":["目标人物 seed ID 1","目标人物 seed ID 2"],"mechanics":"共同支持的分句与接话机制","dialogue":"“候选一”"}]}，最多三项。不要使用 Markdown 围栏。',
 ].join('\n')
-const VOICE_REVIEW_SYSTEM = '你是一个人物自己的对白审校 Worker，只负责从同一人物的至多三个候选中选出一句，或全部拒绝，绝不参与创作。character_context 是此人物获准拥有的全部认知；不得借助导演信息或其他人物私有知识。逐项对照真实语气证据、结构化说话决定、此前已获准公开的相邻对白和此人物可见世界状态。<voice_exchange> 保留原始相邻顺序：[目标人物] 才是此人物自己的原句，用于判断声音；[对话上下文] 只说明别人说了什么以及目标人物怎样接话，不能拿来模仿；<voice_notes> 是资料分析。先做意图复述检验：如果候选只是把“回应前提”或“传达内容”换成带问号或句号的口语，或者只是在“你怎么还没……”“你不过是……”“你是连……都……”“你连……都……，谈什么……”“要……也得先……再说吧”“现在……还轮不到你……”“别说得像……”这类普通框架里填入场景名词，它没有使用人物证据，必须排除。即使句子准确指出了当前事实，只要去掉棋盘名词后仍是这些框架，也不能因其短促或像纠正句而批准。再做匿名替换检验：遮去人物名、专有名词和场景名词后，如果一句话仍可由任意竞争者、朋友或对手原样说出，它就是泛化对白，必须排除。仅复述公开世界事实、表示顺利或倒霉、领先或落后、加油或别得意的句子仍是通用对白。再做素材归属检验：不得把只出现在 [对话上下文] 或原作事件中的具体名词、比喻和意象搬进新场景；即使改写后字面不相似，这仍是声音交换或套用原句。用证据中不存在的绰号、物件联想、动物、身体意象或临时类比制造俏皮感也必须排除。可批准的句子应体现 [目标人物] 多条原句共同支持的推理或接话机制，例如短反问、直接否定、理直气壮地翻转前提、立即指出对方推断漏洞或省略背景的熟人接话；只像其中单独一句、只复用句式类别或具体素材都不足以批准。不要求华丽口癖或显眼修辞；由多条本人原句共同支持、又准确作用于当前具体前提的朴素短句可以批准。若 prior_approved_dialogue 非空，候选必须直接回应其中已经表达的内容；若为空，则必须能自然回应已发生的可见行动。dialogue 只能逐字返回 draft_candidates 中同一 reference 下的一句候选，或返回空字符串；不得增删、替换、润色、合并或重写任何字。多个候选合格时只选角色机制最清楚且最简洁的一句。审校不拥有也不返回说话动作。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","dialogue":"逐字选中的候选或空字符串"}]}。不要解释审校过程，不要使用 Markdown 围栏。'
+const VOICE_REVIEW_SYSTEM = '你是一个人物自己的对白审校 Worker，只负责从同一人物的至多三个候选中选出一句，或全部拒绝，绝不参与创作。character_context 是此人物获准拥有的全部认知；不得借助导演信息或其他人物私有知识。逐项对照真实语气证据、结构化说话决定、此前已获准公开的相邻对白和此人物可见世界状态。<voice_exchange> 保留原始相邻顺序：同一 seed ID 的原文与参考译文属于一个发言单元；[目标人物] seed 才是此人物自己的原句，[对话上下文] seed 只说明别人说了什么以及目标人物怎样接话，不能拿来模仿；<voice_notes> 是资料分析。先核对每个候选列出的 seed 与 mechanics：这些 seed 是否真的共同支持所声明的分句次序、转折、反问、翻转或省略机制，候选是否把该机制作用于当前前提；只列编号、只共享话题或只像其中一条原句都必须拒绝。再做意图复述检验：如果候选只是把“回应前提”或“传达内容”换成带问号或句号的口语，或者只是在“你怎么还没……”“你不过是……”“你是连……都……”“你连……都……，谈什么……”“要……也得先……再说吧”“现在……还轮不到你……”“别说得像……”这类普通框架里填入场景名词，它没有使用人物证据，必须排除。即使句子准确指出了当前事实，只要去掉棋盘名词后仍是这些框架，也不能因其短促或像纠正句而批准。再做匿名替换检验：遮去人物名、专有名词和场景名词后，如果一句话仍可由任意竞争者、朋友或对手原样说出，它就是泛化对白，必须排除。仅复述公开世界事实、表示顺利或倒霉、领先或落后、加油或别得意的句子仍是通用对白。再做素材归属检验：不得把只出现在 [对话上下文] 或原作事件中的具体名词、比喻和意象搬进新场景；即使改写后字面不相似，这仍是声音交换或套用原句。用证据中不存在的绰号、物件联想、动物、身体意象或临时类比制造俏皮感也必须排除。可批准的句子应体现多条本人 seed 共同支持的推理或接话机制，不要求华丽口癖或显眼修辞；由多条本人原句共同支持、又准确作用于当前具体前提的朴素短句可以批准。若 prior_approved_dialogue 非空，候选必须直接回应其中已经表达的内容；若为空，则必须能自然回应已发生的可见行动。dialogue 只能逐字返回 draft_candidates 中同一 reference 下的一句候选，或返回空字符串；不得增删、替换、润色、合并或重写任何字。多个候选合格时只选 seed 映射最具体、人物机制最清楚且最简洁的一句。审校不拥有也不返回说话动作。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","dialogue":"逐字选中的候选或空字符串"}]}。不要解释审校过程，不要使用 Markdown 围栏。'
 
 function normalizedDialogue(text: string): string {
   return text.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '')
@@ -1119,7 +1154,7 @@ function parseDialogueCandidates(
   decision: StoryDirectorDecision,
   evidence: readonly StoryCharacterVoiceEvidence[],
   rejected: ReadonlySet<string> = new Set(),
-): ReadonlyMap<string, readonly string[]> {
+): ReadonlyMap<string, readonly StoryDialogueCandidate[]> {
   const record = jsonObject(text, '人物对白合成')
   if (Object.keys(record).some(key => key !== 'lines') || !Array.isArray(record.lines)) {
     throw new Error('人物对白合成字段无效')
@@ -1127,13 +1162,14 @@ function parseDialogueCandidates(
   const plans = new Map(decision.sections.flatMap(section => section.speech).map(plan => [plan.reference, plan]))
   const counts = new Map<string, number>()
   const dialogues = new Set<string>()
-  const candidates = new Map<string, string[]>()
+  const candidates = new Map<string, StoryDialogueCandidate[]>()
   record.lines.slice(0, plans.size * 3).forEach((value, index) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`人物对白合成.lines[${String(index)}]不是对象`)
     }
     const line = value as Record<string, unknown>
-    if (Object.keys(line).some(key => key !== 'reference' && key !== 'move' && key !== 'dialogue')) {
+    if (Object.keys(line).some(key => !['reference', 'move', 'seedLineIds', 'mechanics', 'dialogue'].includes(key))
+      || !Array.isArray(line.seedLineIds)) {
       throw new Error('人物对白合成行字段无效')
     }
     const rawReference = boundedString(line.reference, '人物对白合成.reference', 320)
@@ -1142,29 +1178,41 @@ function parseDialogueCandidates(
       : plans.has(`speech:${rawReference}`) ? `speech:${rawReference}` : rawReference
     const move = boundedString(line.move, '人物对白合成.move', 32) as StoryVoiceMove
     const rawDialogue = boundedString(line.dialogue, '人物对白合成.dialogue', 2_048)
-    const dialogue = rawDialogue !== '' && !DIALOGUE_QUOTE_CHARACTER_PATTERN.test(rawDialogue) && !/[\r\n]/u.test(rawDialogue)
-      ? `“${rawDialogue}”`
-      : rawDialogue
+    const dialogue = normalizeDialogueCandidate(rawDialogue)
     const count = counts.get(reference) ?? 0
     if (!plans.has(reference) || count >= 3 || !VOICE_MOVES.has(move)
-      || (dialogue !== '' && !QUOTED_DIALOGUE_LINE_PATTERN.test(dialogue))) {
+      || dialogue === undefined) {
       throw new Error('人物对白合成目标无效')
     }
     counts.set(reference, count + 1)
     const plan = plans.get(reference)!
+    if (move !== plan.intent.move) return
     const planCharacter = evidence.find(character => character.characterId === plan.characterId)
     const planEvidence = planCharacter?.evidence
       .filter(item => plan.voiceEvidence.includes(item.reference)) ?? []
     const hasOwnedDialogue = planCharacter !== undefined && planEvidence.some(item =>
       resolvedVoiceEvidenceParts(planCharacter.characterName, item).targetLines.length > 0)
-    const accepted = dialogue === '' || !hasOwnedDialogue || rejected.has(dialogue)
+    const availableSeeds = new Set(planCharacter === undefined
+      ? []
+      : voiceSeedUnits({ ...planCharacter, evidence: planEvidence })
+        .filter(seed => seed.owner === 'target').map(seed => seed.id))
+    const seedLineIds = (line.seedLineIds as unknown[]).slice(0, 4).map((value, seedIndex) =>
+      boundedString(value, `人物对白合成.seedLineIds[${String(seedIndex)}]`, 640))
+    const mechanics = boundedString(line.mechanics, '人物对白合成.mechanics', 320)
+    const requiredSeeds = Math.min(2, availableSeeds.size)
+    const validSeedMap = dialogue === ''
+      ? seedLineIds.length === 0 && mechanics === ''
+      : mechanics !== '' && seedLineIds.length >= requiredSeeds
+        && new Set(seedLineIds).size === seedLineIds.length
+        && seedLineIds.every(id => availableSeeds.has(id))
+    const accepted = dialogue === '' || !hasOwnedDialogue || !validSeedMap || rejected.has(dialogue)
       || dialogues.has(dialogue) || copiedFromVoiceEvidence(dialogue, evidence)
       ? ''
       : dialogue
     if (accepted !== '') dialogues.add(accepted)
     if (accepted !== '') {
       const values = candidates.get(reference) ?? []
-      values.push(accepted)
+      values.push({ dialogue: accepted, seedLineIds, mechanics })
       candidates.set(reference, values)
     }
   })
@@ -1174,7 +1222,7 @@ function parseDialogueCandidates(
 function parseDialogueReview(
   text: string,
   decision: StoryDirectorDecision,
-  draft: ReadonlyMap<string, readonly string[]>,
+  draft: ReadonlyMap<string, readonly StoryDialogueCandidate[]>,
 ): ReadonlyMap<string, string> {
   const record = jsonObject(text, '人物对白审校')
   if (Object.keys(record).some(key => key !== 'lines') || !Array.isArray(record.lines)) {
@@ -1196,9 +1244,10 @@ function parseDialogueReview(
       : plans.has(`speech:${rawReference}`) ? `speech:${rawReference}` : rawReference
     const draftDialogues = draft.get(reference)
     const rawDialogue = boundedString(line.dialogue, '人物对白审校.dialogue', 2_048)
-    const dialogue = draftDialogues?.find(candidate => rawDialogue === candidate || rawDialogue === candidate.slice(1, -1)) ?? rawDialogue
+    const dialogue = draftDialogues?.find(candidate =>
+      rawDialogue === candidate.dialogue || rawDialogue === candidate.dialogue.slice(1, -1))?.dialogue ?? rawDialogue
     if (!plans.has(reference) || draftDialogues === undefined || seen.has(reference)
-      || (dialogue !== '' && !draftDialogues.includes(dialogue))) {
+      || (dialogue !== '' && !draftDialogues.some(candidate => candidate.dialogue === dialogue))) {
       throw new Error('人物对白审校目标无效')
     }
     seen.add(reference)
@@ -1208,7 +1257,7 @@ function parseDialogueReview(
 }
 
 function retainReviewedDialogue(
-  draft: ReadonlyMap<string, readonly string[]>,
+  draft: ReadonlyMap<string, readonly StoryDialogueCandidate[]>,
   reviewed: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, string> {
   const genericFrame = (dialogue: string): boolean => {
@@ -1218,7 +1267,7 @@ function retainReviewedDialogue(
       || /现在[^，。！？]{0,80}[，,]?还轮不到你/u.test(value)
   }
   return new Map([...reviewed].flatMap(([reference, dialogue]) =>
-    dialogue === '' || (draft.get(reference)?.includes(dialogue) === true && !genericFrame(dialogue))
+    dialogue === '' || (draft.get(reference)?.some(candidate => candidate.dialogue === dialogue) === true && !genericFrame(dialogue))
       ? [[reference, dialogue] as const]
       : []))
 }
@@ -1539,10 +1588,14 @@ function buildCharacterVoiceEvidence(
 
 function renderCharacterVoiceEvidence(evidence: readonly StoryCharacterVoiceEvidence[]): string {
   return evidence.map(character => {
-    const renderedLines = new Set<string>()
+    const seeds = voiceSeedUnits(character)
     return [
       `## ${character.characterName}（${character.characterId}）`,
-      character.evidence.map(item => renderVoiceEvidenceItem(character.characterName, item, renderedLines)).join('\n\n'),
+      character.evidence.map(item => renderVoiceEvidenceItem(
+        character.characterName,
+        item,
+        seeds.filter(seed => seed.reference === item.reference),
+      )).join('\n\n'),
     ].join('\n\n')
   }).join('\n\n')
 }
@@ -2688,7 +2741,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         2_048,
         0.5,
       ), resultEventSeqs, `draft:${subject}`)
-      let initialCandidates: ReadonlyMap<string, readonly string[]> = new Map()
+      let initialCandidates: ReadonlyMap<string, readonly StoryDialogueCandidate[]> = new Map()
       if (voice.text !== undefined) {
         try {
           initialCandidates = parseDialogueCandidates(voice.text, speechDecision, selectedVoiceEvidence)
@@ -2697,7 +2750,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         }
       }
       const reviewDialogue = async (
-        draft: ReadonlyMap<string, readonly string[]>,
+        draft: ReadonlyMap<string, readonly StoryDialogueCandidate[]>,
         phase: 'review' | 'retry-review',
       ): Promise<ReadonlyMap<string, string>> => {
         if (![...draft.values()].some(dialogues => dialogues.length > 0)) return new Map()
@@ -2729,7 +2782,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           input,
           reasoning,
           'quality',
-          '你仍是 character_context 中同一个人物自己的对白 Worker，正在进行唯一一次退回重写。严格审校已经拒绝 rejected_candidates，说明这些候选只是复述回应前提或传达内容、彼此近义改写、使用通用问答框架、搬用了对方或原作事件的具体素材、凭空制造比喻，或没有体现此人物多条真实台词共同支持的机制。不要解释旧句，也不要近义改写、倒装或缩短旧句，不要使用“你是连……都……”一类反问模板。重新对照 <voice_exchange> 中的 [目标人物] 原句和 <voice_notes>，为同一 required_reference 提供至多三个在推理落点和接话结构上都与旧候选不同的新候选；[对话上下文] 仍只供理解，不能借用其声音和具体素材。对白可以省略 结构化决定中已经显然的信息，不必把意图完整说一遍。证据仍不足时只返回一项空字符串。每一项 reference 必须逐字复制 required_reference。格式为 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"answer|assert|challenge|correct|command|question|warn|tease|refuse|inform|propose","dialogue":"“全新候选”或空字符串"}]}，最多三项。不要使用 Markdown 围栏。',
+          '你仍是 character_context 中同一个人物自己的对白 Worker，正在进行唯一一次退回重写。严格审校已经拒绝 rejected_candidates，说明候选的 seed 映射不成立、只是复述回应前提或传达内容、彼此近义改写、使用通用问答框架、搬用了对方或原作事件的具体素材、凭空制造比喻，或没有体现此人物多条真实台词共同支持的机制。不要解释旧句，也不要近义改写、倒装或缩短旧句，不要使用“你是连……都……”一类反问模板。重新对照 <voice_exchange> 中带 ID 的 [目标人物] seed 和 <voice_notes>，为同一 required_reference 提供至多三个在推理落点、接话结构和 seed 组合上都与旧候选不同的新候选；[对话上下文] 仍只供理解，不能引用为自己的声音或借用其具体素材。每个非空候选必须逐字复制 speech_plan 的 move，引用资料足够时至少两条真实 [目标人物] seedLineIds，并用 mechanics 简述共同支持的分句与接话机制。对白可以省略结构化决定中已经显然的信息，不必把意图完整说一遍。证据仍不足时只返回一项空字符串、空 seedLineIds 和空 mechanics。每一项 reference 必须逐字复制 required_reference。格式为 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"speech_plan 中既定动作","seedLineIds":["目标人物 seed ID 1","目标人物 seed ID 2"],"mechanics":"共同支持的分句与接话机制","dialogue":"“全新候选”或空字符串"}]}，最多三项。不要使用 Markdown 围栏。',
           [
             commonBody,
             '<rejected_candidates>', renderDialogueCandidates(speechDecision, enabledCharacters, initialCandidates), '</rejected_candidates>',
@@ -2737,14 +2790,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           2_048,
           0.6,
         ), resultEventSeqs, `retry-draft:${subject}`)
-        let retryCandidates: ReadonlyMap<string, readonly string[]> = new Map()
+        let retryCandidates: ReadonlyMap<string, readonly StoryDialogueCandidate[]> = new Map()
         if (retry.text !== undefined) {
           try {
             retryCandidates = parseDialogueCandidates(
               retry.text,
               speechDecision,
               selectedVoiceEvidence,
-              new Set([...initialCandidates.values()].flat()),
+              new Set([...initialCandidates.values()].flat().map(candidate => candidate.dialogue)),
             )
           } catch {
             retryCandidates = new Map()

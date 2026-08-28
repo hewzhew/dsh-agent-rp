@@ -253,6 +253,7 @@ test('runs logged story stages while keeping each character request privately sc
   let secondVoiceBody = ''
   let secondVoiceSystem = ''
   let voiceReviewBody = ''
+  let voiceRetryReviewBody = ''
   let voiceReviewSystem = ''
   let voiceRetryBody = ''
   let voiceRetrySystem = ''
@@ -312,6 +313,11 @@ test('runs logged story stages while keeping each character request privately sc
         maxTokenBudgets.push(options.maxTokens ?? 0)
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages)
+        const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
+          .map(match => match[1]!))]
+        const contextSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[对话上下文\]/gu)]
+          .map(match => match[1]!))]
+        const candidateSeeds = targetSeedIds.slice(0, Math.min(2, targetSeedIds.length))
         let text: string
         if (system.includes('剧情研究 Worker')) {
           researchBodies.push(body)
@@ -393,18 +399,19 @@ test('runs logged story stages while keeping each character request privately sc
                 { reference: `${sectionId}:2`, dialogue: '先把刻痕看清楚。' },
               ],
             })
-          } else if (voiceReviewCalls === 1) {
+          } else if (body.includes('先看“徽章”，别忙着猜。')) {
+            voiceRetryReviewBody = body
+            text = JSON.stringify({
+              lines: [
+                { reference: `${sectionId}:1`, dialogue: '先看“徽章”，别忙着猜。' },
+              ],
+            })
+          } else {
             voiceReviewBody = body
             voiceReviewSystem = system
             text = JSON.stringify({
               lines: [
                 { reference: `${sectionId}:1`, dialogue: '你连徽章都没看清，谈什么结论。' },
-              ],
-            })
-          } else {
-            text = JSON.stringify({
-              lines: [
-                { reference: `${sectionId}:1`, dialogue: '先看徽章，别忙着猜。' },
               ],
             })
           }
@@ -415,8 +422,8 @@ test('runs logged story stages while keeping each character request privately sc
             voiceRetrySystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:1`, move: 'command', dialogue: '先看徽章，别忙着猜。' },
-                { reference: `${sectionId}:1`, move: 'correct', dialogue: '没看清的话，结论就先放着。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds.slice(0, 1), mechanics: '只用一条依据的无效候选', dialogue: '只看一条也够了。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '先指出眼前缺口，再截断过早结论', dialogue: '先看“徽章”，别忙着猜。' },
               ],
             })
           } else if (body.includes(`人物：柏舟（${bobId}）`)) {
@@ -424,7 +431,7 @@ test('runs logged story stages while keeping each character request privately sc
             secondVoiceSystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:2`, move: 'answer', dialogue: '先把刻痕看清楚。' },
+                { reference: `${sectionId}:2`, move: 'correct', seedLineIds: candidateSeeds, mechanics: '直接指出观察仍不成立', dialogue: '先把刻痕看清楚。' },
               ],
             })
           } else {
@@ -432,9 +439,9 @@ test('runs logged story stages while keeping each character request privately sc
             voiceSystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:1`, move: 'command', dialogue: '谁都能说的胜利台词。' },
-                { reference: `${sectionId}:1`, move: 'question', dialogue: '你连徽章都没看清，谈什么结论。' },
-                { reference: `${sectionId}:1`, move: 'challenge', dialogue: '别说得像你已经看清了。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: contextSeedIds.slice(0, 1), mechanics: '错误引用对方台词', dialogue: '借了对方的声音。' },
+                { reference: `${sectionId}:1`, move: 'challenge', seedLineIds: candidateSeeds, mechanics: '擅自改变既定动作', dialogue: '把提醒改成质疑。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '以未满足的观察前提反问结论', dialogue: '你连徽章都没看清，谈什么结论。' },
               ],
             })
           }
@@ -446,7 +453,7 @@ test('runs logged story stages while keeping each character request privately sc
             ? JSON.stringify({ insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }] })
             : body.includes('kind=\\"history\\"')
               ? '<omit-section />'
-              : '尚显重复的粗稿。尚显重复的粗稿。\n\n“先看徽章，别忙着猜。”\n\n柏舟说：“谁都能说的胜利台词。”'
+              : '尚显重复的粗稿。尚显重复的粗稿。\n\n「先看“徽章”，别忙着猜。」\n\n柏舟说：“谁都能说的胜利台词。”'
         } else {
           editorBody = body
           editorSystem = system
@@ -547,7 +554,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(sectionSystems[0]!, /可执行世界严格只读/u)
   assert.match(sectionSystems[1]!, /时间线、前情或档案/u)
   assert.match(sectionSystems[1]!, /非空内容，不能返回 <omit-section \/>/u)
-  assert.match(sectionBodies[0]!, /获准对白：阿梨｜“先看徽章，别忙着猜。”/u)
+  assert.match(sectionBodies[0]!, /获准对白：阿梨｜「先看“徽章”，别忙着猜。」/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /<voice_evidence>|先把眼前的事说清楚/u)
   assert.match(voiceBody, new RegExp(`speech:${sectionId}:1`, 'u'))
   assert.ok(voiceBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
@@ -561,6 +568,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceBody, /\[目标人物\]\[原文\] 阿梨｜見えてから結論を出せばいい。/u)
   assert.match(voiceBody, /\[对话上下文\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
   assert.match(voiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
+  assert.match(voiceBody, /\[seed:([^\]]+)\]\[目标人物\]\[原文\] 阿梨｜見えてから結論を出せばいい。[\s\S]*\[seed:\1\]\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.doesNotMatch(voiceBody, /\[对话上下文\]\[原文\] 柏舟｜船はもう遠くへ行った。/u)
   assert.match(voiceBody, /<voice_notes>[\s\S]*阿梨常用短反问/u)
   assert.equal(voiceBody.match(/阿梨｜没看清就别急着下结论。/gu)?.length, 1)
@@ -585,16 +593,19 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(secondVoiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.doesNotMatch(secondVoiceBody, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(secondVoiceBody, /阿梨知道徽章/u)
-  assert.match(secondVoiceBody, /<prior_approved_dialogue>[\s\S]*先看徽章，别忙着猜/u)
+  assert.match(secondVoiceBody, /<prior_approved_dialogue>[\s\S]*先看“徽章”，别忙着猜/u)
   assert.match(secondVoiceSystem, /不得读取或推断导演故事图、其他人物档案和私有知识/u)
   assert.match(voiceSystem, /不得照抄、拼接、近似复述/u)
   assert.match(voiceSystem, /prior_approved_dialogue 非空，候选必须直接接住其中最后一句/u)
-  assert.match(voiceSystem, /move 说明句子怎样作用于对方/u)
-  assert.match(voiceSystem, /\[目标人物\].*此人物自己的原句/u)
-  assert.match(voiceSystem, /\[对话上下文\].*不能模仿对方/u)
+  assert.match(voiceSystem, /move 必须逐字复制 speech_plan/u)
+  assert.match(voiceSystem, /seedLineIds/u)
+  assert.match(voiceSystem, /\[目标人物\] seed 才能用于候选的声音映射/u)
+  assert.match(voiceSystem, /\[对话上下文\] seed.*不能引用为自己的声音/u)
   assert.match(voiceSystem, /普通问句、纠正句或胜负套话/u)
-  assert.match(voiceReviewBody, /谁都能说的胜利台词/u)
-  assert.match(voiceReviewBody, /候选 2/u)
+  assert.match(voiceReviewBody, /你连徽章都没看清，谈什么结论/u)
+  assert.match(voiceReviewBody, /候选 1/u)
+  assert.doesNotMatch(voiceReviewBody, /借了对方的声音|把提醒改成质疑/u)
+  assert.match(voiceReviewBody, /句法与接话机制/u)
   assert.match(voiceReviewBody, /先把眼前的事说清楚/u)
   assert.match(voiceReviewSystem, /匿名替换检验/u)
   assert.match(voiceReviewSystem, /意图复述检验/u)
@@ -615,14 +626,16 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceRetrySystem, /凭空制造比喻/u)
   assert.match(voiceRetryBody, /rejected_candidates/u)
   assert.ok(voiceRetryBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
-  assert.match(voiceRetryBody, /谁都能说的胜利台词/u)
+  assert.match(voiceRetryBody, /你连徽章都没看清，谈什么结论/u)
+  assert.doesNotMatch(voiceRetryReviewBody, /只看一条也够了/u)
+  assert.match(voiceRetryReviewBody, /「先看“徽章”，别忙着猜。」/u)
   assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
   assert.doesNotMatch(sectionBodies[0]!, /对白收束/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
   assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(characterSectionId))
   assert.ok(editorBody.indexOf(characterSectionId) < editorBody.indexOf(historySectionId))
   assert.match(editorBody, new RegExp(`${characterSectionId}[\\s\\S]*自己的旧站记忆`, 'u'))
-  assert.match(editorBody, /先看徽章，别忙着猜/u)
+  assert.match(editorBody, /先看“徽章”，别忙着猜/u)
   assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
@@ -633,7 +646,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /终章原著/u)
   assert.match(directorSystem, /Host 会把导演遗漏的有效决定补回默认正文分区/u)
   assert.match(result.finalDraft, /阿梨看向徽章/u)
-  assert.match(result.finalDraft, /先看徽章，别忙着猜/u)
+  assert.match(result.finalDraft, /「先看“徽章”，别忙着猜。」/u)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
   assert.deepEqual(result.finalSections.map(section => ({
     sectionId: section.sectionId,
