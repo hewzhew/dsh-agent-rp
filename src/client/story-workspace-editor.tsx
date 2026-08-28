@@ -20,6 +20,7 @@ import {
   type DragEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
@@ -66,6 +67,11 @@ import { splitStorySourcePassages, type StorySourcePassage } from '../story-sour
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
+import {
+  decodeStorySourceFile,
+  STORY_SOURCE_FILE_ACCEPT,
+  storySourceNameFromFile,
+} from './story-source-file.ts'
 import storyStudioCss from './story-workspace-editor.css?raw'
 
 interface StoryWorkspaceEditorProps {
@@ -1550,6 +1556,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
   const [notice, setNotice] = useState<string>()
   const [deleteArmed, setDeleteArmed] = useState(false)
   const [dragOutputId, setDragOutputId] = useState<string>()
+  const sourceFileInputRef = useRef<HTMLInputElement>(null)
 
   const load = async (id: string): Promise<void> => {
     const next = await readWorkspace(id)
@@ -1752,6 +1759,28 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       id, name: `资料 ${current.sources.length + 1}`, kind: 'original', enabled: true, content: '',
     }] }))
     select({ kind: 'source', id })
+  }
+  const importSourceFiles = async (files: readonly File[]): Promise<void> => {
+    if (workspace === undefined || files.length === 0) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      const imported = await Promise.all(files.map(async file => ({
+        id: `source-${createClientOpaqueUuid()}`,
+        name: storySourceNameFromFile(file.name),
+        kind: 'original' as const,
+        enabled: true,
+        content: decodeStorySourceFile(new Uint8Array(await file.arrayBuffer())),
+      })))
+      update(current => ({ ...current, sources: [...current.sources, ...imported] }))
+      select({ kind: 'source', id: imported[0]!.id })
+      setNotice(`已从本机导入 ${String(imported.length)} 份原著资料；保存场地后生效`)
+    } catch (reason: unknown) {
+      setError(errorMessage(reason))
+    } finally {
+      setSaving(false)
+      if (sourceFileInputRef.current !== null) sourceFileInputRef.current.value = ''
+    }
   }
   const addCitation = (source: StorySource, passage: StorySourcePassage): void => {
     const id = `citation-${createClientOpaqueUuid()}`
@@ -1991,7 +2020,14 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       onBindActor={bindActor} onDelete={deleteCharacter} selectEvent={id => { select({ kind: 'event', id }) }} addCharacter={addCharacter} />
   } else if (view === 'sources') {
     main = readerSource === undefined
-      ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><button className="story-studio-button" type="button" onClick={addSource}>＋ 添加资料</button></div>
+      ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><div className="story-studio-actions">
+        <input ref={sourceFileInputRef} hidden multiple type="file" accept={STORY_SOURCE_FILE_ACCEPT} onChange={event => {
+          void importSourceFiles(Array.from(event.target.files ?? []))
+        }} />
+        <button className="story-studio-button story-studio-button-primary" type="button" disabled={saving}
+          onClick={() => { sourceFileInputRef.current?.click() }}>导入 TXT / Markdown</button>
+        <button className="story-studio-button" type="button" onClick={addSource}>＋ 空白资料</button>
+      </div></div>
         {workspace.researchInbox.length > 0 && <section className="story-research-inbox">
           <div className="story-research-heading"><div><strong>研究收件箱</strong><span>网络结果不会自动成为故事事实；收为资料后才能被后续检索和引用。</span></div><span>{workspace.researchInbox.length} 条待处理</span></div>
           <div className="story-research-grid">{workspace.researchInbox.map(item => <article className="story-research-card" key={item.id}>
