@@ -98,6 +98,7 @@ interface StoryWorkspaceResponse {
   readonly workspace?: StoryWorkspaceSnapshot
   readonly worldTurn?: PlayWorldTurnProjection | null
   readonly worldModuleAvailable?: boolean | null
+  readonly webSearchAvailable?: boolean
   readonly workspaces?: readonly StoryWorkspaceSummary[]
   readonly error?: string
 }
@@ -106,6 +107,7 @@ interface StoryWorkspaceResult {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
   readonly worldModuleAvailable: boolean | null
+  readonly webSearchAvailable: boolean
 }
 
 interface PlayWorldResourcesResponse {
@@ -293,13 +295,15 @@ async function listWorkspaces(): Promise<readonly StoryWorkspaceSummary[]> {
 
 function workspaceResult(value: StoryWorkspaceResponse, label: string): StoryWorkspaceResult {
   if (value.workspace === undefined || !Object.prototype.hasOwnProperty.call(value, 'worldTurn')
-    || !Object.prototype.hasOwnProperty.call(value, 'worldModuleAvailable')) {
+    || !Object.prototype.hasOwnProperty.call(value, 'worldModuleAvailable')
+    || typeof value.webSearchAvailable !== 'boolean') {
     throw new Error(`${label}响应无效`)
   }
   return {
     workspace: value.workspace,
     worldTurn: value.worldTurn ?? null,
     worldModuleAvailable: value.worldModuleAvailable ?? null,
+    webSearchAvailable: value.webSearchAvailable,
   }
 }
 
@@ -2069,6 +2073,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   const [workspace, setWorkspace] = useState<StoryWorkspaceSnapshot>()
   const [worldTurn, setWorldTurn] = useState<PlayWorldTurnProjection | null>(null)
   const [worldModuleAvailable, setWorldModuleAvailable] = useState<boolean | null>(null)
+  const [webSearchAvailable, setWebSearchAvailable] = useState<boolean | null>(null)
   const [view, setView] = useState<StudioView>('world')
   const [selection, setSelection] = useState<StudioSelection>()
   const [readerSourceId, setReaderSourceId] = useState<string>()
@@ -2089,6 +2094,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     setWorkspace(next.workspace)
     setWorldTurn(next.worldTurn)
     setWorldModuleAvailable(next.worldModuleAvailable)
+    setWebSearchAvailable(next.webSearchAvailable)
     setDirty(false)
     setSelection(undefined)
     setReaderSourceId(undefined)
@@ -2104,6 +2110,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(undefined)
       setWorldTurn(null)
       setWorldModuleAvailable(null)
+      setWebSearchAvailable(null)
       setSelection(undefined)
       setReaderSourceId(undefined)
       return
@@ -2125,6 +2132,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(selected?.workspace)
       setWorldTurn(selected?.worldTurn ?? null)
       setWorldModuleAvailable(selected?.worldModuleAvailable ?? null)
+      setWebSearchAvailable(selected?.webSearchAvailable ?? null)
       setSelection(undefined)
       setReaderSourceId(undefined)
     }).catch(reason => {
@@ -2173,6 +2181,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(created.workspace)
       setWorldTurn(created.worldTurn)
       setWorldModuleAvailable(created.worldModuleAvailable)
+      setWebSearchAvailable(created.webSearchAvailable)
       setDirty(false)
       setSelection(undefined)
       setReaderSourceId(undefined)
@@ -2188,6 +2197,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setDirty(false)
       setNotice('所有修改已保存')
@@ -2201,6 +2211,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经装入场地`)
@@ -2215,6 +2226,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setView('world')
       setNotice('人物来源已更新，棋局状态与事件保持不变')
@@ -2253,6 +2265,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经重新开局；旧局事件与临时状态已清空`)
@@ -2268,6 +2281,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setNotice(`${action.label}已经结算`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -2280,6 +2294,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
       setNotice(actorId === undefined ? '人物已经改为手写档案' : '角色卡已经绑定到本局人物')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -2597,6 +2612,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><div className="story-studio-actions">
+        <span className="story-web-capability" data-available={webSearchAvailable === true}
+          title={webSearchAvailable === true ? '研究 Worker 可以通过当前 DSH Host 请求网络搜索。' : '研究 Worker 仍会使用本地资料，但不能追加网络查询。'}>
+          {webSearchAvailable === null ? '正在确认网络研究…' : webSearchAvailable ? '网络研究接口已接入' : '当前 Host 未接入网络研究'}
+        </span>
         <input ref={sourceFileInputRef} hidden multiple type="file" accept={STORY_SOURCE_FILE_ACCEPT} onChange={event => {
           void importSourceFiles(Array.from(event.target.files ?? []))
         }} />

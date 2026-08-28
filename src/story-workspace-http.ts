@@ -27,6 +27,7 @@ import {
   type PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
+import { storyWebSearchAvailable } from './story-turn-pipeline.ts'
 
 const MAX_STORY_WORKSPACE_REQUEST_BYTES = 17 * 1024 * 1024
 
@@ -128,17 +129,19 @@ function parseWorldActionRequest(value: unknown): PlayWorldActionRequest {
   return record as unknown as PlayWorldActionRequest
 }
 
-function workspaceResponse(store: StoryWorkspaceStore, workspace: StoryWorkspaceSnapshot): {
+function workspaceResponse(ctx: Context, store: StoryWorkspaceStore, workspace: StoryWorkspaceSnapshot): {
   readonly format: 1
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
   readonly worldModuleAvailable: boolean | null
+  readonly webSearchAvailable: boolean
 } {
   return {
     format: 1,
     workspace,
     worldTurn: store.worldTurn(workspace.id) ?? null,
     worldModuleAvailable: workspace.world === undefined ? null : store.worlds.has(workspace.world.moduleId),
+    webSearchAvailable: storyWebSearchAvailable(ctx),
   }
 }
 
@@ -205,27 +208,27 @@ export function installStoryWorkspaceHttp(
         }
         if (request.method === 'POST' && suffix === '') {
           const workspace = store.create(parseCreateRequest(await readJson(request)))
-          json(response, 201, workspaceResponse(store, workspace))
+          json(response, 201, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 2 && segments[1] === 'world') {
           const workspace = store.installWorld(segments[0]!, parseWorldInstallRequest(await readJson(request)))
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'restart') {
           const workspace = store.restartWorld(segments[0]!, parseWorldRestartRequest(await readJson(request)))
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'cast') {
           const workspace = store.updateWorldCast(segments[0]!, parseWorldCastUpdateRequest(await readJson(request)))
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'actions') {
           const workspace = store.dispatchWorldAction(segments[0]!, parseWorldActionRequest(await readJson(request)))
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'POST' && segments.length === 4 && segments[1] === 'characters' && segments[3] === 'actor') {
@@ -234,17 +237,17 @@ export function installStoryWorkspaceHttp(
           const workspace = store.bindCharacterActor(
             segments[0]!, binding, binding.actor === undefined ? undefined : resources!.projectActor(binding.actor),
           )
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'GET' && id !== undefined) {
           const workspace = store.get(id)
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'PUT' && id !== undefined) {
           const workspace = store.save(parseSaveRequest(await readJson(request), id))
-          json(response, 200, workspaceResponse(store, workspace))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }
         if (request.method === 'DELETE' && id !== undefined) {
