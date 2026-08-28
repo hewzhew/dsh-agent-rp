@@ -24,6 +24,7 @@ import {
   useState,
 } from 'react'
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
+import type { AgentRpStoryTurnProgress, AgentRpStoryTurnStage } from '../projection-types.ts'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   isFlyingChessWorldState,
@@ -78,6 +79,7 @@ interface StoryWorkspaceEditorProps {
   readonly accent: string
   readonly initialWorkspaceId?: string
   readonly sessionId?: string
+  readonly storyTurn?: AgentRpStoryTurnProgress | undefined
   readonly launchSourceSessionId?: string
   readonly onStartSession?: (sourceSessionId: string, workspaceId: string, request: string) => Promise<void>
   readonly onContinueSession?: (sessionId: string, workspaceId: string, request: string) => Promise<void>
@@ -176,6 +178,50 @@ const sourceKindLabels: Readonly<Record<StorySourceKind, string>> = {
   reference: '参考',
   research: '研究',
   web: '网络',
+}
+
+const storyTurnStageLabels: Readonly<Record<AgentRpStoryTurnStage, string>> = {
+  'world-action': '推进场地规则',
+  cast: '确认本轮人物',
+  history: '检索人物经历',
+  research: '查找资料',
+  character: '推演人物行动',
+  director: '规划剧情',
+  section: '撰写输出分区',
+  voice: '校准人物对白',
+  editor: '删去套话',
+  continuity: '整理事件与认知',
+}
+
+function storyTurnSubjectName(
+  workspace: StoryWorkspaceSnapshot,
+  subjectId: string | undefined,
+): string | undefined {
+  if (subjectId === undefined) return undefined
+  const character = workspace.characters.find(candidate => subjectId.includes(candidate.id))
+  if (character !== undefined) return character.name
+  return workspace.outputs.find(output => output.id === subjectId)?.name
+}
+
+function storyTurnProgressText(
+  workspace: StoryWorkspaceSnapshot | undefined,
+  progress: AgentRpStoryTurnProgress | undefined,
+): string {
+  if (workspace === undefined || progress === undefined || progress.workspaceId !== workspace.id) {
+    return '历史检索 → 人物推演 → 导演规划 → 分区写作 → 去八股'
+  }
+  if (progress.status === 'complete') return `第 ${String(progress.turn)} 回合的事件、认知与引用已经保存`
+  if (progress.status === 'prepared') return `第 ${String(progress.turn)} 回合正文已经准备好，等待呈现`
+  const running = progress.requests.findLast(request => request.status === 'running')
+  if (running !== undefined) {
+    const subject = storyTurnSubjectName(workspace, running.subjectId)
+    return `正在${storyTurnStageLabels[running.stage]}${subject === undefined ? '' : ` · ${subject}`}`
+  }
+  const latest = progress.requests.at(-1)
+  if (latest === undefined) return '正在准备故事流水线'
+  return latest.status === 'failed'
+    ? `${storyTurnStageLabels[latest.stage]}已降级，正在继续后续步骤`
+    : `${storyTurnStageLabels[latest.stage]}完成，正在进入下一阶段`
 }
 
 function canBecomeActiveNode(node: StoryNode): boolean {
@@ -1558,7 +1604,7 @@ function PlayWorldView({ workspace, modules, busy, dirty, sessionAction, onAdvan
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
-export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, launchSourceSessionId, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
+export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, storyTurn, launchSourceSessionId, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
   const [worldModules, setWorldModules] = useState<readonly PlayWorldModuleDescriptor[]>([])
   const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
@@ -2141,7 +2187,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
       </aside>
     </div>
     <footer className="story-studio-statusbar">
-      <strong>回合写作</strong><span>查找资料 → 人物行动 → 整理场面 → 写作 → 润色</span><span>{sessionId === undefined ? '从空白会话开始游玩' : '可以在当前会话继续'}</span>
+      <strong>回合写作</strong><span className="story-studio-turn-progress" role="status">{storyTurnProgressText(workspace, storyTurn)}</span><span>{sessionId === undefined ? '从空白会话开始游玩' : '可以在当前会话继续'}</span>
       {error !== undefined ? <span className="story-studio-status-error" role="alert">{error}</span>
         : notice !== undefined ? <span className="story-studio-status-message" role="status">{notice}</span>
           : dirty ? <span className="story-studio-status-message">有未保存修改</span> : undefined}

@@ -677,6 +677,7 @@
   padding: 5px 13px;
 }
 .story-studio-statusbar strong { color: inherit; font-weight: 600; }
+.story-studio-turn-progress { color: var(--story-accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .story-studio-status-message { color: var(--story-accent); margin-left: auto; }
 .story-studio-status-error { color: var(--dsw-alias-state-danger, #e26773); margin-left: auto; }
 

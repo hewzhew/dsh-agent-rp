@@ -3198,6 +3198,7 @@ function SidebarRoleplayDestination({
         ? {}
         : {
             sessionId: String(currentSessionId),
+            storyTurn: (currentSession?.projectionValues?.agentRp as AgentRpProjection | undefined)?.storyTurn,
             onContinueSession: (targetSessionId: string, workspaceId: string, request: string) => continueStoryWorkspaceSession(
               targetSessionId as SessionId, workspaceId, request,
             ),

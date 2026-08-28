@@ -11,6 +11,33 @@ import type { RoleplayTurnPresentation } from './roleplay-turn-presentation-type
 /** Stable fallback identity used by resource-only roleplay Sessions. */
 export const DEFAULT_AGENT_RP_CHARACTER_NAME = '角色会话'
 
+/** One model or Host responsibility inside a story-workspace turn. */
+export type AgentRpStoryTurnStage =
+  | 'world-action'
+  | 'cast'
+  | 'history'
+  | 'research'
+  | 'character'
+  | 'director'
+  | 'section'
+  | 'voice'
+  | 'editor'
+  | 'continuity'
+
+/** Browser-visible progress reconstructed from logged story stage events. */
+export interface AgentRpStoryTurnProgress {
+  readonly workspaceId: string
+  readonly turn: number
+  readonly step: number
+  readonly status: 'running' | 'prepared' | 'complete'
+  readonly requests: readonly {
+    readonly requestId: string
+    readonly stage: AgentRpStoryTurnStage
+    readonly subjectId?: string
+    readonly status: 'running' | 'succeeded' | 'failed'
+  }[]
+}
+
 /** Current character identity and migration summary for one Roleplay Session. */
 export interface AgentRpProjection {
   /** Live Host abilities that gate UI actions; they are not durable roleplay state. */
@@ -19,6 +46,8 @@ export interface AgentRpProjection {
   }
   /** Per-Session capability strategy, independent from imported prompt presets. */
   readonly turnMode: 'conversation' | 'agent'
+  /** Latest story-workspace turn, updated while its logged stages run. */
+  readonly storyTurn?: AgentRpStoryTurnProgress
   /** Character name used by the prompt and card macros. */
   readonly characterName: string
   /** Lossless card title when the card supplies a shorter runtime nickname. */

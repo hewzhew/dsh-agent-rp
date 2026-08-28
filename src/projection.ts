@@ -90,6 +90,7 @@ const projectionSchema = {
         || typeof (record.hostCapabilities as Record<string, unknown>).sessionEvents !== 'boolean'))
       || typeof record.characterName !== 'string'
       || (record.turnMode !== 'conversation' && record.turnMode !== 'agent')
+      || (record.storyTurn !== undefined && !validStoryTurnProgress(record.storyTurn))
       || (record.originalCharacterName !== undefined && typeof record.originalCharacterName !== 'string')
       || typeof record.description !== 'string'
       || typeof record.personality !== 'string'
@@ -148,13 +149,109 @@ function validAuxiliaryGenerationSummary(value: unknown): boolean {
   return record.requests === Number(record.succeeded) + Number(record.failed) + Number(record.pending)
 }
 
+const STORY_TURN_STAGES = new Set([
+  'world-action', 'cast', 'history', 'research', 'character',
+  'director', 'section', 'voice', 'editor', 'continuity',
+])
+
+function validStoryTurnProgress(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (typeof record.workspaceId !== 'string'
+    || typeof record.turn !== 'number' || !Number.isSafeInteger(record.turn) || record.turn < 0
+    || typeof record.step !== 'number' || !Number.isSafeInteger(record.step) || record.step < 0
+    || (record.status !== 'running' && record.status !== 'prepared' && record.status !== 'complete')
+    || !Array.isArray(record.requests)) return false
+  return record.requests.every(request => {
+    if (typeof request !== 'object' || request === null || Array.isArray(request)) return false
+    const item = request as Record<string, unknown>
+    return typeof item.requestId === 'string'
+      && typeof item.stage === 'string' && STORY_TURN_STAGES.has(item.stage)
+      && (item.subjectId === undefined || typeof item.subjectId === 'string')
+      && (item.status === 'running' || item.status === 'succeeded' || item.status === 'failed')
+  })
+}
+
+type StoryTurnProgress = NonNullable<AgentRpProjection['storyTurn']>
+
+function sameStoryTurn(
+  current: StoryTurnProgress,
+  value: { readonly workspaceId: string; readonly turn: number; readonly step: number },
+): boolean {
+  return current.workspaceId === value.workspaceId && current.turn === value.turn && current.step === value.step
+}
+
+function applyStoryTurnProgress(
+  current: StoryTurnProgress | undefined,
+  event: SessionEvent,
+): StoryTurnProgress | undefined {
+  if (event.type === 'agent-rp/story-stage-request') {
+    const request = {
+      requestId: event.data.requestId,
+      stage: event.data.stage,
+      ...(event.data.subjectId === undefined ? {} : { subjectId: event.data.subjectId }),
+      status: 'running' as const,
+    }
+    if (current === undefined || !sameStoryTurn(current, event.data)) {
+      return {
+        workspaceId: event.data.workspaceId,
+        turn: event.data.turn,
+        step: event.data.step,
+        status: 'running',
+        requests: [request],
+      }
+    }
+    const existing = current.requests.findIndex(item => item.requestId === request.requestId)
+    const requests = existing < 0
+      ? [...current.requests, request]
+      : current.requests.map((item, index) => index === existing ? request : item)
+    return { ...current, status: 'running', requests }
+  }
+  if (event.type === 'agent-rp/story-stage-result') {
+    if (current === undefined) return current
+    const status = event.data.result.kind === 'success' ? 'succeeded' as const : 'failed' as const
+    const index = current.requests.findIndex(item => item.requestId === event.data.requestId)
+    if (index < 0 || current.requests[index]?.status === status) return current
+    return {
+      ...current,
+      requests: current.requests.map((request, requestIndex) => requestIndex === index
+        ? { ...request, status }
+        : request),
+    }
+  }
+  if (event.type === 'agent-rp/story-turn-brief') {
+    return current !== undefined && sameStoryTurn(current, event.data)
+      ? { ...current, status: 'prepared' }
+      : {
+          workspaceId: event.data.workspaceId,
+          turn: event.data.turn,
+          step: event.data.step,
+          status: 'prepared',
+          requests: [],
+        }
+  }
+  if (event.type === 'agent-rp/story-turn-materialized') {
+    return current !== undefined && sameStoryTurn(current, event.data)
+      ? { ...current, status: 'complete' }
+      : {
+          workspaceId: event.data.workspaceId,
+          turn: event.data.turn,
+          step: event.data.step,
+          status: 'complete',
+          requests: [],
+        }
+  }
+  return current
+}
+
 type ImportCall = 'character-card' | 'world-info' | 'preset'
 
 interface AgentRpProjectionState {
   readonly character: Omit<AgentRpProjection, 'worldInfoCount' | 'worldInfo' | 'presetLibrary' | 'lastRequest'
   | 'generations' | 'auxiliaryGenerations' | 'presentation' | 'nativeStates' | 'turnMode' | 'hostCapabilities'
-  | 'regexPacks'>
+  | 'regexPacks' | 'storyTurn'>
   readonly turnMode: RoleplayTurnMode
+  readonly storyTurn?: AgentRpProjection['storyTurn']
   readonly cardWorldInfoCount: number
   readonly cardLorebook?: SessionLorebookSource
   readonly standaloneWorldInfos: Readonly<Record<string, SessionLorebookSource>>
@@ -199,6 +296,7 @@ const projectionStateSchema = {
     const record = value as Partial<Record<keyof AgentRpProjectionState, unknown>>
     if (typeof record.character !== 'object' || record.character === null || Array.isArray(record.character)
       || (record.turnMode !== 'conversation' && record.turnMode !== 'agent')
+      || (record.storyTurn !== undefined && !validStoryTurnProgress(record.storyTurn))
       || typeof record.cardWorldInfoCount !== 'number' || !Number.isSafeInteger(record.cardWorldInfoCount)
       || record.cardWorldInfoCount < 0
       || typeof record.standaloneWorldInfos !== 'object' || record.standaloneWorldInfos === null
@@ -751,6 +849,8 @@ export function createAgentRpProjectionDefinition(
     if (tavernMessageAnnotations !== withSurface.tavernMessageAnnotations) {
       return { ...withSurface, tavernMessageAnnotations }
     }
+    const storyTurn = applyStoryTurnProgress(withSurface.storyTurn, event)
+    if (storyTurn !== withSurface.storyTurn) return { ...withSurface, storyTurn }
     if (event.type === 'agent-rp/turn-mode') {
       return { ...withSurface, turnMode: parseRoleplayTurnModeRecord(event.data).mode }
     }
@@ -1254,6 +1354,7 @@ export function createAgentRpProjectionDefinition(
       ...state.character,
       hostCapabilities: { sessionEvents: true },
       turnMode: state.turnMode,
+      ...(state.storyTurn === undefined ? {} : { storyTurn: state.storyTurn }),
       nativeStates: state.nativeStates.map(stateValue => ({
         id: stateValue.id,
         revision: stateValue.revision,
@@ -1308,7 +1409,7 @@ export function createAgentRpProjectionDefinition(
     }
   },
   },
-  stateVersion: 16,
+  stateVersion: 17,
   }
   return {
     ...definition,
