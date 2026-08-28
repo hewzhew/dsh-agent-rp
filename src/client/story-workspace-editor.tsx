@@ -66,6 +66,7 @@ import {
 } from '../story-suggestion-batch.ts'
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
+import { groupStoryTimeline, type StoryTimelineGroup } from '../story-timeline.ts'
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from '../story-world-events.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
@@ -1031,6 +1032,58 @@ function WorldEventInspector({ workspace, event, onOpenWorld, onSelectStoryEvent
       {representedBy.length === 0 && <p>下一次由人物推进并续写时，可以把新的规则结果连接到正文事件。</p>}
     </div>
   </>
+}
+
+function StoryTimelineEventCard({ workspace, event, selected, onSelect, onSelectWorldEvent }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly event: StoryEvent
+  readonly selected: boolean
+  readonly onSelect: () => void
+  readonly onSelectWorldEvent: (id: string) => void
+}) {
+  const batch = storySuggestionBatch(workspace, event.id)
+  const pending = batch.nodeIds.length + batch.edgeIds.length
+  const worldEvents = (event.worldEventSequences ?? []).flatMap(sequence => {
+    const worldEvent = workspace.world?.events.find(candidate => candidate.sequence === sequence)
+    return worldEvent === undefined ? [] : [worldEvent]
+  })
+  return <article className="story-studio-card" data-selected={selected} onClick={onSelect}>
+    <h3>第 {event.turn} 回合 · {event.title}</h3><p>{event.summary}</p>
+    {worldEvents.length > 0 && <div className="story-timeline-world-links"><span>规则来源</span>{worldEvents.map(worldEvent => <button type="button" key={worldEvent.id}
+      onClick={click => { click.stopPropagation(); onSelectWorldEvent(worldEvent.id) }}>
+      <b>#{worldEvent.sequence}</b>{worldEvent.title}
+    </button>)}</div>}
+    <div className="story-studio-card-meta"><span>{event.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '未标注参与人物'}</span>
+      <span>{workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id).length} 条人物观察</span>
+      {pending > 0 && <span>{pending} 项候选变更</span>}
+      {event.nodeId !== undefined && <span>场景：{workspace.graph.nodes.find(node => node.id === event.nodeId)?.title ?? '剧情节点'}</span>}</div>
+  </article>
+}
+
+function StoryTimelineSection({ workspace, group, selectedEventId, onSelectEvent, onSelectWorldEvent }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly group: StoryTimelineGroup
+  readonly selectedEventId: string | undefined
+  readonly onSelectEvent: (id: string) => void
+  readonly onSelectWorldEvent: (id: string) => void
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null)
+  const containsSelection = group.events.some(event => event.id === selectedEventId)
+  useEffect(() => {
+    if (containsSelection && detailsRef.current !== null) detailsRef.current.open = true
+  }, [containsSelection])
+  const turnRange = group.firstTurn === group.lastTurn
+    ? `第 ${String(group.firstTurn)} 回合`
+    : `第 ${String(group.firstTurn)}–${String(group.lastTurn)} 回合`
+  return <details className="story-timeline-group" ref={detailsRef}>
+    <summary><span className="story-timeline-group-mark">{group.node?.kind === 'arc' ? '篇' : group.node === undefined ? '待' : '景'}</span>
+      <span className="story-timeline-group-copy"><strong>{group.title}</strong><small>{group.summary}</small></span>
+      <span className="story-timeline-group-meta"><b>{group.events.length} 件</b><small>{turnRange}</small></span>
+    </summary>
+    <div className="story-timeline-group-events">{group.events.map(event => <StoryTimelineEventCard workspace={workspace} event={event}
+      selected={event.id === selectedEventId} key={event.id} onSelect={() => { onSelectEvent(event.id) }}
+      onSelectWorldEvent={onSelectWorldEvent} />)}</div>
+  </details>
 }
 
 function SourceInspector({ source, update, onDelete }: {
@@ -2079,6 +2132,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       clearPerspective={() => { setPerspectiveId(undefined) }} />
   } else if (view === 'timeline') {
     const events = [...workspace.events].sort((left, right) => left.turn - right.turn)
+    const groups = groupStoryTimeline(workspace)
     const representedWorldSequences = new Set(events.flatMap(event => event.worldEventSequences ?? []))
     const pendingWorldEvents = (workspace.world?.events ?? []).filter(event => !representedWorldSequences.has(event.sequence))
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>事件时间线</h1><p>按正文回合整理已经发生的情节，并保留可追溯的规则来源。</p></div></div>
@@ -2089,26 +2143,11 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
             onClick={() => { setSelection({ kind: 'world-event', id: worldEvent.id }) }}>
             <span>#{worldEvent.sequence}</span><div><strong>{worldEvent.title}</strong><small>{worldEvent.summary}</small></div>
           </button>)}</div></section>}
-        {events.map(event => {
-        const batch = storySuggestionBatch(workspace, event.id)
-        const pending = batch.nodeIds.length + batch.edgeIds.length
-        const worldEvents = (event.worldEventSequences ?? []).flatMap(sequence => {
-          const worldEvent = workspace.world?.events.find(candidate => candidate.sequence === sequence)
-          return worldEvent === undefined ? [] : [worldEvent]
-        })
-        return <article className="story-studio-card" data-selected={selection?.kind === 'event' && selection.id === event.id}
-          key={event.id} onClick={() => { setSelection({ kind: 'event', id: event.id }) }}>
-          <h3>第 {event.turn} 回合 · {event.title}</h3><p>{event.summary}</p>
-          {worldEvents.length > 0 && <div className="story-timeline-world-links"><span>规则来源</span>{worldEvents.map(worldEvent => <button type="button" key={worldEvent.id}
-            onClick={click => { click.stopPropagation(); setSelection({ kind: 'world-event', id: worldEvent.id }) }}>
-            <b>#{worldEvent.sequence}</b>{worldEvent.title}
-          </button>)}</div>}
-          <div className="story-studio-card-meta"><span>{event.participantIds.map(id => workspace.characters.find(character => character.id === id)?.name).filter(Boolean).join(' · ') || '未标注参与人物'}</span>
-            <span>{workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id).length} 条人物观察</span>
-            {pending > 0 && <span>{pending} 项候选变更</span>}
-            {event.nodeId !== undefined && <span>关联：{workspace.graph.nodes.find(node => node.id === event.nodeId)?.title ?? '剧情节点'}</span>}</div>
-        </article>
-      })}{events.length === 0 && pendingWorldEvents.length === 0 && <div className="story-studio-empty"><span>人物或世界产生事件后，会在这里组成可追溯的时间线。</span></div>}</div>
+        {groups.map(group => <StoryTimelineSection workspace={workspace} group={group} key={group.key}
+          selectedEventId={selection?.kind === 'event' ? selection.id : undefined}
+          onSelectEvent={id => { setSelection({ kind: 'event', id }) }}
+          onSelectWorldEvent={id => { setSelection({ kind: 'world-event', id }) }} />)}
+        {events.length === 0 && pendingWorldEvents.length === 0 && <div className="story-studio-empty"><span>人物或世界产生事件后，会在这里组成可追溯的时间线。</span></div>}</div>
     </div>
   } else if (view === 'characters') {
     main = <CharacterWorkspaceView workspace={workspace} character={activeCharacter} actorResources={actorResources} busy={saving} dirty={dirty} update={update}
