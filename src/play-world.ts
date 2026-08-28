@@ -1,6 +1,16 @@
 /** Registry and lifecycle boundary for executable play-space worlds. */
 
-import type { StoryCharacter } from './story-workspace-protocol.ts'
+import type {
+  StoryAudience,
+  StoryCharacter,
+  StoryEdgeKind,
+  StoryForeshadowStatus,
+  StoryKnowledgePolicy,
+  StoryNodeKind,
+  StoryNodePosition,
+  StoryNodeStatus,
+  StoryOutputKind,
+} from './story-workspace-protocol.ts'
 import { createFlyingChessWorldModule } from './flying-chess-world.ts'
 import type {
   PlayWorldModuleDescriptor,
@@ -29,11 +39,57 @@ export interface PlayWorldCharacterTurn {
   readonly actions: readonly PlayWorldCharacterAction[]
 }
 
+/** One module-local canonical node created only when a workspace has no authored graph. */
+export interface PlayWorldWorkspaceNodeTemplate {
+  readonly key: string
+  readonly kind: StoryNodeKind
+  readonly parentKey?: string
+  readonly title: string
+  readonly summary: string
+  readonly status: StoryNodeStatus
+  readonly audience: StoryAudience
+  readonly position: StoryNodePosition
+  readonly content: string
+  readonly participantIds: readonly string[]
+  readonly knowledge: StoryKnowledgePolicy
+}
+
+/** One module-local canonical relationship created with a fresh world scaffold. */
+export interface PlayWorldWorkspaceEdgeTemplate {
+  readonly key: string
+  readonly kind: StoryEdgeKind
+  readonly sourceKey: string
+  readonly targetKey: string
+  readonly label: string
+  readonly audience: StoryAudience
+  readonly foreshadowStatus?: StoryForeshadowStatus
+}
+
+/** One ordered output card recommended by a world for an otherwise empty layout. */
+export interface PlayWorldWorkspaceOutputTemplate {
+  readonly key: string
+  readonly name: string
+  readonly kind: StoryOutputKind
+  readonly enabled: boolean
+  readonly characterId?: string
+  readonly instructions: string
+}
+
+/** Optional authoring defaults that never replace existing story objects. */
+export interface PlayWorldWorkspaceScaffold {
+  readonly activeNodeKey?: string
+  readonly nodes: readonly PlayWorldWorkspaceNodeTemplate[]
+  readonly edges: readonly PlayWorldWorkspaceEdgeTemplate[]
+  readonly outputs: readonly PlayWorldWorkspaceOutputTemplate[]
+}
+
 /** Host implementation of one typed, deterministic world transition system. */
 export interface PlayWorldModule {
   readonly descriptor: PlayWorldModuleDescriptor
   /** Create one fresh authoritative snapshot. */
   create(context: PlayWorldContext): PlayWorldSnapshot
+  /** Recommend a story scene and output layout for an otherwise empty workspace. */
+  createWorkspaceScaffold?(context: PlayWorldContext): PlayWorldWorkspaceScaffold
   /** Parse durable state owned by this module. */
   normalize(value: unknown, context: PlayWorldContext): PlayWorldSnapshot
   /** Apply one validated action and return the complete next snapshot. */

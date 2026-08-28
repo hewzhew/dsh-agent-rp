@@ -15,6 +15,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import {
   createDefaultPlayWorldRegistry,
   type PlayWorldRegistry,
+  type PlayWorldWorkspaceScaffold,
 } from './play-world.ts'
 import type {
   PlayWorldActionRequest,
@@ -1155,7 +1156,16 @@ function renderStoryCitation(workspace: StoryWorkspaceSnapshot, citation: StoryC
 
 /** Compile canonical story objects and relationships for the director. */
 export function storyDirectorMap(workspace: StoryWorkspaceSnapshot): string {
-  const nodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
+  const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
+  const canonicalNodeIds = new Set(canonicalNodes.map(node => node.id))
+  const edges = workspace.graph.edges.filter(edge => edge.lifecycle === 'canonical'
+    && canonicalNodeIds.has(edge.source) && canonicalNodeIds.has(edge.target))
+  const relatedNodeIds = new Set(edges.flatMap(edge => [edge.source, edge.target]))
+  const citedNodeIds = new Set(workspace.citations.flatMap(citation => citation.target?.kind === 'node'
+    ? [citation.target.nodeId]
+    : []))
+  const nodes = canonicalNodes.filter(node => node.content.trim() !== '' || node.kind === 'secret'
+    || relatedNodeIds.has(node.id) || citedNodeIds.has(node.id))
   const nodeIds = new Set(nodes.map(node => node.id))
   const nodeText = nodes.map(node => {
     const citations = workspace.citations.filter(citation => citation.target?.kind === 'node' && citation.target.nodeId === node.id)
@@ -1165,8 +1175,8 @@ export function storyDirectorMap(workspace: StoryWorkspaceSnapshot): string {
       citations.length === 0 ? '' : `资料依据：\n${citations.map(citation => renderStoryCitation(workspace, citation)).join('\n')}`,
     ].filter(Boolean).join('\n')
   }).join('\n\n')
-  const edgeText = workspace.graph.edges
-    .filter(edge => edge.lifecycle === 'canonical' && nodeIds.has(edge.source) && nodeIds.has(edge.target))
+  const edgeText = edges
+    .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
     .map(edge => {
       const source = nodes.find(node => node.id === edge.source)?.title ?? edge.source
       const target = nodes.find(node => node.id === edge.target)?.title ?? edge.target
@@ -1188,6 +1198,65 @@ export function storyOpenForeshadowing(workspace: StoryWorkspaceSnapshot): strin
       && edge.foreshadowStatus !== 'resolved' && edge.foreshadowStatus !== 'dropped')
     .map(edge => `- ${nodeById.get(edge.source)?.title ?? edge.source} → ${nodeById.get(edge.target)?.title ?? edge.target} (${edge.foreshadowStatus})`)
   return [...secrets, ...edges].join('\n')
+}
+
+function materializePlayWorldWorkspaceScaffold(
+  scaffold: PlayWorldWorkspaceScaffold,
+): Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs'> {
+  const nodeKeys = scaffold.nodes.map(node => requiredLabel(node.key, '世界场景模板 key'))
+  assertUnique(nodeKeys, '世界场景模板')
+  const nodeIdByKey = new Map(nodeKeys.map(key => [key, createStoryNodeId()]))
+  const resolveNodeId = (key: string, subject: string): string => {
+    const nodeId = nodeIdByKey.get(requiredLabel(key, subject))
+    if (nodeId === undefined) throw new Error(`${subject}引用了未知世界场景模板`)
+    return nodeId
+  }
+  const nodes: StoryNode[] = scaffold.nodes.map((node, index) => ({
+    id: nodeIdByKey.get(nodeKeys[index]!)!,
+    kind: node.kind,
+    ...(node.parentKey === undefined ? {} : { parentId: resolveNodeId(node.parentKey, '世界场景模板父级') }),
+    title: node.title,
+    summary: node.summary,
+    status: node.status,
+    lifecycle: 'canonical',
+    audience: node.audience,
+    position: node.position,
+    content: node.content,
+    participantIds: node.participantIds,
+    knowledge: node.knowledge,
+  }))
+  const edgeKeys = scaffold.edges.map(edge => requiredLabel(edge.key, '世界关系模板 key'))
+  assertUnique(edgeKeys, '世界关系模板')
+  const edges: StoryEdge[] = scaffold.edges.map(edge => ({
+    id: createStoryEdgeId(),
+    kind: edge.kind,
+    source: resolveNodeId(edge.sourceKey, '世界关系模板起点'),
+    target: resolveNodeId(edge.targetKey, '世界关系模板终点'),
+    label: edge.label,
+    lifecycle: 'canonical',
+    audience: edge.audience,
+    ...(edge.foreshadowStatus === undefined ? {} : { foreshadowStatus: edge.foreshadowStatus }),
+  }))
+  const outputKeys = scaffold.outputs.map(output => requiredLabel(output.key, '世界输出模板 key'))
+  assertUnique(outputKeys, '世界输出模板')
+  const outputs: StoryOutput[] = scaffold.outputs.map(output => ({
+    id: createStoryOutputId(),
+    name: output.name,
+    kind: output.kind,
+    enabled: output.enabled,
+    ...(output.characterId === undefined ? {} : { characterId: output.characterId }),
+    instructions: output.instructions,
+  }))
+  return {
+    graph: {
+      ...(scaffold.activeNodeKey === undefined
+        ? {}
+        : { activeNodeId: resolveNodeId(scaffold.activeNodeKey, '世界活动场景模板') }),
+      nodes,
+      edges,
+    },
+    outputs,
+  }
 }
 
 /** Local workspace store whose accepted ids cannot escape its configured root. */
@@ -1290,8 +1359,17 @@ export class StoryWorkspaceStore {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
     if (request.format !== 0 || typeof request.moduleId !== 'string') throw new Error('游玩世界安装请求无效')
-    const world = this.worlds.get(request.moduleId).create({ characters: current.characters })
-    return this.commitWorld(current, world, [])
+    const module = this.worlds.get(request.moduleId)
+    const context = { characters: current.characters }
+    const world = module.create(context)
+    const scaffold = current.graph.nodes.length === 0 || current.outputs.length === 0
+      ? module.createWorkspaceScaffold?.(context)
+      : undefined
+    const materialized = scaffold === undefined ? undefined : materializePlayWorldWorkspaceScaffold(scaffold)
+    return this.commitWorld(current, world, [], materialized === undefined ? {} : {
+      ...(current.graph.nodes.length === 0 ? { graph: materialized.graph } : {}),
+      ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
+    })
   }
 
   /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */
@@ -1658,9 +1736,11 @@ export class StoryWorkspaceStore {
     current: StoryWorkspaceSnapshot,
     world: PlayWorldSnapshot,
     worldActionReceipts = current.worldActionReceipts ?? [],
+    workspacePatch: Partial<Pick<StoryWorkspaceSnapshot, 'graph' | 'outputs'>> = {},
   ): StoryWorkspaceSnapshot {
     const snapshot = normalizeWorkspace({
       ...current,
+      ...workspacePatch,
       revision: current.revision + 1,
       updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       world,

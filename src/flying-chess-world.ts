@@ -231,6 +231,50 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
       minCharacters: 2,
       maxCharacters: 4,
     },
+    createWorkspaceScaffold(context) {
+      const players = requirePlayers(context)
+      const names = characterMap(context)
+      return {
+        activeNodeKey: 'match',
+        nodes: [{
+          key: 'match',
+          kind: 'beat',
+          title: '幻想乡飞行棋对局',
+          summary: `${players.map(id => names.get(id) ?? id).join('、')} 正在进行一局飞行棋。`,
+          status: 'active',
+          audience: 'public',
+          position: { x: 0, y: 0 },
+          content: '',
+          participantIds: players,
+          knowledge: { mode: 'participants', characterIds: [] },
+        }],
+        edges: [],
+        outputs: [
+          {
+            key: 'prose',
+            name: '正文',
+            kind: 'prose',
+            enabled: true,
+            instructions: '以权威世界叙事为骨架，只补充人物确有信息增量的反应与获准对白。',
+          },
+          ...context.characters.map(character => ({
+            key: `character:${character.id}`,
+            name: `${character.name}视角`,
+            kind: 'character' as const,
+            enabled: true,
+            characterId: character.id,
+            instructions: '只保留会影响后续回合的私有知识、持续意图或已经作出的决定。',
+          })),
+          {
+            key: 'history',
+            name: '棋局记录',
+            kind: 'history',
+            enabled: true,
+            instructions: '按回合保留权威世界结算，便于后续检索。',
+          },
+        ],
+      }
+    },
     create(context) {
       const players = requirePlayers(context)
       const pieces = players.flatMap(ownerId => Array.from({ length: PIECES_PER_PLAYER }, (_, index): FlyingChessPiece => ({

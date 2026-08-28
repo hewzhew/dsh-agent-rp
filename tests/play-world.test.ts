@@ -267,6 +267,73 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(restarted.graph.nodes.find(node => node.title === '已接受的剧情方向')?.sourceEventId, undefined)
 })
 
+test('scaffolds fresh world authoring surfaces without replacing authored work', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-scaffold-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const created = store.create({ format: 2, name: '空白飞行棋' })
+  const withCharacters = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+  })
+  const scaffolded = store.installWorld(withCharacters.id, {
+    format: 0,
+    revision: withCharacters.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  assert.equal(scaffolded.graph.nodes.length, 1)
+  assert.equal(scaffolded.graph.nodes[0]?.title, '幻想乡飞行棋对局')
+  assert.equal(scaffolded.graph.activeNodeId, scaffolded.graph.nodes[0]?.id)
+  assert.deepEqual(scaffolded.graph.nodes[0]?.participantIds, [reimuId, marisaId])
+  assert.deepEqual(scaffolded.outputs.map(output => [output.name, output.kind, output.characterId]), [
+    ['正文', 'prose', undefined],
+    ['博丽灵梦视角', 'character', reimuId],
+    ['雾雨魔理沙视角', 'character', marisaId],
+    ['棋局记录', 'history', undefined],
+  ])
+
+  const authored = store.create({ format: 2, name: '已有创作' })
+  const authoredNodeId = createStoryNodeId()
+  const authoredOutputId = createStoryOutputId()
+  const configured = store.save({
+    ...editable(authored),
+    graph: {
+      activeNodeId: authoredNodeId,
+      nodes: [{
+        id: authoredNodeId,
+        kind: 'beat',
+        title: '用户场景',
+        summary: '用户已经写好的场景。',
+        status: 'active',
+        lifecycle: 'canonical',
+        audience: 'public',
+        position: { x: 80, y: 120 },
+        content: '不应被世界模板覆盖。',
+        participantIds: [reimuId, marisaId],
+        knowledge: { mode: 'participants', characterIds: [] },
+      }],
+      edges: [],
+    },
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    outputs: [{
+      id: authoredOutputId,
+      name: '自定义正文',
+      kind: 'prose',
+      enabled: true,
+      instructions: '保留玩家自己的布局。',
+    }],
+  })
+  const preserved = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    moduleId: FLYING_CHESS_WORLD_MODULE_ID,
+  })
+  assert.deepEqual(preserved.graph, configured.graph)
+  assert.deepEqual(preserved.outputs, configured.outputs)
+})
+
 test('keeps executable world state out of whole-workspace edits', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-save-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
