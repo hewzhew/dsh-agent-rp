@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ConversationStartMatch } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ConversationMatch, ConversationStartMatch } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
@@ -35,6 +35,42 @@ function projectLaunch(
   return storyWorkspaceLaunchDefinition.buildViewNode?.({ ...initial, state }) as ChatConversationViewNode | null
 }
 
+function projectSelections(
+  values: readonly Parameters<typeof storyWorkspaceLaunchDefinition.match>[0][],
+): ChatConversationViewNode | null {
+  const [first, ...rest] = values
+  if (first === undefined) throw new Error('launch selection required')
+  const startResult = storyWorkspaceLaunchDefinition.match(first)
+  if (startResult?.role !== 'start') throw new Error('first selection must start the launch card')
+  const start: ConversationStartMatch = {
+    event: first as SessionEvent,
+    role: 'start',
+    location: { kind: 'session' },
+  }
+  const context = {
+    key: `${storyWorkspaceLaunchDefinition.kind}:${startResult.id}`,
+    kind: storyWorkspaceLaunchDefinition.kind,
+    id: startResult.id,
+    matches: [start] as ConversationMatch[],
+    start,
+    state: undefined,
+    current: new Map(),
+  }
+  let state = storyWorkspaceLaunchDefinition.start(context, start, { previous: () => undefined })
+  for (const value of rest) {
+    const result = storyWorkspaceLaunchDefinition.match(value)
+    if (result?.role !== 'update') throw new Error('later selection must update the launch card')
+    const match: ConversationMatch = {
+      event: value as SessionEvent,
+      role: 'update',
+      location: { kind: 'session' },
+    }
+    context.matches.push(match)
+    state = storyWorkspaceLaunchDefinition.update({ ...context, state }, match)
+  }
+  return storyWorkspaceLaunchDefinition.buildViewNode?.({ ...context, state }) as ChatConversationViewNode | null
+}
+
 test('projects a launch selection into one visible session-level play-space card', () => {
   const projected = projectLaunch(event(0, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'workspace / one', source: 'launch',
@@ -47,11 +83,36 @@ test('projects a launch selection into one visible session-level play-space card
   assert.equal(storyWorkspaceLaunchUrl('workspace / one'), '/api/agent-rp/story-workspaces/workspace%20%2F%20one')
 })
 
-test('does not turn interactive changes or malformed launch records into launch cards', () => {
+test('classifies interactive changes as updates and rejects malformed launch records', () => {
+  assert.deepEqual(storyWorkspaceLaunchDefinition.match(event(2, 'agent-rp/story-workspace-selection', {
+    format: 0, workspaceId: 'ordinary', sourceEventSeq: 1,
+  })), { id: 'launch', role: 'update' })
   assert.equal(projectLaunch(event(0, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'ordinary', sourceEventSeq: 0,
   })), null)
   assert.equal(projectLaunch(event(1, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'late', source: 'launch',
   })), null)
+})
+
+test('keeps the launch card on the Session current play space', () => {
+  const launch = event(0, 'agent-rp/story-workspace-selection', {
+    format: 0, workspaceId: 'workspace-one', source: 'launch',
+  })
+  const switched = event(4, 'agent-rp/story-workspace-selection', {
+    format: 0, workspaceId: 'workspace-two', sourceEventSeq: 3,
+  })
+  assert.deepEqual(projectSelections([launch, switched])?.data, { workspaceId: 'workspace-two' })
+
+  const cleared = event(6, 'agent-rp/story-workspace-selection', {
+    format: 0, sourceEventSeq: 5,
+  })
+  assert.equal(projectSelections([launch, switched, cleared]), null)
+
+  const reconnected = event(8, 'agent-rp/story-workspace-selection', {
+    format: 0, workspaceId: 'workspace-three', sourceEventSeq: 7,
+  })
+  assert.deepEqual(projectSelections([launch, switched, cleared, reconnected])?.data, {
+    workspaceId: 'workspace-three',
+  })
 })
