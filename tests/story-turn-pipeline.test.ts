@@ -234,6 +234,8 @@ function workspace(): StoryWorkspaceSnapshot {
             '阿梨：“棚に戻しておく。”',
             '柏舟：“庭の花はまだ咲いていない。”',
             '阿梨：“季節が来るまで待つ。”',
+            `柏舟：“${Array.from({ length: 80 }, (_, index) => `占位词${String(index + 1)}`).join(' ')}”`,
+            '阿梨：“这些背景词我都听见了。”',
             '柏舟：“刻印はもう滲んで見えない。”',
             '阿梨：“見えてから結論を出せばいい。”',
             '参考译文：',
@@ -255,6 +257,8 @@ function workspace(): StoryWorkspaceSnapshot {
             '阿梨：“把它放回书架。”',
             '柏舟：“院里的花还没有开。”',
             '阿梨：“等到花期再说。”',
+            `柏舟：“${Array.from({ length: 80 }, (_, index) => `占位词${String(index + 1)}`).join(' ')}”`,
+            '阿梨：“这些背景词我都听见了。”',
             '柏舟：“刻痕已经糊得看不清了。”',
             '阿梨：“看清以后再作结论。”',
           ].join('\n'),
@@ -645,6 +649,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceBody, /\[对话上下文\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
   assert.match(voiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.match(voiceBody, /\[seed:([^\]]+)\]\[目标人物\]\[原文\] 阿梨｜見えてから結論を出せばいい。[\s\S]*\[seed:\1\]\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
+  assert.match(voiceBody, /reply_pair target=/u)
   assert.doesNotMatch(voiceBody, /\[对话上下文\]\[原文\] 柏舟｜船はもう遠くへ行った。/u)
   assert.match(voiceBody, /<voice_notes>[\s\S]*阿梨常用短反问/u)
   assert.equal(voiceBody.match(/阿梨｜没看清就别急着下结论。/gu)?.length, 1)
@@ -662,6 +667,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:2/u)
   assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:52/u)
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
+  assert.doesNotMatch(firstSpeechPlan, /这些背景词我都听见了/u)
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
   assert.doesNotMatch(voiceBody, /柏舟藏起了车票/u)
   assert.doesNotMatch(secondVoiceBody, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
@@ -678,6 +684,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceSystem, /seedLineIds/u)
   assert.match(voiceSystem, /\[目标人物\] seed 才能用于候选的声音映射/u)
   assert.match(voiceSystem, /\[对话上下文\] seed.*不能引用为自己的声音/u)
+  assert.match(voiceSystem, /reply_pair.*原作中的直接接话关系/u)
   assert.match(voiceSystem, /不是对白要逐项覆盖的提纲/u)
   assert.match(voiceSystem, /发言焦点.*不是一段待改写的完整论证/u)
   assert.match(voiceSystem, /leftImplicit.*刻意没有说出口/u)
