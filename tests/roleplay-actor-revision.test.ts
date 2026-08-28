@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { CallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
@@ -133,7 +133,7 @@ function appendCall(session: Session, callId: string, name: string, args: unknow
   return session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name,
     arguments: JSON.stringify(args),
   }).seq
@@ -149,7 +149,7 @@ function appendResult(
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: result.content,
       isError: result.isError,
     }),
@@ -165,7 +165,7 @@ test('reads the exact editable actor revision without mutating the provider', as
   appendCall(session, callId, ROLEPLAY_ACTOR_INSPECTION_TOOL, {})
 
   const result = await ctx.tools.execute({
-    callId: CallId(callId), name: ROLEPLAY_ACTOR_INSPECTION_TOOL,
+    callId: ToolCallId(callId), name: ROLEPLAY_ACTOR_INSPECTION_TOOL,
     arguments: {}, agent, signal: new AbortController().signal,
   })
 
@@ -233,7 +233,7 @@ test('native rejection leaves the actor untouched and replays as rejected', asyn
   const callSeq = appendCall(session, callId, ROLEPLAY_ACTOR_REVISION_TOOL, args)
 
   const result = await ctx.tools.execute({
-    callId: CallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
+    callId: ToolCallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
     arguments: args, agent, signal: new AbortController().signal,
   })
   appendResult(session, callId, callSeq, result)
@@ -260,7 +260,7 @@ test('one-shot approval applies the exact diff and is reconstructable from the S
   const callSeq = appendCall(session, callId, ROLEPLAY_ACTOR_REVISION_TOOL, args)
 
   const result = await ctx.tools.execute({
-    callId: CallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
+    callId: ToolCallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
     arguments: args, agent, signal: new AbortController().signal,
   })
   appendResult(session, callId, callSeq, result)
@@ -304,7 +304,7 @@ test('a concurrent local revision after approval was shown settles as conflict w
   const callSeq = appendCall(session, callId, ROLEPLAY_ACTOR_REVISION_TOOL, args)
 
   const result = await ctx.tools.execute({
-    callId: CallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
+    callId: ToolCallId(callId), name: ROLEPLAY_ACTOR_REVISION_TOOL,
     arguments: args, agent, signal: new AbortController().signal,
   })
   appendResult(session, callId, callSeq, result)

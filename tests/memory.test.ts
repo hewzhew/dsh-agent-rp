@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandId } from '@deepseek-ai/dsh-commands'
-import { CallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { validateJsonSchemaValue, valueSchemaSpecToJsonSchema } from '@deepseek-ai/dsh-tools'
 import { MEMORY_VALUE_SCHEMA } from '../src/index.ts'
@@ -34,7 +34,7 @@ function appendRememberCall(session: Session, callId: string, args: object): num
   return session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'remember',
     arguments: JSON.stringify(args),
   }).seq
@@ -50,7 +50,7 @@ function appendRememberResult(
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: JSON.stringify(record) }],
       isError: false,
     }),
@@ -311,7 +311,7 @@ test('rejects a source that is not the direct remember tool call', () => {
   session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId('other-1'),
+    callId: ToolCallId('other-1'),
     name: 'other',
     arguments: '{}',
   })

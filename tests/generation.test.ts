@@ -23,9 +23,6 @@ import { encodeWorldInfoConfiguration, readWorldInfoConfiguration } from '../src
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
 import { appendMvuState, readCurrentSessionMvuState } from '../src/mvu.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 function appendAssistant(session: Session, turn: number, text: string, surfaceOp: 'append' | { op: 'replace'; start: number; end: number } = 'append') {
   const sourceEventSeqs = surfaceOp === 'append' ? [] : [...session.surface.nodes]

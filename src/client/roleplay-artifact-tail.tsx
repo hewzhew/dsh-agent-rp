@@ -2,10 +2,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type {
-  ConversationNodeDefinition,
-} from '@deepseek-ai/dsh-client-runtime/client'
-import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ConversationNodeDefinition } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { useEffect, useState } from 'react'
 import {
   normalizeRoleplayTurnPresentation,
@@ -18,7 +17,7 @@ import type {
 /** DSH requires a Location data key to equal its owning Conversation Definition kind. */
 const ROLEPLAY_PRESENTATION_KIND = 'agent-rp/presentation'
 
-declare module '@deepseek-ai/dsh-client-runtime/client' {
+declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
   interface ConversationTurnDataMap {
     /** Latest replayable RP presentation snapshot for this exact Turn. */
     'agent-rp/presentation': RoleplayTurnPresentation
@@ -142,7 +141,7 @@ function RoleplayArtifactTail({ owner }: { readonly owner: ArtifactTailOwner }) 
 /** Register replay projection and the independent turnTail surface. */
 export function installRoleplayArtifactTail(ctx: Context): void {
   ctx.effect(
-    () => ctx.conversationEvents.register(roleplayPresentationDefinition),
+    () => ctx.uiConversation.events.register(roleplayPresentationDefinition),
     'agent-rp: project per-turn presentation artifacts',
   )
   ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({

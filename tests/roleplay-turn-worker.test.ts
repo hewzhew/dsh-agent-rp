@@ -8,9 +8,6 @@ import { executeGenerationCommand, readGenerationGroups } from '../src/generatio
 import { createRoleplayNarrativeReviewWorker } from '../src/roleplay-narrative-review-worker.ts'
 import { RoleplayTurnWorkerRegistry, type RoleplayTurnWorkerInput } from '../src/roleplay-turn-worker.ts'
 import type { BoundRoleplayTurnPlan } from '../src/roleplay-turn-settlement.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 function input(session: Session, step = 1): RoleplayTurnWorkerInput {
   return {
@@ -44,7 +41,7 @@ test('runs review before settlement and isolates one Worker failure', async () =
     ['state', 'applied'],
   ])
   assert.equal(session.events.every(event => event.type !== 'agent-rp/turn-worker-result'
-    || event.ignorable === true), true)
+    || !('ignorable' in event)), true)
   assert.deepEqual(await registry.run(input(session)), [])
 })
 

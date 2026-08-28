@@ -3,7 +3,7 @@
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { RoleplayResponseRepairPlan, RoleplayTurnPlan } from './roleplay-turn-plan.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Exact credential-free provider request dispatched by an act-phase program. */
 export interface RoleplayActModelDispatch {
@@ -109,7 +109,7 @@ export function roleplayActModelDispatch(options: GenerateOptions): RoleplayActM
 export function appendRoleplayActModelRequest(
   session: Session,
   record: RoleplayActModelRequestRecord,
-): SessionEvent<'agent-rp/act-model-request'> & { readonly ignorable: true } {
+): SessionEvent<'agent-rp/act-model-request'> {
   return appendAgentRpSessionEvent(session, 'agent-rp/act-model-request', record)
 }
 
@@ -117,7 +117,7 @@ export function appendRoleplayActModelRequest(
 export function appendRoleplayActModelResult(
   session: Session,
   record: RoleplayActModelResultRecord,
-): SessionEvent<'agent-rp/act-model-result'> & { readonly ignorable: true } {
+): SessionEvent<'agent-rp/act-model-result'> {
   return appendAgentRpSessionEvent(session, 'agent-rp/act-model-result', record)
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -26,9 +26,6 @@ import {
 import { prepareRoleplayTurn } from '../src/roleplay-turn-plan.ts'
 import { resolveSessionRoleplayRuntime } from '../src/session-roleplay-runtime.ts'
 import { appendSessionRoleplayTurnPlan } from '../src/session-roleplay-turn-plan.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '统一回合记录角色' })
 
@@ -63,7 +60,7 @@ function completeTwoStepTurn() {
   session.append('step/start', { turn, step: 1 })
   session.append('user/message', pending, { surfaceOp: 'append' })
   const firstPlanEvent = appendSessionRoleplayTurnPlan(session, turn, 1, firstPlan)
-  const callId = CallId('turn-record-probe')
+  const callId = ToolCallId('turn-record-probe')
   appendModelMessage(session, turn, 1, [{
     type: 'tool-call', id: callId, name: 'inspect', arguments: '{"area":"room"}',
   }])

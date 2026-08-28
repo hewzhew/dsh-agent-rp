@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { prepareAgentRpMemory, type AgentRpMemoryRecord } from '../src/memory.ts'
 import { preparedMvuResponseRepair } from '../src/mvu-stream.ts'
@@ -12,9 +12,6 @@ import {
   compileRoleplayTurnSettlement,
   readRoleplayTurnSettlements,
 } from '../src/roleplay-turn-settlement.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 function runtime(
   state: RoleplayRuntimeSnapshot['state'] = [],
@@ -89,7 +86,7 @@ function appendRemember(
       source: { provider: 'fixture', model: 'fixture' },
       content: [{
         type: 'tool-call',
-        id: CallId(callId),
+        id: ToolCallId(callId),
         name: 'remember',
         arguments: argumentsText,
       }],
@@ -98,7 +95,7 @@ function appendRemember(
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'remember',
     arguments: argumentsText,
   })
@@ -107,7 +104,7 @@ function appendRemember(
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: JSON.stringify(record) }],
       isError: false,
     }),
@@ -201,7 +198,6 @@ test('compares native memory history across the exact first-plan boundary', () =
       sourceSessionId: 'older-session',
       memories: [{ kind: 'fact', subject: '住处', text: '用户住在杭州' }],
     },
-    ignorable: true,
   }]
   const session = Session.create(SessionId('settlement-memory'), seed)
   session.append('turn/start', { turn: 1 })
@@ -383,7 +379,7 @@ test('rejects a tool result whose Session citation does not point to its call', 
   const session = Session.create(SessionId('settlement-invalid-tool-citation'))
   session.append('turn/start', { turn: 1 })
   const prepared = turnPlan({ sessionId: String(session.id), sessionSeq: session.seq })
-  const callId = CallId('invalid-citation-call')
+  const callId = ToolCallId('invalid-citation-call')
   session.append('assistant/message', {
     turn: 1,
     step: 1,
@@ -424,7 +420,7 @@ test('correlates provider call ids within their step rather than across the whol
   const session = Session.create(SessionId('settlement-reused-call-id'))
   session.append('turn/start', { turn: 1 })
   const plans: { step: number; plan: RoleplayTurnPlan }[] = []
-  const callId = CallId('provider-reused-call-id')
+  const callId = ToolCallId('provider-reused-call-id')
   for (const step of [1, 2]) {
     plans.push({ step, plan: turnPlan({ sessionId: String(session.id), sessionSeq: session.seq }) })
     session.append('step/start', { turn: 1, step })

@@ -17,7 +17,7 @@ import {
   type RoleplayActModelFailureKind,
 } from './roleplay-act-model-log.ts'
 import type { RoleplayTurnWorker, RoleplayTurnWorkerOutcome } from './roleplay-turn-worker.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Exact lightweight request dispatched to the narrative review Worker. */
 export interface RoleplayNarrativeReviewRequestRecord {

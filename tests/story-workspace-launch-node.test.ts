@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ChatConversationViewNode, ConversationMatch } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationStartMatch } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   storyWorkspaceLaunchDefinition,
   storyWorkspaceLaunchUrl,
@@ -15,12 +17,11 @@ function projectLaunch(
 ): ChatConversationViewNode | null {
   const result = storyWorkspaceLaunchDefinition.match(value)
   if (result === null) return null
-  const match = {
-    event: value,
-    view: undefined,
-    role: result.role,
+  const match: ConversationStartMatch = {
+    event: value as SessionEvent,
+    role: 'start',
     location: { kind: 'session' },
-  } as ConversationMatch
+  }
   const initial = {
     key: `${storyWorkspaceLaunchDefinition.kind}:${result.id}`,
     kind: storyWorkspaceLaunchDefinition.kind,

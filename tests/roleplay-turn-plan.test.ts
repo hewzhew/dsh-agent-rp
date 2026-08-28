@@ -40,9 +40,6 @@ import {
   initializeTavernHelperState,
   tavernInjectedScanText,
 } from '../src/tavern-helper.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '岚' })
 
@@ -272,7 +269,6 @@ test('freezes exact durable memory reads and context into recall', () => {
       sourceSessionId: 'older-roleplay-session',
       memories: [{ kind: 'preference', subject: '饮品', text: '用户喝咖啡时不加糖' }],
     },
-    ignorable: true,
   }])
   const resolved = resolveSessionRoleplayRuntime({ session, deployment })
   const plan = prepareRoleplayTurn({ session, deployment, resolved })

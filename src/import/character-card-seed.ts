@@ -82,7 +82,6 @@ export function createCharacterCardSessionSeed(
         : { attachmentConsumer: 'dsh-agent-rp', attachments: [attachment] },
       meta,
     },
-    ignorable: true,
   }]
   if (persona !== undefined) {
     events.push({
@@ -90,7 +89,6 @@ export function createCharacterCardSessionSeed(
       seq: events.length,
       time,
       data: { format: 0, persona },
-      ignorable: true,
     })
   }
   if (renderedGreeting.trim() !== '') {

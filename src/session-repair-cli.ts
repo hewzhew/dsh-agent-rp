@@ -43,11 +43,11 @@ try {
   if (!apply) {
     console.log(`只读检查完成：${result.path}`)
     console.log(`会话 ID：${result.sessionId}`)
-    console.log(`需要修复的旧事件：${result.repairedEvents}`)
-    console.log(`已经安全的 Agent RP 事件：${result.alreadySafeEvents}`)
+    console.log(`带旧 ignorable 字段的事件：${result.repairedEvents}`)
+    console.log(`已经使用当前 envelope 的 Agent RP 事件：${result.alreadySafeEvents}`)
     if (result.repairedEvents > 0) console.log('请先完全关闭 DSH，再用同一条命令加 --apply 执行。')
   } else if (result.applied) {
-    console.log(`已修复 ${result.repairedEvents} 条旧事件。`)
+    console.log(`已从 ${result.repairedEvents} 条旧事件移除 ignorable 字段。`)
     console.log(`原文件备份：${result.backupPath}`)
   } else {
     console.log('该会话不需要修复，未写入任何文件。')

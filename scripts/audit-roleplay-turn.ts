@@ -8,7 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -17,8 +17,6 @@ import {
   Session,
   SessionId,
   type SessionEvent,
-  type SessionEventMap,
-  type SessionEventType,
 } from '@deepseek-ai/dsh-session'
 import { resolveConfig } from '../src/config.ts'
 import { EjsTemplateEngine } from '../src/ejs-template.ts'
@@ -169,43 +167,6 @@ export interface RoleplayTurnAuditResult {
   }
 }
 
-interface SessionInternals {
-  readonly log: SessionEvent[]
-  eventsSnapshot: readonly SessionEvent[] | undefined
-}
-
-interface IgnorableSessionPrototype {
-  appendIgnorable?<T extends SessionEventType>(
-    type: T,
-    data: SessionEventMap[T],
-  ): SessionEvent<T> & { readonly ignorable: true }
-}
-
-/** Published DSH before the plugin-event seam needs a detached audit-only equivalent. */
-function installDetachedIgnorableSessionEvents(): void {
-  const prototype = Session.prototype as Session['constructor']['prototype'] & IgnorableSessionPrototype
-  if (typeof prototype.appendIgnorable === 'function') return
-  Object.defineProperty(prototype, 'appendIgnorable', {
-    configurable: true,
-    value<T extends SessionEventType>(
-      this: Session,
-      type: T,
-      data: SessionEventMap[T],
-    ): SessionEvent<T> & { readonly ignorable: true } {
-      const append = this.append as unknown as (
-        eventType: SessionEventType,
-        eventData: SessionEventMap[SessionEventType],
-      ) => SessionEvent
-      const original = append.call(this, type, data)
-      const marked = Object.freeze({ ...original, ignorable: true as const }) as SessionEvent
-      const internals = this as unknown as SessionInternals
-      internals.log[original.seq] = marked
-      internals.eventsSnapshot = undefined
-      return marked as SessionEvent<T> & { readonly ignorable: true }
-    },
-  })
-}
-
 function counter(values: readonly string[]): Counter {
   const result: Record<string, number> = {}
   for (const value of values) result[value] = (result[value] ?? 0) + 1
@@ -309,7 +270,7 @@ async function appendSyntheticTurn(
     reason: 'initial',
     header: { config: { provider: 'agent-rp-audit', model: 'local-fixture', maxTokens: 4096 } },
   })
-  const callId = CallId('agent-rp-model-free-audit-call')
+  const callId = ToolCallId('agent-rp-model-free-audit-call')
   const reply = session.append('assistant/message', {
     turn,
     step: 1,
@@ -368,7 +329,6 @@ async function appendSyntheticTurn(
 
 /** Run one complete local turn and prove that its log can be reopened and continued. */
 export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<RoleplayTurnAuditResult> {
-  installDetachedIgnorableSessionEvents()
   const cardBytes = new Uint8Array(readFileSync(input.cardPath))
   const presetBytes = new Uint8Array(readFileSync(input.presetPath))
   const worldBytes = new Uint8Array(readFileSync(input.worldInfoPath))

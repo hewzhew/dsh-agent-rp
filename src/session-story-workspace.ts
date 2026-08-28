@@ -3,7 +3,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { appendAgentRpSessionEvent, supportsAgentRpSessionEvents } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 
 /** User-authored selection event applied before later story turns. */
@@ -90,7 +90,6 @@ export function createStoryWorkspaceSessionSeed(
         seq: 0,
         time,
         data: { format: 0, workspaceId: workspace.id, source: 'launch' },
-        ignorable: true,
       },
       { type: 'turn/start', seq: 1, time, data: { turn: 1 } },
       { type: 'turn/end', seq: 2, time, data: { turn: 1, reason: { kind: 'completed' } } },
@@ -107,9 +106,6 @@ export function executeStoryWorkspaceCommand(
     readonly rawInput: string
   },
 ): { readonly kind: 'success'; readonly sourceEventSeq: number } {
-  if (!supportsAgentRpSessionEvents(invocation.agent.session)) {
-    throw new Error('当前 DSH Host 缺少安全插件事件能力，无法启用故事工作区')
-  }
   const request = parseRequest(invocation.rawInput)
   if (request.workspaceId !== null) store.get(request.workspaceId)
   const source = invocation.agent.session.events.findLast(event => event.type === 'command/run'

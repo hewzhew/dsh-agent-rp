@@ -201,7 +201,6 @@ export function createSillyTavernChatSeed(
     seq: 0,
     time: Date.now(),
     data: metadata(chat, attachment),
-    ignorable: true,
   }]
   let turn = 0
   let fallbackTime = events[0]!.time

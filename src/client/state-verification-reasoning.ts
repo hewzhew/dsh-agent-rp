@@ -1,4 +1,8 @@
 import type {
+  ModelCatalog,
+  ModelSelectionProjection,
+} from '@deepseek-ai/dsh-api-session-controller/types'
+import type {
   RoleplayStateVerificationSettings,
   RoleplayWorkerModelSelection,
 } from '../workspace-settings.ts'
@@ -37,6 +41,18 @@ export interface AvailableModelCatalog {
       readonly reasoning?: ModelReasoningCapabilities
     }[]
   }[]
+}
+
+/** Combine the Host-generation catalog with one Session's durable next-request selection. */
+export function availableModelCatalog(
+  catalog: ModelCatalog,
+  selection: ModelSelectionProjection | undefined,
+): AvailableModelCatalog {
+  if (selection === undefined) throw new Error('当前会话缺少模型选择投影')
+  return {
+    current: selection.next ?? catalog.default,
+    groups: catalog.groups,
+  }
 }
 
 /** One persisted reasoning value and whether the exact model currently accepts it. */

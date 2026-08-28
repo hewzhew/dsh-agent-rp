@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import {
   installStExtensionHost,
   type StExtensionSessionBinding,
@@ -65,7 +65,9 @@ class FakeWindow {
 class FakeSessionSource {
   currentBinding: StExtensionSessionBinding | undefined = {
     sessionId: SessionId('session-a'),
-    projection: agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init()),
+    projection: agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init(
+      Session.create(SessionId('session-a')).header,
+    )),
   }
   readonly listeners = new Set<() => void>()
 

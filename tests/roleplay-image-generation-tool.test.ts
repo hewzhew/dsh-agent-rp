@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createScope, type Scope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -60,13 +60,13 @@ test('hides image generation after its first attempt until the next roleplay tur
   agent.session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId('image-first-attempt'),
+    callId: ToolCallId('image-first-attempt'),
     name: ROLEPLAY_IMAGE_GENERATION_TOOL,
     arguments: JSON.stringify({ prompt: '雨夜钟楼' }),
   })
   const failed = await ctx.tools.execute({
     agent,
-    callId: CallId('image-first-attempt'),
+    callId: ToolCallId('image-first-attempt'),
     name: ROLEPLAY_IMAGE_GENERATION_TOOL,
     arguments: { prompt: '雨夜钟楼' },
     signal: new AbortController().signal,

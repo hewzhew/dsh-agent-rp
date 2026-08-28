@@ -6,7 +6,7 @@ import {
   compileStExtensionGenerationRuntime,
   parseStExtensionHostMessage,
 } from '../src/client/st-extension-document.ts'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { InstalledStExtensionEntry } from '../src/client/st-extension-registry.ts'
 import { tavernPageSnapshot } from '../src/client/tavern-snapshot.ts'
 import { agentRpProjectionDefinition } from '../src/projection.ts'
@@ -27,7 +27,10 @@ function entry(
 
 test('builds one shared settings document and transports extension source without HTML termination', () => {
   const dangerous = 'globalThis.loaded = "</script><script>globalThis.injected = true</script>\u2028"'
-  const projection = agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init())
+  const projectionSession = Session.create(SessionId('settings-document'))
+  const projection = agentRpProjectionDefinition.wire.view(
+    agentRpProjectionDefinition.init(projectionSession.header),
+  )
   const source = compileStExtensionDocument({
     entries: [entry('extension.dangerous', [], dangerous)],
     nonce: 'nonce_1234567890_safe',
@@ -219,7 +222,9 @@ test('runs generation events and declared interceptors before publishing durable
     settings: {},
     snapshot: {
       ...tavernPageSnapshot(
-        agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init()),
+        agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init(
+          Session.create(SessionId('generation-document')).header,
+        )),
         SessionId('session-a'),
       ),
       installedExtensionPrompts: [{

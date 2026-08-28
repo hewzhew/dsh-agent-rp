@@ -8,7 +8,7 @@ import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -60,9 +60,6 @@ import {
   registerStExtensionGenerationCoordinator,
   StExtensionGenerationCoordinator,
 } from '../src/st-extension-generation.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '状态行动测试角色' })
 const MODEL_DEFAULT_STATE_VERIFICATION = { model: null, reasoningEffort: null } as const
@@ -181,7 +178,7 @@ function appendActionCall(
       source: { provider: 'fixture', model: 'fixture' },
       content: [{ type: 'text', text }, {
         type: 'tool-call',
-        id: CallId(callId),
+        id: ToolCallId(callId),
         name: ROLEPLAY_STATE_ACTION_TOOL,
         arguments: argumentsText,
       }],
@@ -190,7 +187,7 @@ function appendActionCall(
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: ROLEPLAY_STATE_ACTION_TOOL,
     arguments: argumentsText,
   })
@@ -214,7 +211,7 @@ async function executeAndAppend(
   sourceEventSeqs: readonly number[] = [callSeq],
 ) {
   const result = await ctx.tools.execute({
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: ROLEPLAY_STATE_ACTION_TOOL,
     arguments: args,
     agent,
@@ -226,7 +223,7 @@ async function executeAndAppend(
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: result.content,
       isError: false,
     }),

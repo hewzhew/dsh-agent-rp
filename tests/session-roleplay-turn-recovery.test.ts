@@ -41,9 +41,6 @@ import {
   TAVERN_HELPER_ROLEPLAY_MODULE_ID,
   TAVERN_HELPER_ROLEPLAY_STATE_ID,
 } from '../src/tavern-helper.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '恢复测试角色' })
 

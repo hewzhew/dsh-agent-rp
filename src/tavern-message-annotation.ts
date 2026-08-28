@@ -2,7 +2,7 @@
 
 import { snapshotJsonValue, type JsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { decodeGenerationCommandResult } from './generation-command-result.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import { tavernScriptIdentity, type TavernScriptScope } from './tavern-script-identity.ts'
 
 export type TavernMessageAnnotationValue = Readonly<Record<string, JsonValue>>

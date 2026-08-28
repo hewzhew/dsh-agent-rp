@@ -240,7 +240,7 @@ test('edits a character world composition across future launch, runtime, project
   assert.ok(runtime.lorebooks.every(lorebook => lorebook.source.source === 'character'))
   assert.deepEqual(runtime.mvu?.statData, { 角色: { 等级: 1 } })
 
-  let projectionState = agentRpProjectionDefinition.init()
+  let projectionState = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) projectionState = agentRpProjectionDefinition.apply(projectionState, event)
   const projection = agentRpProjectionDefinition.wire.view(projectionState)
   assert.equal(projection.worldInfo.books.length, 3)
@@ -255,7 +255,7 @@ test('edits a character world composition across future launch, runtime, project
     deployment: resolveConfig({ characterName: 'fallback' }),
   })
   assert.equal(oldRuntime.lorebooks.length, 1)
-  let oldProjectionState = agentRpProjectionDefinition.init()
+  let oldProjectionState = agentRpProjectionDefinition.init(oldSession.header)
   for (const event of oldSession.events) {
     oldProjectionState = agentRpProjectionDefinition.apply(oldProjectionState, event)
   }

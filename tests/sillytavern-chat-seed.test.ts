@@ -42,7 +42,7 @@ test('retains swipes and the original attachment in skippable import metadata', 
   const imported = seed[0]
 
   assert.equal(imported?.type, 'agent-rp/sillytavern-chat-import')
-  assert.equal(imported?.ignorable, true)
+  assert.equal(imported === undefined || !('ignorable' in imported), true)
   if (imported?.type !== 'agent-rp/sillytavern-chat-import') assert.fail('missing import metadata')
   assert.equal(imported.data.source.attachments[0].attachmentId, attachment.attachmentId)
   assert.deepEqual(imported.data.messages[0]?.swipes, ['门还没锁。', '你来得正好。'])

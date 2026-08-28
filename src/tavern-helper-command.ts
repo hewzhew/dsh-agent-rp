@@ -16,7 +16,6 @@ import {
   applyTavernHelperMutation,
   appendTavernHelperStateAttachment,
   encodeTavernHelperState,
-  encodeTavernHelperStateAttachment,
   initializeTavernHelperPresetState,
   initializeTavernHelperState,
   parseTavernHelperMutationRequest,
@@ -25,11 +24,9 @@ import {
   TAVERN_HELPER_ROLEPLAY_STATE_ID,
   type TavernMutationCause,
 } from './tavern-helper.ts'
-import { supportsAgentRpSessionEvents } from './session-event-compat.ts'
 import {
   appendTavernMessageAnnotationRecords,
   applyTavernMessageAnnotationRecords,
-  encodeTavernMessageAnnotationCommandResult,
   logicalTavernMessageSeq,
   readTavernMessageAnnotations,
   validateTavernMessageAnnotationState,
@@ -125,12 +122,9 @@ export function executeTavernHelperMutation(invocation: {
     })
     const current = readTavernMessageAnnotations(invocation.agent.session.events)
     validateTavernMessageAnnotationState(applyTavernMessageAnnotationRecords(current, records))
-    if (supportsAgentRpSessionEvents(invocation.agent.session)) {
-      const seqs = appendTavernMessageAnnotationRecords(invocation.agent.session, records)
-      const sourceEventSeq = seqs.at(-1)
-      return { kind: 'success', ...(sourceEventSeq === undefined ? {} : { sourceEventSeq }) }
-    }
-    return { kind: 'success', text: encodeTavernMessageAnnotationCommandResult(records) }
+    const seqs = appendTavernMessageAnnotationRecords(invocation.agent.session, records)
+    const sourceEventSeq = seqs.at(-1)
+    return { kind: 'success', ...(sourceEventSeq === undefined ? {} : { sourceEventSeq }) }
   }
   const isChatMutation = 'operation' in request && (request.operation === 'set-chat-messages'
     || request.operation === 'create-chat-messages' || request.operation === 'delete-chat-messages'
@@ -150,14 +144,8 @@ export function executeTavernHelperMutation(invocation: {
       : { scopes: { ...mutated.scopes, message: chat.messageVariables } }),
   }
   if (request.cause !== undefined) {
-    if (supportsAgentRpSessionEvents(invocation.agent.session)) {
-      const attached = appendTavernHelperStateAttachment(invocation.agent.session, next, request.cause, active)
-      return { kind: 'success', sourceEventSeq: attached.eventSeq }
-    }
-    return {
-      kind: 'success',
-      text: encodeTavernHelperStateAttachment({ format: 0, cause: request.cause, active, state: next }),
-    }
+    const attached = appendTavernHelperStateAttachment(invocation.agent.session, next, request.cause, active)
+    return { kind: 'success', sourceEventSeq: attached.eventSeq }
   }
   return { kind: 'success', text: encodeTavernHelperState(next) }
 }

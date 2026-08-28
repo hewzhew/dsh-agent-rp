@@ -11,9 +11,6 @@ import {
   readSessionStoryWorkspaceId,
 } from '../src/session-story-workspace.ts'
 import { StoryWorkspaceStore } from '../src/story-workspace.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 test('selects and clears a story workspace when private command args are not recorded', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-selection-'))

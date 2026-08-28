@@ -5,6 +5,7 @@ import type { IncomingMessage } from 'node:http'
 import { normalize as normalizePath, win32 as win32Path } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { ModelSelection } from '@deepseek-ai/dsh-api-session-controller'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { CharacterLibrary } from './character-library.ts'
@@ -52,31 +53,6 @@ interface WorkspaceGateway {
 interface SessionTitleGateway {
   get(session: Agent['session']): { readonly title: string } | undefined
   rename(session: Agent['session'], title: string): unknown
-}
-
-interface SessionModelsGateway {
-  sessions: {
-    models(request: { readonly rpcId: string; readonly payload: { readonly sessionId: SessionId } }): Promise<{
-      readonly result:
-      | { readonly ok: true; readonly value: {
-        readonly current: { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
-      } }
-      | { readonly ok: false; readonly error: { readonly message: string } }
-    }>
-    selectModel(request: {
-      readonly rpcId: string
-      readonly payload: {
-        readonly sessionId: SessionId
-        readonly provider: string
-        readonly model: string
-        readonly reasoningEffort?: string
-      }
-    }): Promise<{
-      readonly result:
-      | { readonly ok: true; readonly value: unknown }
-      | { readonly ok: false; readonly error: { readonly message: string } }
-    }>
-  }
 }
 
 /** Normalize a workspace path for conservative same-directory fallback matching. */
@@ -129,15 +105,17 @@ export async function launchAgentRpSession(
   const sourceId = SessionId(request.sourceSessionId)
   const agents = ctx.get('agents') as Context['agents'] | undefined
   if (agents === undefined) throw new Error('当前 Host 无法创建角色会话')
-  const apiProxy = ctx.get('apiProxy') as SessionModelsGateway | undefined
-  if (apiProxy === undefined) throw new Error('当前 Host 无法读取来源会话')
-  const models = await apiProxy.sessions.models({
-    rpcId: `agent-rp-launch-${randomUUID()}`,
-    payload: { sessionId: sourceId },
-  })
-  if (!models.result.ok) throw new Error(models.result.error.message)
-  const source = agents.get(sourceId)
-  if (source === undefined) throw new Error('来源会话当前不可用')
+  const sessionController = ctx.get('sessionController')
+  if (sessionController === undefined) throw new Error('当前 Host 无法读取来源会话')
+  const sourceResult = await sessionController.resolveAgent(sourceId)
+  if ('error' in sourceResult) throw new Error(sourceResult.error.message)
+  const source = sourceResult.agent
+  const sessionProjections = ctx.get('sessionProjections')
+  if (sessionProjections === undefined) throw new Error('当前 Host 无法读取来源会话模型')
+  const sourceModelProjection = sessionProjections.snapshot(source.session).values.modelSelection
+  if (sourceModelProjection === undefined) throw new Error('来源会话缺少模型选择投影')
+  const sourceModel: ModelSelection = sourceModelProjection.next
+    ?? (await sessionController.modelCatalog()).default
 
   const agentPresets = ctx.get('agentPresets') as AgentPresetGateway | undefined
   if (agentPresets === undefined) throw new Error('当前 Host 无法挂载角色会话预设')
@@ -173,8 +151,8 @@ export async function launchAgentRpSession(
   }
   const sessionId = SessionId(`session-${randomUUID()}`)
   const agentOptions: AgentOptions = {
-    provider: models.result.value.current.provider,
-    model: models.result.value.current.model,
+    provider: sourceModel.provider,
+    model: sourceModel.model,
   }
   const handle = await agents.create({
     sessionId,
@@ -191,20 +169,18 @@ export async function launchAgentRpSession(
     await handle.dispose()
     throw new Error('所选 Agent 能力预设没有成功挂载 Agent RP 角色运行时')
   }
-  const selected = await apiProxy.sessions.selectModel({
-    rpcId: `agent-rp-select-${randomUUID()}`,
-    payload: {
+  try {
+    await sessionController.selectModel({
       sessionId,
-      provider: models.result.value.current.provider,
-      model: models.result.value.current.model,
-      ...(models.result.value.current.reasoningEffort === undefined
+      provider: sourceModel.provider,
+      model: sourceModel.model,
+      ...(sourceModel.reasoningEffort === undefined
         ? {}
-        : { reasoningEffort: models.result.value.current.reasoningEffort }),
-    },
-  })
-  if (!selected.result.ok) {
+        : { reasoningEffort: sourceModel.reasoningEffort }),
+    })
+  } catch (error: unknown) {
     await handle.dispose()
-    throw new Error(selected.result.error.message)
+    throw error
   }
 
   if (titles !== undefined) {

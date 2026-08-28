@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -173,7 +173,7 @@ function openFailedToolContinuation(): {
   readonly callId: string
 } {
   const session = Session.create(SessionId('prompt-regex-failed-tool'))
-  const callId = CallId('failed-image-call')
+  const callId = ToolCallId('failed-image-call')
   session.append('turn/start', { turn: 1 })
   session.append('step/start', { turn: 1, step: 1 })
   session.append('user/message', createUserMessage({
@@ -247,7 +247,7 @@ test('logs prompt-only replacements while the visible projection keeps append-or
   const reopened = Session.create(SessionId('prompt-regex-reopened'), session.events)
   assert.deepEqual(textHistory(reopened), ['masked one', 'prior answer', 'masked two'])
 
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(reopened.header)
   for (const event of reopened.events) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(state.surface.map(message => message.text), ['secret one', 'old answer', 'secret two'])
   const projection = agentRpProjectionDefinition.wire.view(state)
@@ -286,7 +286,7 @@ test('records a no-op trace without rewriting a tool-call assistant in the follo
   assert.equal(String(messages[pair.assistantIndex]?.id), assistantId)
   assert.equal(session.events.some(event => event.type === 'assistant/message'
     && event.data.step === 2), false)
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(state).promptRegex, trace)
 })

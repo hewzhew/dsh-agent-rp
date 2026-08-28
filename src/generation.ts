@@ -38,7 +38,7 @@ import {
 import type {
   RoleplayTurnPresentation,
 } from './roleplay-turn-presentation-types.ts'
-import { appendAgentRpSessionEvent, supportsAgentRpSessionEvents } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** A complete reply-version group snapshot stored after every mutation. */
 export interface GenerationStateRecord {
@@ -293,9 +293,6 @@ export function appendReviewedReplyVersion(
   turn: number,
   reviewedText: string,
 ): { readonly originalSeq: number; readonly reviewedSeq: number; readonly stateEventSeq: number } {
-  if (!supportsAgentRpSessionEvents(agent.session)) {
-    throw new Error('当前 DSH Host 无法记录正文 Worker 的可回放结果')
-  }
   const original = currentVisibleRoleplayReply(agent, turn)
   if (original === undefined) throw new Error('正文 Worker 找不到本轮可见角色回复')
   const originalText = visibleText(original)
@@ -396,7 +393,7 @@ function appendState(
 }
 
 function appendMvuSelection(agent: Agent, mvu: GenerationStateRecord['mvu']): void {
-  if (mvu !== undefined && supportsAgentRpSessionEvents(agent.session)) appendMvuState(agent.session, mvu)
+  if (mvu !== undefined) appendMvuState(agent.session, mvu)
 }
 
 function selectedTavernState(
@@ -423,7 +420,7 @@ function latestPresentationForReply(
 }
 
 function restoreTavernState(agent: Agent, state: TavernHelperState | undefined): number | undefined {
-  if (state === undefined || !supportsAgentRpSessionEvents(agent.session)) return undefined
+  if (state === undefined) return undefined
   return appendTavernHelperState(agent.session, state).eventSeq
 }
 
@@ -537,10 +534,6 @@ export async function executeGenerationCommand(invocation: {
       const candidateBaseTavern = baseTavernStateSeq === undefined
         ? readTavernHelperStateSnapshot(events, originSeq)?.state
         : readTavernHelperStateSnapshotAt(events, baseTavernStateSeq).state
-      if ((candidateBaseTavern !== undefined || baseMvu !== undefined)
-        && !supportsAgentRpSessionEvents(invocation.agent.session)) {
-        throw new Error('当前 DSH Host 缺少安全插件事件能力，无法重新生成含状态的回复')
-      }
       const selected = assistantEvent(invocation.agent.session.events, current.selectedSeq)
       replacementStartSeq = appendCurrentReplySurface(
         invocation.agent,

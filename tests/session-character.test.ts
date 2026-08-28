@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { CallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type JsonValue } from '@deepseek-ai/dsh-session'
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import {
@@ -48,7 +48,7 @@ function appendImport(session: Session, callId: string, greetingIndex = 0): void
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'import_character_card',
     arguments: JSON.stringify({ greetingIndex }),
   })
@@ -60,7 +60,7 @@ function appendImport(session: Session, callId: string, greetingIndex = 0): void
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: `已导入 ${value.name}` }],
       isError: false,
     }),
@@ -88,7 +88,7 @@ function appendHiddenImageImport(session: Session, callId: string): void {
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'import_character_card',
     arguments: '{}',
   })
@@ -100,7 +100,7 @@ function appendHiddenImageImport(session: Session, callId: string): void {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: `已导入 ${value.name}` }],
       isError: false,
     }),
@@ -127,7 +127,7 @@ function appendJsonImport(session: Session, callId: string): void {
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'import_character_card',
     arguments: '{}',
   })
@@ -139,7 +139,7 @@ function appendJsonImport(session: Session, callId: string): void {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: `已导入 ${value.name}` }],
       isError: false,
     }),

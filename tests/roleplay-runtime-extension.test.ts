@@ -15,9 +15,6 @@ import {
   appendSessionRoleplayTurnPlan,
   replaySessionRoleplayTurnPlan,
 } from '../src/session-roleplay-turn-plan.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const deployment = resolveConfig({ characterName: '扩展测试角色' })
 

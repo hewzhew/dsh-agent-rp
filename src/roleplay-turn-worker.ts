@@ -3,7 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { BoundRoleplayTurnPlan } from './roleplay-turn-settlement.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Host service shared by Agent RP profiles and trusted Worker plugins. */
 export const ROLEPLAY_TURN_WORKERS_KEY = 'agentRp.turnWorkers'

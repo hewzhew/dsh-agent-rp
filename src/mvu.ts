@@ -3,7 +3,7 @@
 import { snapshotJsonValue, type JsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { ImportedCharacterCard, ImportedLorebook } from './import/types.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import type { RoleplayTurnSettlementContribution } from './roleplay-runtime.ts'
 import { decodeActiveTavernHelperState } from './tavern-helper.ts'
 import { decodeGenerationMvuCheckpoint } from './generation-command-result.ts'

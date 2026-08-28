@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AttachmentId, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { CommandId } from '@deepseek-ai/dsh-commands'
-import { CallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type JsonValue } from '@deepseek-ai/dsh-session'
 import { decodeGenerationState, encodeGenerationState, executeGenerationCommand } from '../src/generation.ts'
 import { agentRpProjectionDefinition } from '../src/projection.ts'
@@ -37,9 +37,6 @@ import {
   readTavernHelperState,
 } from '../src/tavern-helper.ts'
 import { validateTavernMutationCause } from '../src/tavern-helper-command.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const modules = [
   { id: 'roleplay:reply-versions', source: 'native', phases: ['present'] },
@@ -107,7 +104,7 @@ function appendAutoStagedArtifact(session: Session, turn: number, id: string) {
     width: 1,
     height: 1,
   }
-  const callId = CallId(`image-${id}`)
+  const callId = ToolCallId(`image-${id}`)
   session.append('assistant/message', {
     turn,
     step: 1,
@@ -188,7 +185,7 @@ test('presents the settled reply with pending browser state and survives replay'
   const reopened = Session.create(session.id, session.events)
   assert.deepEqual(readRoleplayTurnPresentations(reopened.events), [presentation])
   assert.deepEqual(readCurrentRoleplayTurnPresentation(reopened.events), presentation)
-  let projected = agentRpProjectionDefinition.init()
+  let projected = agentRpProjectionDefinition.init(reopened.header)
   for (const event of reopened.events) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(projected).presentation, presentation)
 })
@@ -211,18 +208,18 @@ test('binds only explicitly staged durable artifacts to the settled reply', () =
       source: { provider: 'fixture', model: 'fixture' },
       content: [
         { type: 'text', text: '雨还没有停。' },
-        { type: 'tool-call', id: CallId('image-source'), name: 'generate_image', arguments: '{}' },
+        { type: 'tool-call', id: ToolCallId('image-source'), name: 'generate_image', arguments: '{}' },
       ],
     }),
   }, { surfaceOp: 'append', sourceEventSeqs: [] })
   const sourceCall = session.append('tool/call', {
-    turn: 1, step: 1, callId: CallId('image-source'), name: 'generate_image', arguments: '{}',
+    turn: 1, step: 1, callId: ToolCallId('image-source'), name: 'generate_image', arguments: '{}',
   })
   const sourceResult = session.append('tool/result', {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId('image-source'), content: [{ type: 'text', text: '[image artifact]' }], isError: false,
+      callId: ToolCallId('image-source'), content: [{ type: 'text', text: '[image artifact]' }], isError: false,
     }),
     meta: {
       format: 'dsh.tool-artifacts', version: 0, artifacts: [{ type: 'image', attachment }],
@@ -234,18 +231,18 @@ test('binds only explicitly staged durable artifacts to the settled reply', () =
     message: createAssistantMessage({
       source: { provider: 'fixture', model: 'fixture' },
       content: [{
-        type: 'tool-call', id: CallId('image-stage'), name: 'stage_roleplay_artifact', arguments: '{}',
+        type: 'tool-call', id: ToolCallId('image-stage'), name: 'stage_roleplay_artifact', arguments: '{}',
       }],
     }),
   }, { surfaceOp: 'append', sourceEventSeqs: [] })
   const stageCall = session.append('tool/call', {
-    turn: 1, step: 1, callId: CallId('image-stage'), name: 'stage_roleplay_artifact', arguments: '{}',
+    turn: 1, step: 1, callId: ToolCallId('image-stage'), name: 'stage_roleplay_artifact', arguments: '{}',
   })
   session.append('tool/result', {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId('image-stage'), content: [{ type: 'text', text: 'staged' }], isError: false,
+      callId: ToolCallId('image-stage'), content: [{ type: 'text', text: 'staged' }], isError: false,
     }),
     meta: {
       format: 'agent-rp.staged-artifact',
@@ -292,18 +289,18 @@ test('binds Thetail-compatible automatic publication artifacts to the settled re
     message: createAssistantMessage({
       source: { provider: 'fixture', model: 'fixture' },
       content: [{
-        type: 'tool-call', id: CallId('image-publish'), name: 'publish_roleplay_image', arguments: '{}',
+        type: 'tool-call', id: ToolCallId('image-publish'), name: 'publish_roleplay_image', arguments: '{}',
       }],
     }),
   }, { surfaceOp: 'append', sourceEventSeqs: [] })
   const publishCall = session.append('tool/call', {
-    turn: 1, step: 1, callId: CallId('image-publish'), name: 'publish_roleplay_image', arguments: '{}',
+    turn: 1, step: 1, callId: ToolCallId('image-publish'), name: 'publish_roleplay_image', arguments: '{}',
   })
   const publishResult = session.append('tool/result', {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId('image-publish'), content: [{ type: 'text', text: 'published' }], isError: false,
+      callId: ToolCallId('image-publish'), content: [{ type: 'text', text: 'published' }], isError: false,
     }),
     meta: {
       format: 'dsh.tool-artifacts',
@@ -390,7 +387,7 @@ test('attaches a late Tavern mutation to its causal reply after a later reply ex
   ])
   assert.deepEqual(mutated.lastMutation?.cause, cause)
   assert.equal(readTavernHelperState(session.events)?.revision, 0)
-  let projected = agentRpProjectionDefinition.init()
+  let projected = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.equal(agentRpProjectionDefinition.wire.view(projected).tavern?.revision, 0)
   assert.throws(() => validateTavernMutationCause({ session } as never, {

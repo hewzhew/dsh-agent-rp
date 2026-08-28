@@ -33,7 +33,7 @@ function run(agent: Agent, rawInput: string, sequence: number): void {
 }
 
 function project(agent: Agent) {
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(agent.session.header)
   for (const event of agent.session.events) state = agentRpProjectionDefinition.apply(state, event)
   return agentRpProjectionDefinition.wire.view(state)
 }
