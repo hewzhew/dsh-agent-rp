@@ -127,6 +127,8 @@ export interface StoryCharacterState {
 export interface StoryCharacter {
   readonly id: string
   readonly name: string
+  /** Alternative source-dialogue signatures used only to attribute imported lines to this character. */
+  readonly voiceAliases?: readonly string[]
   readonly profile: StoryCharacterProfile
   readonly state: StoryCharacterState
   /** Stable source reference for a Character Card snapshot bound from the resource center. */

@@ -756,6 +756,9 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
           </select></Field>
           {dirty && <p className="story-studio-inline-note">保存当前修改后即可更换角色卡来源。</p>}
           <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
+          <TextField label="原作署名" rows={4} value={(character.voiceAliases ?? []).join('\n')}
+            onChange={value => { patchCharacter(current => ({ ...current, voiceAliases: value.split(/\r?\n/u) })) }} />
+          <p className="story-studio-inline-note">每行一个原文中的全名、简称或其他写法，只用于识别导入资料里的说话人。</p>
           <TextField label="人物描述" rows={9} value={character.profile.description} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, description: value } })) }} />
           <TextField label="性格与行为" rows={7} value={character.profile.personality} onChange={value => { patchCharacter(current => ({ ...current, profile: { ...current.profile, personality: value } })) }} />
         </div>
@@ -1764,6 +1767,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
     update(current => ({ ...current, characters: [...current.characters, {
       id,
       name: `人物 ${current.characters.length + 1}`,
+      voiceAliases: [],
       profile: { description: '', personality: '', scenario: '', exampleDialogue: '', systemPrompt: '', postHistoryInstructions: '' },
       state: { location: '', condition: '', objective: '', notes: '' },
     }] }))
