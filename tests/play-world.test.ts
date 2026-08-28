@@ -695,7 +695,8 @@ test('assembles a grounded world result and approved dialogue without unowned mo
               speech: {
                 respondsTo: '魔理沙追问她指的是哪句话。',
                 move: 'answer',
-                content: '指出是魔理沙自己把两个判断接在了一起。',
+                focus: '魔理沙自己采用的接法。',
+                effect: '让魔理沙承认她自己把两个判断接在了一起。',
               },
               voiceEvidence: [`character:${reimuId}:example-dialogue`],
               insights: [{
@@ -710,7 +711,8 @@ test('assembles a grounded world result and approved dialogue without unowned mo
               speech: {
                 respondsTo: '灵梦刚完成本轮。',
                 move: 'question',
-                content: '追问灵梦为什么不继续说明。',
+                focus: '灵梦不再继续说明的原因。',
+                effect: '让灵梦继续说明。',
               },
               voiceEvidence: [`character:${marisaId}:example-dialogue`],
               insights: [],
@@ -726,6 +728,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
             move: 'answer',
             seedLineIds: candidateSeeds,
             mechanics: '先把对方的问题翻回其已经说过的话',
+            leftImplicit: '两句话具体怎样被接到一起。',
             dialogue: '“你自己把两句话接在一起，还问我是哪句？”',
           }] })
         } else if (system.includes('对白审校 Worker')) {

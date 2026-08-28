@@ -356,7 +356,8 @@ test('runs logged story stages while keeping each character request privately sc
               speech: {
                 respondsTo: '对方准备在没有看清徽章刻痕时就下结论。',
                 move: 'warn',
-                content: '要求对方先确认眼前的刻痕再作判断。',
+                focus: '先确认眼前的刻痕。',
+                effect: '让对方暂缓结论，先确认刻痕。',
               },
               voiceEvidence: [evidence, conversationEvidence, voiceNotesEvidence, 'character:invented:example-dialogue'],
               insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
@@ -367,7 +368,8 @@ test('runs logged story stages while keeping each character request privately sc
               speech: {
                 respondsTo: '阿梨表现得像是已经看清徽章刻痕。',
                 move: 'correct',
-                content: '指出刻痕仍然模糊，现在不能当作已经看清。',
+                focus: '仍然模糊的刻痕。',
+                effect: '让阿梨承认刻痕还没有看清。',
               },
               voiceEvidence: [evidence],
               insights: [],
@@ -422,8 +424,8 @@ test('runs logged story stages while keeping each character request privately sc
             voiceRetrySystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds.slice(0, 1), mechanics: '只用一条依据的无效候选', dialogue: '只看一条也够了。' },
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '先指出眼前缺口，再截断过早结论', dialogue: '先看“徽章”，别忙着猜。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds.slice(0, 1), mechanics: '没有真正留白的无效候选', leftImplicit: '', dialogue: '只看一条也够了。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '先指出眼前缺口，再截断过早结论', leftImplicit: '为什么刻痕不清时不能下结论。', dialogue: '先看“徽章”，别忙着猜。' },
               ],
             })
           } else if (body.includes(`人物：柏舟（${bobId}）`)) {
@@ -431,7 +433,7 @@ test('runs logged story stages while keeping each character request privately sc
             secondVoiceSystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:2`, move: 'correct', seedLineIds: candidateSeeds, mechanics: '直接指出观察仍不成立', dialogue: '先把刻痕看清楚。' },
+                { reference: `${sectionId}:2`, move: 'correct', seedLineIds: candidateSeeds, mechanics: '直接指出观察仍不成立', leftImplicit: '刻痕模糊会怎样影响结论。', dialogue: '先把刻痕看清楚。' },
               ],
             })
           } else {
@@ -439,9 +441,9 @@ test('runs logged story stages while keeping each character request privately sc
             voiceSystem = system
             text = JSON.stringify({
               lines: [
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: contextSeedIds.slice(0, 1), mechanics: '错误引用对方台词', dialogue: '借了对方的声音。' },
-                { reference: `${sectionId}:1`, move: 'challenge', seedLineIds: candidateSeeds, mechanics: '擅自改变既定动作', dialogue: '把提醒改成质疑。' },
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '以未满足的观察前提反问结论', dialogue: '你连徽章都没看清，谈什么结论。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: contextSeedIds.slice(0, 1), mechanics: '错误引用对方台词', leftImplicit: '对方已经知道的观察缺口。', dialogue: '借了对方的声音。' },
+                { reference: `${sectionId}:1`, move: 'challenge', seedLineIds: candidateSeeds, mechanics: '擅自改变既定动作', leftImplicit: '为什么需要先观察。', dialogue: '把提醒改成质疑。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '以未满足的观察前提反问结论', leftImplicit: '刻痕模糊会怎样影响结论。', dialogue: '你连徽章都没看清，谈什么结论。' },
               ],
             })
           }
@@ -507,8 +509,14 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(calls, 14)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 3)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 11)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 6)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 8)
+  const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'voice' ? [event.data] : [])
+  assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
+    .every(request => request.dispatch.reasoningEffort === 'high'), true)
+  assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
+    .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal(maxTokenBudgets.every(budget => budget >= 16_384), true)
   assert.equal(characterBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
@@ -534,14 +542,17 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
   assert.match(characterSystems[0]!, /为了让场面热闹.*speech 必须为 null/u)
-  assert.match(characterSystems[0]!, /respondsTo.*move.*content/u)
+  assert.match(characterSystems[0]!, /respondsTo.*move.*focus.*effect/u)
+  assert.match(characterSystems[0]!, /focus 不是完整论点/u)
+  assert.match(characterSystems[0]!, /一个对象、区别或直接答案/u)
+  assert.match(characterSystems[0]!, /effect.*不会交给声音 Worker/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(characterSystems[0]!, /futureChoice.*下一轮仍会因此改变/u)
   assert.match(characterSystems[0]!, /Host 会比较两者并丢弃这种复述/u)
   assert.match(directorBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
   assert.match(directorBody, /对话动作：warn/u)
-  assert.match(directorBody, /传达内容：要求对方先确认眼前的刻痕再作判断/u)
+  assert.match(directorBody, /发言焦点：先确认眼前的刻痕/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
   assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]/u)
@@ -562,7 +573,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.ok(voiceBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
   assert.match(voiceBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
   assert.match(voiceBody, /对话动作：warn/u)
-  assert.match(voiceBody, /传达内容：要求对方先确认眼前的刻痕再作判断/u)
+  assert.match(voiceBody, /发言焦点：先确认眼前的刻痕/u)
+  assert.doesNotMatch(voiceBody, /预期作用：让对方暂缓结论/u)
   assert.match(voiceBody, /先把眼前的事说清楚/u)
   assert.match(voiceBody, /熟到省略礼貌和背景说明/u)
   assert.match(voiceBody, /<voice_exchange>[\s\S]*\[目标人物\]\[示例\] 阿梨｜先把眼前的事说清楚。/u)
@@ -603,18 +615,21 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceSystem, /seedLineIds/u)
   assert.match(voiceSystem, /\[目标人物\] seed 才能用于候选的声音映射/u)
   assert.match(voiceSystem, /\[对话上下文\] seed.*不能引用为自己的声音/u)
-  assert.match(voiceSystem, /普通问句、纠正句或胜负套话/u)
+  assert.match(voiceSystem, /不是对白要逐项覆盖的提纲/u)
+  assert.match(voiceSystem, /发言焦点.*不是一段待改写的完整论证/u)
+  assert.match(voiceSystem, /leftImplicit.*刻意没有说出口/u)
+  assert.match(voiceSystem, /不能为了凑数量把多条原句的结构拼成一段/u)
   assert.match(voiceReviewBody, /你连徽章都没看清，谈什么结论/u)
   assert.match(voiceReviewBody, /候选 1/u)
   assert.doesNotMatch(voiceReviewBody, /借了对方的声音|把提醒改成质疑/u)
   assert.match(voiceReviewBody, /句法与接话机制/u)
+  assert.match(voiceReviewBody, /刻意留给听者补全/u)
   assert.match(voiceReviewBody, /先把眼前的事说清楚/u)
   assert.match(voiceReviewSystem, /匿名替换检验/u)
-  assert.match(voiceReviewSystem, /意图复述检验/u)
-  assert.match(voiceReviewSystem, /你怎么还没/u)
-  assert.match(voiceReviewSystem, /你是连……都/u)
-  assert.match(voiceReviewSystem, /你连……都……，谈什么/u)
-  assert.match(voiceReviewSystem, /朴素短句可以批准/u)
+  assert.match(voiceReviewSystem, /熟人交谈中的下一轮立刻说出口/u)
+  assert.match(voiceReviewSystem, /解释性分句.*说明过度/u)
+  assert.match(voiceReviewSystem, /leftImplicit.*没有被换句话塞回 dialogue/u)
+  assert.match(voiceReviewSystem, /复杂的 mechanics 或更多 seed 不构成质量加分/u)
   assert.match(voiceReviewSystem, /\[目标人物\].*此人物自己的原句/u)
   assert.match(voiceReviewSystem, /\[对话上下文\].*不能拿来模仿/u)
   assert.match(voiceReviewSystem, /素材归属检验/u)
@@ -622,10 +637,11 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceReviewSystem, /仅复述公开世界事实/u)
   assert.match(voiceReviewSystem, /绝不参与创作/u)
   assert.match(voiceReviewSystem, /只能逐字返回 draft_candidates/u)
-  assert.match(voiceReviewSystem, /多个候选合格时只选/u)
+  assert.match(voiceReviewSystem, /多个候选合格时优先选择留白真实/u)
   assert.match(voiceReviewSystem, /审校不拥有也不返回说话动作/u)
   assert.match(voiceRetrySystem, /唯一一次退回重写/u)
-  assert.match(voiceRetrySystem, /凭空制造比喻/u)
+  assert.match(voiceRetrySystem, /自然话轮/u)
+  assert.match(voiceRetrySystem, /leftImplicit/u)
   assert.match(voiceRetryBody, /rejected_candidates/u)
   assert.ok(voiceRetryBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
   assert.match(voiceRetryBody, /你连徽章都没看清，谈什么结论/u)
