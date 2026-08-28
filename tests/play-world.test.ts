@@ -699,11 +699,18 @@ test('assembles a grounded world result and approved dialogue without unowned mo
                 effect: '让魔理沙承认她自己把两个判断接在了一起。',
               },
               voiceEvidence: [`character:${reimuId}:example-dialogue`],
-              insights: [{
-                kind: 'intention',
-                text: '继续逼魔理沙承认她自己把两个判断接在了一起。',
-                futureChoice: '本轮回答结束后继续指出魔理沙自己把两个判断接在了一起。',
-              }],
+              insights: [
+                {
+                  kind: 'intention',
+                  text: '继续逼魔理沙承认她自己把两个判断接在了一起。',
+                  futureChoice: '本轮回答结束后继续指出魔理沙自己把两个判断接在了一起。',
+                },
+                {
+                  kind: 'intention',
+                  text: '决定如果魔理沙以后又把两个判断接在一起，就用同样的问题回敬她。',
+                  futureChoice: '若魔理沙再次这样，就主动开口要求她回答。',
+                },
+              ],
             })
             : JSON.stringify({
               observation: '灵梦刚完成本轮。',
@@ -782,7 +789,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
       : []), [])
-  assert.doesNotMatch(result.directorBrief, /继续逼魔理沙/u)
+  assert.doesNotMatch(result.directorBrief, /继续逼魔理沙|同样的问题回敬/u)
   assert.doesNotMatch(result.finalDraft, /说过又怎么样|为什么不继续说明|抢在灵梦之前/u)
   session.append('assistant/message', {
     turn: 2,

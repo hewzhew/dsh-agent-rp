@@ -1290,6 +1290,7 @@ function retainReviewedDialogue(
     return /你(?:是)?连[^，。！？]{1,80}都[^，。！？]{0,80}[，,]?(?:还)?(?:谈|说|算)什么/u.test(value)
       || /要[^，。！？]{1,80}也得先[^，。！？]{1,80}再说(?:吧)?/u.test(value)
       || /现在[^，。！？]{0,80}[，,]?还轮不到你/u.test(value)
+      || /你[^，。！？]{0,40}[，,][^，。！？]{0,20}自己[^，。！？]{0,40}(?:不是也|不也)[^，。！？]{1,80}(?:吗|么)/u.test(value)
   }
   return new Map([...reviewed].flatMap(([reference, dialogue]) =>
     dialogue === '' || (draft.get(reference)?.some(candidate => candidate.dialogue === dialogue) === true && !genericFrame(dialogue))
@@ -1341,7 +1342,7 @@ function insightRestatesSpeech(value: string, speech: StoryCharacterSpeechIntent
     const comparable = Math.min(candidateBigrams.size, sourceBigrams.size)
     if (comparable < 6) return false
     const overlap = [...candidateBigrams].filter(pair => sourceBigrams.has(pair)).length
-    return overlap / comparable >= 0.36
+    return overlap / comparable >= 0.35
   })
 }
 
@@ -1377,8 +1378,9 @@ function parseCharacterInsights(
     if (insight.kind === 'knowledge') return [{ kind: insight.kind, text: insight.text }]
     if (insight.futureChoice === '') return []
     if (speech !== undefined
-      && insightRestatesSpeech(insight.text, speech)
-      && insightRestatesSpeech(insight.futureChoice, speech)) return []
+      && ((insightRestatesSpeech(insight.text, speech)
+        && insightRestatesSpeech(insight.futureChoice, speech))
+        || insightRestatesSpeech(`${insight.text}\n${insight.futureChoice}`, speech))) return []
     return [{ kind: insight.kind, text: insight.text }]
   })
 }
@@ -2654,7 +2656,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           'action 只保留由本轮结果引起、能够改变人物选择或关系的具体非规则反应；不要用看向、换手、敲碰物件、摆姿势、轻笑或等待开口填空，没有实际反应时留空。',
           'speech 必须是 null，或者由 respondsTo、move、focus 和 effect 组成的对象。respondsTo 只写输入中已经公开发生、这句话要接住的具体前提；不能填未来假设、人物不知情的事或抽象话题。move 只能是 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose。focus 不是完整论点，只命名这个人要新增给对方的一个对象、区别或直接答案，例如“对方先前主动采用的接法”“门外的人”“先确认刻痕”；不写原因链、反驳过程、语气、句式、口癖或逐字台词，也不重复 respondsTo 已经包含的前提。effect 另写这次开口完成后希望对方当场改变的一项理解、决定或行动；它用于判断是否确实需要开口以及清除伪装成持久意图的本轮复述，不会交给声音 Worker 改写成对白。',
           '只有实际需要改变对方理解、决定或行动时才返回非空 speech。为了让场面热闹、表达领先落后、复述双方都看见的事，或者无法指出具体 respondsTo 时，speech 必须为 null。speech 非空时，voiceEvidence 必须至少引用一项确实含 [目标人物] 原句的证据；只有分析、性格标签或对方原句不足以支持开口。',
-          'insights 中 knowledge 是本轮新获得且未公开的知识；其 futureChoice 使用空字符串。intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；两者的 futureChoice 必须写明：假设本轮 action 与 speech 已经完整结束，下一轮仍会因此改变的一个具体非规则选择。只把 speech 的发言焦点换成“继续……”不构成未来选择，Host 会比较两者并丢弃这种复述。当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 使用空字符串，Host 会丢弃整项。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
+          'insights 中 knowledge 是本轮新获得且未公开的知识；其 futureChoice 使用空字符串。intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；两者的 futureChoice 必须写明：假设本轮 action 与 speech 已经完整结束，下一轮仍会因此改变的一个具体非规则选择。只把 speech 的发言焦点换成“继续……”，或者改成“以后遇到相似结果再开口回敬”，都不构成新的未来选择；Host 会把 text 与 futureChoice 合在一起和本轮说话决定比较并丢弃这种复述。当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 使用空字符串，Host 会丢弃整项。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
           '不要写完整正文或逐字对白。只返回 JSON：{"observation":"此人能观察到的事实","action":"此人对刚发生结果的非规则反应，或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"一个对象、区别或直接答案","effect":"希望对方当场改变的一项理解、决定或行动"},"voiceEvidence":["实际使用的资料项编号或目标人物 seed ID"],"insights":[{"kind":"knowledge|intention|decision|world-action","text":"一项私有变化或待丢弃的规则动作","futureChoice":"本轮回应完成后仍会改变的具体非规则选择，或空字符串"}]}。不开口时把 speech 设为 null 且 voiceEvidence 设为空数组。observation、action、speech 内容和 insights 不能包含引号包围的台词；voiceEvidence 只能引用输入中真实存在的资料项编号或带 [目标人物] 的 seed ID。不要使用 Markdown 围栏。',
         ].join('\n'),
         [
