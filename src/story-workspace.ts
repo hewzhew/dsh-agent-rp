@@ -634,6 +634,7 @@ function normalizeCitation(
   sourceIds: ReadonlySet<string>,
   nodeIds: ReadonlySet<string>,
   factIds: ReadonlySet<string>,
+  eventIds: ReadonlySet<string>,
 ): StoryCitation {
   if (!isRecord(value)) throw new Error('资料引用不是对象')
   assertId(value.id, CITATION_ID_PATTERN, '资料引用')
@@ -650,6 +651,10 @@ function normalizeCitation(
       assertId(value.target.factId, FACT_ID_PATTERN, '资料引用人物事实')
       if (!factIds.has(value.target.factId)) throw new Error('资料引用指向未知人物事实')
       target = { kind: 'fact', factId: value.target.factId }
+    } else if (value.target.kind === 'event') {
+      assertId(value.target.eventId, EVENT_ID_PATTERN, '资料引用故事事件')
+      if (!eventIds.has(value.target.eventId)) throw new Error('资料引用指向未知故事事件')
+      target = { kind: 'event', eventId: value.target.eventId }
     } else {
       throw new Error('资料引用目标分类无效')
     }
@@ -728,7 +733,7 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   const sources = value.sources.map(normalizeSource)
   assertUnique(sources.map(source => source.id), '故事资料')
   const sourceIds = new Set(sources.map(source => source.id))
-  const citations = value.citations.map(citation => normalizeCitation(citation, sourceIds, nodeIds, factIds))
+  const citations = value.citations.map(citation => normalizeCitation(citation, sourceIds, nodeIds, factIds, eventIds))
   assertUnique(citations.map(citation => citation.id), '资料引用')
   const researchInbox = value.researchInbox.map(normalizeResearchItem)
   assertUnique(researchInbox.map(item => item.id), '研究收件箱项目')
@@ -1109,7 +1114,13 @@ export function storyFactKnownBy(workspace: StoryWorkspaceSnapshot, fact: StoryF
 
 /** Compile completed events into the public continuity input. */
 export function storyPublicHistory(workspace: StoryWorkspaceSnapshot): string {
-  return workspace.events.map(event => `## ${event.title}\n${event.summary}`).join('\n\n')
+  return workspace.events.map(event => {
+    const citations = workspace.citations.filter(citation => citation.target?.kind === 'event' && citation.target.eventId === event.id)
+    return [
+      `## ${event.title}\n${event.summary}`,
+      citations.length === 0 ? '' : `本回合研究依据：\n${citations.map(citation => renderStoryCitation(workspace, citation)).join('\n')}`,
+    ].filter(Boolean).join('\n')
+  }).join('\n\n')
 }
 
 function renderStoryCitation(workspace: StoryWorkspaceSnapshot, citation: StoryCitation): string {
@@ -1536,6 +1547,26 @@ export class StoryWorkspaceStore {
       knownResearchUrls.add(item.url)
       researchInbox.push(item)
     }
+    const citationKeys = new Set(current.citations.map(citation => [
+      citation.sourceId,
+      citation.locator,
+      citation.quote,
+      citation.target?.kind === 'event' ? citation.target.eventId : '',
+    ].join('\n')))
+    const citations = [...current.citations]
+    for (const candidate of materialization.citations ?? []) {
+      const key = [candidate.sourceId, candidate.locator, candidate.quote, eventId].join('\n')
+      if (citationKeys.has(key)) continue
+      citationKeys.add(key)
+      citations.push({
+        id: createStoryCitationId(),
+        sourceId: candidate.sourceId,
+        locator: candidate.locator,
+        quote: candidate.quote,
+        note: candidate.note,
+        target: { kind: 'event', eventId },
+      })
+    }
     return this.save({
       format: 2,
       id: current.id,
@@ -1552,7 +1583,7 @@ export class StoryWorkspaceStore {
       events: [...current.events, event],
       outputs: current.outputs,
       sources: current.sources,
-      citations: current.citations,
+      citations,
       researchInbox,
     })
   }

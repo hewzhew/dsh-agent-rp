@@ -23,6 +23,7 @@ import {
   createStorySourceId,
   storyDirectorMap,
   storyOpenForeshadowing,
+  storyPublicHistory,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 
@@ -621,6 +622,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   const aliceId = createStoryCharacterId()
   const bobId = createStoryCharacterId()
   const activeNodeId = createStoryNodeId()
+  const sourceId = createStorySourceId()
   const workspace = store.save({
     ...editable(created),
     graph: {
@@ -652,6 +654,13 @@ test('materializes one visible turn into an event, observed facts, and a suggest
       knowledgeMode: 'override',
       knownBy: [aliceId],
       source: { kind: 'manual' },
+    }],
+    sources: [{
+      id: sourceId,
+      name: '旧站原著',
+      kind: 'original',
+      enabled: true,
+      content: '徽章背面刻着旧站编号。',
     }],
   })
 
@@ -706,6 +715,12 @@ test('materializes one visible turn into an event, observed facts, and a suggest
         },
       ],
     },
+    citations: [{
+      sourceId,
+      locator: '徽章档案 · 第 3 段',
+      quote: '徽章背面刻着旧站编号。',
+      note: '本回合研究 Worker 引用',
+    }],
     webResearch: [{
       kind: 'web',
       url: 'https://example.test/badge',
@@ -774,6 +789,32 @@ test('materializes one visible turn into an event, observed facts, and a suggest
   assert.equal(rejectedBatch.facts.some(fact => fact.source.kind === 'event' && fact.source.eventId === eventId), true)
   assert.equal(materialized.researchInbox[0]?.url, 'https://example.test/badge')
   assert.equal(materialized.researchInbox.length, 1)
+  assert.deepEqual(materialized.citations.map(citation => ({
+    sourceId: citation.sourceId,
+    locator: citation.locator,
+    quote: citation.quote,
+    note: citation.note,
+    target: citation.target,
+  })), [{
+    sourceId,
+    locator: '徽章档案 · 第 3 段',
+    quote: '徽章背面刻着旧站编号。',
+    note: '本回合研究 Worker 引用',
+    target: { kind: 'event', eventId },
+  }])
+  assert.deepEqual(new StoryWorkspaceStore({ root }).get(workspace.id).citations, materialized.citations)
+  assert.match(storyPublicHistory(materialized), /本回合研究依据：[\s\S]*旧站原著 · 徽章档案 · 第 3 段: [\s\S]*徽章背面刻着旧站编号/u)
+  assert.throws(() => store.save({
+    ...editable(materialized),
+    citations: [{
+      id: createStoryCitationId(),
+      sourceId,
+      locator: '徽章档案 · 第 3 段',
+      quote: '徽章背面刻着旧站编号。',
+      note: '',
+      target: { kind: 'event', eventId: createStoryEventId() },
+    }],
+  }), /资料引用指向未知故事事件/u)
 
   const researchItem = materialized.researchInbox[0]!
   const acceptedSourceId = createStorySourceId()
@@ -796,7 +837,7 @@ test('materializes one visible turn into an event, observed facts, and a suggest
     }],
     researchInbox: [],
   })
-  assert.equal(accepted.sources[0]?.origin?.url, 'https://example.test/badge')
+  assert.equal(accepted.sources.find(source => source.id === acceptedSourceId)?.origin?.url, 'https://example.test/badge')
   assert.equal(accepted.researchInbox.length, 0)
 
   const replayed = store.materializeTurn(workspace.id, {
@@ -815,12 +856,19 @@ test('materializes one visible turn into an event, observed facts, and a suggest
       }],
       edges: [],
     },
+    citations: [{
+      sourceId,
+      locator: '徽章档案 · 第 3 段',
+      quote: '徽章背面刻着旧站编号。',
+      note: '本回合研究 Worker 引用',
+    }],
     webResearch: [],
   })
   assert.equal(replayed.revision, accepted.revision)
   assert.equal(replayed.events.length, 1)
   assert.equal(replayed.graph.nodes.filter(node => node.lifecycle === 'suggested').length, 2)
   assert.equal(replayed.graph.edges.filter(edge => edge.lifecycle === 'suggested').length, 2)
+  assert.equal(replayed.citations.length, 1)
 })
 
 test('opaque ids prevent workspace and child paths from escaping the configured root', (context) => {
@@ -917,4 +965,28 @@ test('retrieves the most relevant bounded original excerpts before model researc
   assert.match(expanded, /钟楼暗号只在午夜出现/u)
   assert.match(expanded, /随后北门会短暂开启/u)
   assert.equal(searchStoryWorkspaceSources(contextWorkspace, '紫色彗星', 500), '')
+
+  const crowdedWorkspace = store.save({
+    ...editable(contextWorkspace),
+    sources: [...contextWorkspace.sources, {
+      id: createStorySourceId(),
+      name: '人物长篇原著',
+      kind: 'original',
+      enabled: true,
+      content: [
+        '# 无关闲谈',
+        ...Array.from({ length: 32 }, (_, index) => `阿梨只是在重复第 ${String(index + 1)} 段普通闲话。${'天气平静。'.repeat(16)}`),
+        '# 判断前提',
+        '阿梨：“刻痕模糊时，不应该立刻作出结论。”',
+      ].join('\n\n'),
+    }],
+  })
+  const longQuery = [
+    '阿梨',
+    '对方准备在没有看清徽章刻痕时就下结论。',
+    '先确认眼前的刻痕。',
+    Array.from({ length: 140 }, (_, index) => `占位词${String(index + 1)}`).join(' '),
+  ].join('\n')
+  const prioritized = searchStoryWorkspaceSources(crowdedWorkspace, longQuery, 800)
+  assert.match(prioritized, /判断前提 · 第 1 段[\s\S]*刻痕模糊时，不应该立刻作出结论/u)
 })

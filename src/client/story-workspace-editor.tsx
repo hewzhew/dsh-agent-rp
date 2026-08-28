@@ -833,6 +833,7 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
   readonly onDelete: () => void
 }) {
   const observations = workspace.facts.filter(fact => fact.source.kind === 'event' && fact.source.eventId === event.id)
+  const citations = workspace.citations.filter(citation => citation.target?.kind === 'event' && citation.target.eventId === event.id)
   const suggestionBatch = storySuggestionBatch(workspace, event.id)
   const suggestedNodes = workspace.graph.nodes.filter(node => suggestionBatch.nodeIds.includes(node.id))
   const suggestedEdges = workspace.graph.edges.filter(edge => suggestionBatch.edgeIds.includes(edge.id))
@@ -875,6 +876,11 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
       {worldEvents.map(worldEvent => <button type="button" key={worldEvent.id}
         onClick={() => { onSelect({ kind: 'world-event', id: worldEvent.id }) }}>
         <span>#{worldEvent.sequence}</span><b>{worldEvent.title}</b>
+      </button>)}</div>}
+    {citations.length > 0 && <div className="story-timeline-rule-sources"><strong>本回合研究依据</strong>
+      {citations.map(citation => <button type="button" key={citation.id}
+        onClick={() => { onSelect({ kind: 'citation', id: citation.id }) }}>
+        <span>{workspace.sources.find(source => source.id === citation.sourceId)?.name ?? '本地资料'}</span><b>{citation.locator}</b>
       </button>)}</div>}
     <TextField label="事件标题" rows={1} value={event.title} onChange={value => { patch(current => ({ ...current, title: value })) }} />
     <TextField label="事件摘要" rows={5} value={event.summary} onChange={value => { patch(current => ({ ...current, summary: value })) }} />
@@ -996,14 +1002,19 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
   }
   const source = workspace.sources.find(candidate => candidate.id === citation.sourceId)
   const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
-  const changeTargetKind = (kind: '' | 'node' | 'fact'): void => {
+  const changeTargetKind = (kind: '' | 'node' | 'fact' | 'event'): void => {
     if (kind === '') patch(citationWithoutTarget)
     else if (kind === 'node') {
       const node = canonicalNodes[0]
       if (node !== undefined) patch(current => ({ ...current, target: { kind: 'node', nodeId: node.id } }))
     } else {
-      const fact = workspace.facts[0]
-      if (fact !== undefined) patch(current => ({ ...current, target: { kind: 'fact', factId: fact.id } }))
+      if (kind === 'fact') {
+        const fact = workspace.facts[0]
+        if (fact !== undefined) patch(current => ({ ...current, target: { kind: 'fact', factId: fact.id } }))
+      } else {
+        const event = workspace.events[0]
+        if (event !== undefined) patch(current => ({ ...current, target: { kind: 'event', eventId: event.id } }))
+      }
     }
   }
   return <>
@@ -1019,10 +1030,11 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
     </div>
     <TextField label="引用说明" rows={4} value={citation.note} onChange={value => { patch(current => ({ ...current, note: value })) }} />
     <Field label="支持的故事对象"><select className="story-studio-input" value={citation.target?.kind ?? ''}
-      onChange={event => { changeTargetKind(event.target.value as '' | 'node' | 'fact') }}>
+      onChange={event => { changeTargetKind(event.target.value as '' | 'node' | 'fact' | 'event') }}>
       <option value="">暂未关联</option>
       <option value="node" disabled={canonicalNodes.length === 0}>剧情节点</option>
       <option value="fact" disabled={workspace.facts.length === 0}>人物事实</option>
+      <option value="event" disabled={workspace.events.length === 0}>故事事件</option>
     </select></Field>
     {citation.target?.kind === 'node' && <Field label="剧情节点"><select className="story-studio-input" value={citation.target.nodeId}
       onChange={event => { patch(current => ({ ...current, target: { kind: 'node', nodeId: event.target.value } })) }}>
@@ -1031,6 +1043,10 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
     {citation.target?.kind === 'fact' && <Field label="人物事实"><select className="story-studio-input" value={citation.target.factId}
       onChange={event => { patch(current => ({ ...current, target: { kind: 'fact', factId: event.target.value } })) }}>
       {workspace.facts.map(fact => <option key={fact.id} value={fact.id}>{fact.text.slice(0, 70)}</option>)}
+    </select></Field>}
+    {citation.target?.kind === 'event' && <Field label="故事事件"><select className="story-studio-input" value={citation.target.eventId}
+      onChange={event => { patch(current => ({ ...current, target: { kind: 'event', eventId: event.target.value } })) }}>
+      {workspace.events.map(event => <option key={event.id} value={event.id}>第 {event.turn} 回合 · {event.title}</option>)}
     </select></Field>}
     <button className="story-studio-button story-studio-danger" type="button" onClick={onDelete}>删除引用</button>
   </>
@@ -1052,7 +1068,8 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
     {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
       {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
         key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
-        <span>{citation.locator}</span><small>{citation.target === undefined ? '未关联' : citation.target.kind === 'node' ? '剧情节点' : '人物事实'}</small>
+        <span>{citation.locator}</span><small>{citation.target === undefined ? '未关联'
+          : citation.target.kind === 'node' ? '剧情节点' : citation.target.kind === 'fact' ? '人物事实' : '故事事件'}</small>
       </button>)}
     </div></div>}
     <div className="story-source-passages">{passages.map(passage => {
@@ -1896,8 +1913,11 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, la
         ...current,
         events: current.events.filter(event => event.id !== id),
         facts,
-        citations: current.citations.map(citation => citation.target?.kind === 'fact' && !factIds.has(citation.target.factId)
-          ? citationWithoutTarget(citation) : citation),
+        citations: current.citations.map(citation => (
+          citation.target?.kind === 'fact' && !factIds.has(citation.target.factId)
+        ) || (
+          citation.target?.kind === 'event' && citation.target.eventId === id
+        ) ? citationWithoutTarget(citation) : citation),
         graph: {
           ...current.graph,
           nodes: current.graph.nodes.map(node => node.sourceEventId === id ? nodeWithoutSourceEvent(node) : node),

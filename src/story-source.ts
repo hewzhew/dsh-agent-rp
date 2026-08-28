@@ -18,20 +18,14 @@ function sourceHeading(line: string): string | undefined {
   return line.length <= 120 && PLAIN_TEXT_HEADING.test(line) ? line : undefined
 }
 
-/** Split one source into bounded passages while retaining the nearest Markdown heading. */
+/** Split one source into bounded passages while retaining the nearest source heading. */
 export function splitStorySourcePassages(source: StorySource): readonly StorySourcePassage[] {
   const passages: StorySourcePassage[] = []
+  const lines = source.content.replace(/\r\n?/gu, '\n').split('\n')
+  const preservesMarkdownParagraphs = lines.some(line => /^#{1,6}\s+/u.test(line.trim()))
   let heading = ''
   let paragraph = 0
-  for (const line of source.content.replace(/\r\n?/gu, '\n').split('\n')) {
-    const block = line.trim()
-    if (block === '') continue
-    const nextHeading = sourceHeading(block)
-    if (nextHeading !== undefined) {
-      heading = nextHeading
-      paragraph = 0
-      continue
-    }
+  const appendBlock = (block: string): void => {
     for (let offset = 0; offset < block.length; offset += MAX_PASSAGE_CHARACTERS) {
       paragraph += 1
       passages.push({
@@ -41,5 +35,41 @@ export function splitStorySourcePassages(source: StorySource): readonly StorySou
       })
     }
   }
+  if (!preservesMarkdownParagraphs) {
+    for (const line of lines) {
+      const block = line.trim()
+      if (block === '') continue
+      const nextHeading = sourceHeading(block)
+      if (nextHeading !== undefined) {
+        heading = nextHeading
+        paragraph = 0
+      } else {
+        appendBlock(block)
+      }
+    }
+    return passages
+  }
+  let pending: string[] = []
+  const flush = (): void => {
+    if (pending.length === 0) return
+    appendBlock(pending.join('\n'))
+    pending = []
+  }
+  for (const line of lines) {
+    const block = line.trim()
+    if (block === '') {
+      flush()
+      continue
+    }
+    const nextHeading = sourceHeading(block)
+    if (nextHeading !== undefined) {
+      flush()
+      heading = nextHeading
+      paragraph = 0
+    } else {
+      pending.push(block)
+    }
+  }
+  flush()
   return passages
 }
