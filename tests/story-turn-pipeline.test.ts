@@ -346,9 +346,6 @@ test('runs logged story stages while keeping each character request privately sc
         else if (system.includes('指定人物认知')) {
           characterSystems.push(system)
           characterBodies.push(body)
-          const evidence = body.match(/character:[^"\\]+:example-dialogue/u)?.[0] ?? 'missing'
-          const targetSeed = targetSeedIds.find(id => id.startsWith(`${evidence}#seed-`)) ?? 'missing-target-seed'
-          const contextSeed = contextSeedIds[0] ?? 'missing-context-seed'
           text = body.includes('阿梨知道徽章')
             ? JSON.stringify({
               observation: '看见玩家举起徽章。',
@@ -359,7 +356,6 @@ test('runs logged story stages while keeping each character request privately sc
                 focus: '先确认眼前的刻痕。',
                 effect: '让对方暂缓结论，先确认刻痕。',
               },
-              voiceEvidence: [targetSeed, contextSeed, 'character:invented:example-dialogue'],
               insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
             })
             : JSON.stringify({
@@ -371,7 +367,6 @@ test('runs logged story stages while keeping each character request privately sc
                 focus: '仍然模糊的刻痕。',
                 effect: '让阿梨承认刻痕还没有看清。',
               },
-              voiceEvidence: [evidence],
               insights: [],
             })
         } else if (system.includes('剧情导演 Worker')) {
@@ -537,8 +532,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /不确定.*无法核验的徽章传闻.*无可核验依据/u)
   assert.doesNotMatch(webQuery, /超过轮数上限/u)
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
-  assert.match(characterBodies[0]!, /character:character-00000000-0000-4000-8000-000000000001:example-dialogue/u)
   assert.match(characterBodies[0]!, /先把眼前的事说清楚/u)
+  assert.doesNotMatch(characterBodies[0]!, /<voice_evidence>|local:source-|#seed-/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
   assert.match(characterSystems[0]!, /为了让场面热闹.*speech 必须为 null/u)
@@ -546,8 +541,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /focus 不是完整论点/u)
   assert.match(characterSystems[0]!, /一个对象、区别或直接答案/u)
   assert.match(characterSystems[0]!, /effect.*不会交给声音 Worker/u)
-  assert.match(characterSystems[0]!, /资料项编号.*\[目标人物\].*seed ID/u)
-  assert.match(characterSystems[0]!, /\[对话上下文\].*seed ID.*不能引用/u)
+  assert.match(characterSystems[0]!, /后续声音阶段会独立检索该人物的原作证据/u)
+  assert.match(characterSystems[0]!, /证据不足时让人物沉默/u)
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(characterSystems[0]!, /futureChoice.*下一轮仍会因此改变/u)
@@ -557,12 +552,11 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /发言焦点：先确认眼前的刻痕/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
-  assert.match(directorBody, /语气依据：\[character:character-00000000-0000-4000-8000-000000000001:example-dialogue\]\\n- 持久私有变化/u)
-  assert.doesNotMatch(directorBody, /语气依据：[^"\\]*#seed-/u)
+  assert.doesNotMatch(directorBody, /语气依据|#seed-/u)
   assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
   assert.match(characterBodies[1]!, /柏舟藏起了车票/u)
-  assert.match(characterBodies[1]!, /character:character-00000000-0000-4000-8000-000000000002:example-dialogue/u)
+  assert.doesNotMatch(characterBodies[1]!, /<voice_evidence>|local:source-|#seed-/u)
   assert.doesNotMatch(characterBodies[1]!, /阿梨知道徽章|下一幕会停电|第三幕打开/u)
   assert.equal(sectionSystems.length, 2)
   assert.match(sectionSystems[0]!, /叙事正文、环境、行动与对白/u)
@@ -578,9 +572,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceBody, /对话动作：warn/u)
   assert.match(voiceBody, /发言焦点：先确认眼前的刻痕/u)
   assert.doesNotMatch(voiceBody, /预期作用：让对方暂缓结论/u)
-  assert.match(voiceBody, /先把眼前的事说清楚/u)
   assert.match(voiceBody, /熟到省略礼貌和背景说明/u)
-  assert.match(voiceBody, /<voice_exchange>[\s\S]*\[目标人物\]\[示例\] 阿梨｜先把眼前的事说清楚。/u)
+  assert.doesNotMatch(voiceBody, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.match(voiceBody, /\[对话上下文\]\[原文\] 柏舟｜刻印はもう滲んで見えない。/u)
   assert.match(voiceBody, /\[目标人物\]\[原文\] 阿梨｜見えてから結論を出せばいい。/u)
   assert.match(voiceBody, /\[对话上下文\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
@@ -601,10 +594,10 @@ test('runs logged story stages while keeping each character request privately sc
   )
   assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:2/u)
   assert.match(firstSpeechPlan, /local:source-[0-9a-f-]+:12/u)
-  assert.match(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
+  assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(firstSpeechPlan, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
   assert.doesNotMatch(voiceBody, /柏舟藏起了车票/u)
-  assert.match(secondVoiceBody, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
+  assert.doesNotMatch(secondVoiceBody, new RegExp(`character:${bobId}:example-dialogue`, 'u'))
   assert.match(secondVoiceBody, /\[目标人物\]\[参考译文\] 柏舟｜刻痕已经糊得看不清了。/u)
   assert.match(secondVoiceBody, /\[对话上下文\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.doesNotMatch(secondVoiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)

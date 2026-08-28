@@ -21,6 +21,7 @@ import {
   createStoryCharacterId,
   createStoryNodeId,
   createStoryOutputId,
+  createStorySourceId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
@@ -469,7 +470,6 @@ test('keeps the exact world outcome while preserving only private-section charac
                 observation: '看见刚发生的结果。',
                 action: '',
                 speech: null,
-                voiceEvidence: [],
                 insights: body.includes('# 人物：博丽灵梦')
                   ? [{
                       kind: 'decision',
@@ -698,7 +698,6 @@ test('assembles a grounded world result and approved dialogue without unowned mo
                 focus: '魔理沙自己采用的接法。',
                 effect: '让魔理沙承认她自己把两个判断接在了一起。',
               },
-              voiceEvidence: [`character:${reimuId}:example-dialogue`],
               insights: [
                 {
                   kind: 'intention',
@@ -721,7 +720,6 @@ test('assembles a grounded world result and approved dialogue without unowned mo
                 focus: '灵梦不再继续说明的原因。',
                 effect: '让灵梦继续说明。',
               },
-              voiceEvidence: [`character:${marisaId}:example-dialogue`],
               insights: [],
             })
         } else if (system.includes('剧情导演 Worker')) {
@@ -783,8 +781,14 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.equal(stageRequests.every(request => request.dispatch.reasoningEffort === 'high'), true)
   assert.equal(stageRequests.some(request => request.stage === 'cast'), true)
   const characterRequests = stageRequests.filter(request => request.stage === 'character')
-  assert.match(JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages), /publicResponse=allowed/u)
+  const reimuCharacterBody = JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages)
+  assert.match(reimuCharacterBody, /publicResponse=allowed/u)
+  assert.doesNotMatch(reimuCharacterBody, /<voice_evidence>|#seed-/u)
   assert.match(JSON.stringify(characterRequests.find(request => request.subjectId === marisaId)?.dispatch.messages), /publicResponse=observe-only/u)
+  const voiceDraftBody = JSON.stringify(stageRequests.find(request => request.stage === 'voice'
+    && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
+  assert.match(voiceDraftBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
+  assert.match(voiceDraftBody, /\[目标人物\]\[示例\] 灵梦｜你自己说过的话，还要问我？/u)
   assert.deepEqual(stageRequests.flatMap(request =>
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
@@ -819,4 +823,47 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.match(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /博丽灵梦说/u)
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), false)
+
+  const sourced = store.save({
+    ...editable(saved),
+    sources: [{
+      id: createStorySourceId(),
+      name: '单段原作对白',
+      kind: 'original',
+      enabled: true,
+      content: '魔理沙：“你问的是哪句话？”\n灵梦：“你自己说过的话，还要问我？”',
+    }],
+  })
+  const sourcedSession = Session.create(SessionId('host-world-dialogue-sourced'))
+  sourcedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 32_768 } },
+  })
+  sourcedSession.append('turn/start', { turn: 3 })
+  sourcedSession.append('step/start', { turn: 3, step: 1 })
+  const sourcedAgent = {
+    id: sourcedSession.id,
+    options: { provider: 'fixture', model: 'fixture' },
+    session: sourcedSession,
+  } as Agent
+  await runStoryTurnPipeline({
+    ctx: fake,
+    agent: sourcedAgent,
+    store,
+    workspace: sourced,
+    turn: 3,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '魔理沙追问灵梦指的是哪句话，请让灵梦回答。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  const sourcedStageRequests = sourcedSession.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data]
+    : [])
+  const sourcedVoiceBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'voice'
+    && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
+  assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:1/u)
+  assert.doesNotMatch(sourcedVoiceBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
 })
