@@ -70,7 +70,14 @@ import {
   storySuggestionBatch,
 } from '../story-suggestion-batch.ts'
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
-import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
+import {
+  normalizeStorySourceContent,
+  splitLocatedStorySourcePassages,
+  splitStorySourcePassages,
+  storySourcePassageSections,
+  type LocatedStorySourcePassage,
+  type StorySourcePassage,
+} from '../story-source.ts'
 import {
   attributeStoryVoiceDocument,
   parseStoryVoiceDocument,
@@ -1322,6 +1329,19 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
 const SOURCE_VOICE_UNIT_PAGE_SIZE = 12
 const SOURCE_VOICE_DIAGNOSTIC_LIMIT = 16
 
+function normalizedSourceFilter(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]+/gu, '')
+}
+
+function passageContainsSpeaker(
+  passage: LocatedStorySourcePassage,
+  document: ReturnType<typeof parseStoryVoiceDocument>,
+  speakerNames: readonly string[],
+): boolean {
+  return document.occurrences.some(line => line.sourceStart < passage.sourceEnd && line.sourceEnd > passage.sourceStart
+    && storyVoiceSpeakerMatches(speakerNames, line.speaker))
+}
+
 function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectCitation, onAddCitation, onEditCharacter }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly source: StorySource
@@ -1331,11 +1351,15 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
   readonly onAddCitation: (passage: StorySourcePassage) => void
   readonly onEditCharacter: (id: string) => void
 }) {
-  const passages = splitStorySourcePassages(source)
+  const normalizedContent = useMemo(() => normalizeStorySourceContent(source.content), [source.content])
+  const passages = useMemo(() => splitLocatedStorySourcePassages(source), [source])
   const citations = workspace.citations.filter(citation => citation.sourceId === source.id)
   const [selectedVoiceCharacterId, setSelectedVoiceCharacterId] = useState(workspace.characters[0]?.id)
   const [visibleVoiceUnitCount, setVisibleVoiceUnitCount] = useState(SOURCE_VOICE_UNIT_PAGE_SIZE)
-  const voiceDocument = useMemo(() => parseStoryVoiceDocument(source.content), [source.content])
+  const [passageQuery, setPassageQuery] = useState('')
+  const [passageSection, setPassageSection] = useState('')
+  const [passageCharacterId, setPassageCharacterId] = useState('')
+  const voiceDocument = useMemo(() => parseStoryVoiceDocument(normalizedContent), [normalizedContent])
   const characterVoices = useMemo(() => workspace.characters.map(character => {
     const names = [character.name, ...(character.voiceAliases ?? [])]
     const parts = attributeStoryVoiceDocument(names, voiceDocument)
@@ -1352,9 +1376,31 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
   }))), [voiceDocument, workspace.characters])
   const unmatchedSpeakers = voiceAttributions.filter(item => item.characterIds.length === 0)
   const ambiguousSpeakers = voiceAttributions.filter(item => item.characterIds.length > 1)
+  const passageSectionByOrdinal = useMemo(() => storySourcePassageSections(passages), [passages])
+  const passageSections = useMemo(() => [...new Set(passageSectionByOrdinal)], [passageSectionByOrdinal])
+  const passageCharacters = useMemo(() => workspace.characters.map(character => {
+    const speakerNames = [character.name, ...(character.voiceAliases ?? [])]
+    return {
+      character,
+      passageCount: passages.filter(passage => passageContainsSpeaker(passage, voiceDocument, speakerNames)).length,
+    }
+  }), [passages, voiceDocument, workspace.characters])
+  const normalizedQuery = normalizedSourceFilter(passageQuery)
+  const selectedPassageCharacter = workspace.characters.find(character => character.id === passageCharacterId)
+  const selectedPassageSpeakerNames = selectedPassageCharacter === undefined
+    ? []
+    : [selectedPassageCharacter.name, ...(selectedPassageCharacter.voiceAliases ?? [])]
+  const visiblePassages = passages.filter(passage => (passageSection === '' || passageSectionByOrdinal[passage.ordinal] === passageSection)
+    && (normalizedQuery === '' || normalizedSourceFilter(`${passage.locator}\n${passage.text}`).includes(normalizedQuery))
+    && (selectedPassageCharacter === undefined || passageContainsSpeaker(passage, voiceDocument, selectedPassageSpeakerNames)))
   useEffect(() => {
     setVisibleVoiceUnitCount(SOURCE_VOICE_UNIT_PAGE_SIZE)
   }, [activeCharacterVoice?.character.id, source.id])
+  useEffect(() => {
+    setPassageQuery('')
+    setPassageSection('')
+    setPassageCharacterId('')
+  }, [source.id])
   return <div className="story-source-reader">
     <div className="story-studio-view-heading"><div><button className="story-source-back" type="button" onClick={onBack}>← 资料库</button>
       <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div></div>
@@ -1407,6 +1453,24 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
           && <small>另有 {String(unmatchedSpeakers.length + ambiguousSpeakers.length - SOURCE_VOICE_DIAGNOSTIC_LIMIT)} 个署名未展开。</small>}
       </div>}
     </section>}
+    <section className="story-source-browser" aria-label="在资料中查找">
+      <div className="story-source-browser-heading"><div><strong>在资料中查找</strong><span>按章节、人物署名或正文关键词收窄原文，不改动资料内容。</span></div>
+        <b>{visiblePassages.length}/{passages.length} 段</b></div>
+      <div className="story-source-browser-controls">
+        <label><span>章节</span><select className="story-studio-input" value={passageSection} onChange={event => { setPassageSection(event.target.value) }}>
+          <option value="">全部章节</option>{passageSections.map(section => <option value={section} key={section}>{section}</option>)}
+        </select></label>
+        <label><span>人物署名</span><select className="story-studio-input" value={passageCharacterId} onChange={event => { setPassageCharacterId(event.target.value) }}>
+          <option value="">全部人物</option>{passageCharacters.map(({ character, passageCount }) => <option value={character.id} disabled={passageCount === 0} key={character.id}>
+            {character.name}（{passageCount} 段）
+          </option>)}
+        </select></label>
+        <label className="story-source-browser-query"><span>正文关键词</span><input className="story-studio-input" type="search" value={passageQuery}
+          placeholder="输入一段原句、地点或事件" onChange={event => { setPassageQuery(event.target.value) }} /></label>
+        {(passageSection !== '' || passageCharacterId !== '' || passageQuery !== '') && <button className="story-studio-button" type="button"
+          onClick={() => { setPassageSection(''); setPassageCharacterId(''); setPassageQuery('') }}>清除筛选</button>}
+      </div>
+    </section>
     {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
       {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
         key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
@@ -1414,7 +1478,7 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
           : citation.target.kind === 'node' ? '剧情节点' : citation.target.kind === 'fact' ? '人物事实' : '故事事件'}</small>
       </button>)}
     </div></div>}
-    <div className="story-source-passages">{passages.map(passage => {
+    <div className="story-source-passages">{visiblePassages.map(passage => {
       const passageCitations = citations.filter(citation => citation.locator === passage.locator && citation.quote === passage.text)
       return <div className="story-source-passage" key={`${source.id}:${String(passage.ordinal)}`}>
         <div className="story-source-passage-heading"><span>{passage.locator}</span><button className="story-source-cite-button" type="button"
@@ -1423,7 +1487,9 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
         {passageCitations.length > 0 && <div className="story-source-passage-actions">{passageCitations.map(citation => <button className="story-citation-link" key={citation.id}
           type="button" onClick={() => { onSelectCitation(citation.id) }}>查看引用</button>)}</div>}
       </div>
-    })}{passages.length === 0 && <div className="story-studio-empty"><span>在右侧加入原文或研究内容，阅读器会按标题和自然段整理。</span></div>}</div>
+    })}{passages.length === 0
+      ? <div className="story-studio-empty"><span>在右侧加入原文或研究内容，阅读器会按标题和自然段整理。</span></div>
+      : visiblePassages.length === 0 && <div className="story-studio-empty"><span>当前筛选没有命中段落；可以切换章节、人物或缩短关键词。</span></div>}</div>
   </div>
 }
 

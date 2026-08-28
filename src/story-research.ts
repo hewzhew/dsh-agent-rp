@@ -1,7 +1,7 @@
 /** Deterministic local retrieval over editable story sources. */
 
 import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
-import { splitStorySourcePassages } from './story-source.ts'
+import { splitStorySourcePassages, storySourcePassageSections } from './story-source.ts'
 
 /** One bounded local passage with a stable reference usable by the research Worker. */
 export interface StorySourceExcerpt {
@@ -52,14 +52,19 @@ export function searchStoryWorkspaceSourceExcerpts(
   const passagesBySource = new Map(workspace.sources.map(source => [source.id, splitStorySourcePassages(source)]))
   const ranked = workspace.sources.flatMap((source, sourceIndex) => {
     if (!source.enabled || source.kind === 'web') return []
-    return splitStorySourcePassages(source).map((passage, chunkIndex): RankedExcerpt => ({
+    const passages = passagesBySource.get(source.id) ?? []
+    const sections = storySourcePassageSections(passages)
+    return passages.map((passage, chunkIndex): RankedExcerpt => ({
       sourceIndex,
       chunkIndex,
       sourceId: source.id,
       sourceName: source.name,
       locator: passage.locator,
       text: passage.text,
-      score: relevance(passage.text, terms),
+      score: relevance(passage.text, terms) * 4
+        + relevance(passage.locator, terms) * 3
+        + relevance(sections[chunkIndex] ?? '', terms) * 3
+        + relevance(source.name, terms) * 2,
     }))
   }).filter(excerpt => excerpt.score > 0).sort((left, right) => right.score - left.score
     || left.sourceIndex - right.sourceIndex || left.chunkIndex - right.chunkIndex)

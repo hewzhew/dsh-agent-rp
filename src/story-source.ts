@@ -18,6 +18,20 @@ export interface LocatedStorySourcePassage extends StorySourcePassage {
   readonly sourceEnd: number
 }
 
+const WIKI_SECTION_HEADING = /^(.{1,160}?)\s*\[(?:编辑|edit)\]$/iu
+
+/** Project stable section labels without changing existing passage locators or ordinals. */
+export function storySourcePassageSections(passages: readonly StorySourcePassage[]): readonly string[] {
+  let section = '全文'
+  return passages.map(passage => {
+    const located = /^(.*?) · 第 \d+ 段$/u.exec(passage.locator)?.[1]?.trim()
+    const wiki = WIKI_SECTION_HEADING.exec(passage.text)?.[1]?.trim()
+    const next = located === undefined || located === '' ? wiki : located
+    if (next !== undefined && next !== '') section = next
+    return section
+  })
+}
+
 interface IndexedSourceLine {
   readonly sourceStart: number
   readonly text: string
