@@ -698,6 +698,22 @@ function normalizeSourceOrigin(value: unknown): StorySourceOrigin {
     if (Object.keys(value).some(key => key !== 'kind' && key !== 'resource')) throw new Error('故事资料来源无效')
     return { kind: 'resource', resource: normalizeResourceSelection(value.resource, 'world', '故事资料资源引用') }
   }
+  if (value.kind === 'url') {
+    if (typeof value.truncated !== 'boolean'
+      || Object.keys(value).some(key => !['kind', 'url', 'requestedUrl', 'truncated'].includes(key))) {
+      throw new Error('故事资料 URL 来源无效')
+    }
+    const url = cleanWebUrl(value.url, '故事资料来源 URL')
+    const requestedUrl = value.requestedUrl === undefined
+      ? undefined
+      : cleanWebUrl(value.requestedUrl, '故事资料请求 URL')
+    return {
+      kind: 'url',
+      url,
+      ...(requestedUrl === undefined || requestedUrl === url ? {} : { requestedUrl }),
+      truncated: value.truncated,
+    }
+  }
   if (value.kind !== 'web') throw new Error('故事资料来源无效')
   const sessionId = cleanLabel(value.sessionId, '故事资料来源 Session', 240)
   if (sessionId === '') throw new Error('故事资料来源 Session 不能为空')
@@ -725,6 +741,14 @@ function normalizeSource(value: unknown): StorySource {
     content: cleanDocument(value.content, '故事资料内容'),
     ...(value.origin === undefined ? {} : { origin: normalizeSourceOrigin(value.origin) }),
   }
+}
+
+function sourceOriginUrls(source: StorySource): readonly string[] {
+  if (source.origin?.kind === 'web') return [source.origin.url]
+  if (source.origin?.kind !== 'url') return []
+  return source.origin.requestedUrl === undefined
+    ? [source.origin.url]
+    : [source.origin.url, source.origin.requestedUrl]
 }
 
 function normalizeResearchItem(value: unknown): StoryResearchItem {
@@ -884,7 +908,7 @@ function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWor
   const researchInbox = value.researchInbox.map(normalizeResearchItem)
   assertUnique(researchInbox.map(item => item.id), '研究收件箱项目')
   assertUnique(researchInbox.map(item => item.url), '研究收件箱 URL')
-  const acceptedWebUrls = new Set(sources.flatMap(source => source.origin?.kind === 'web' ? [source.origin.url] : []))
+  const acceptedWebUrls = new Set(sources.flatMap(sourceOriginUrls))
   if (researchInbox.some(item => acceptedWebUrls.has(item.url))) throw new Error('研究收件箱包含已经收为资料的 URL')
   const activeNodeId = value.graph.activeNodeId
   if (activeNodeId !== undefined) {
@@ -1618,6 +1642,25 @@ export class StoryWorkspaceStore {
     return this.get(snapshot.id)
   }
 
+  /** Append one already-fetched source without overwriting a concurrently edited workspace. */
+  appendSource(id: string, revision: number, source: StorySource): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, revision)
+    const normalized = normalizeSource(source)
+    const importedUrls = new Set(sourceOriginUrls(normalized))
+    if (importedUrls.size > 0 && current.sources.some(candidate =>
+      sourceOriginUrls(candidate).some(url => importedUrls.has(url)))) throw new Error('这个网页已经在场地资料中')
+    const snapshot = normalizeWorkspace({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      sources: [...current.sources, normalized],
+      researchInbox: current.researchInbox.filter(item => !importedUrls.has(item.url)),
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
+    return this.get(snapshot.id)
+  }
+
   /** List resource-owned worlds, including recipes whose trusted module is not currently installed. */
   worldResources(): readonly PlayWorldResourceDescriptor[] {
     if (this.resources === undefined) return []
@@ -2029,7 +2072,7 @@ export class StoryWorkspaceStore {
     })
     const knownResearchUrls = new Set([
       ...current.researchInbox.map(item => item.url),
-      ...current.sources.flatMap(source => source.origin?.kind === 'web' ? [source.origin.url] : []),
+      ...current.sources.flatMap(sourceOriginUrls),
     ])
     const researchInbox = [...current.researchInbox]
     for (const candidate of materialization.webResearch) {

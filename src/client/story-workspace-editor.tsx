@@ -120,8 +120,14 @@ interface StoryWorkspaceResponse {
   readonly worldModuleAvailable?: boolean | null
   readonly webFetchAvailable?: boolean
   readonly webSearchAvailable?: boolean
+  readonly sourceImport?: { readonly sourceId?: string; readonly truncated?: boolean }
   readonly workspaces?: readonly StoryWorkspaceSummary[]
   readonly error?: string
+}
+
+interface StorySourceImportResult extends StoryWorkspaceResult {
+  readonly sourceId: string
+  readonly truncated: boolean
 }
 
 interface StoryWorkspaceResult {
@@ -366,6 +372,30 @@ async function saveWorkspace(workspace: StoryWorkspaceSnapshot): Promise<StoryWo
     }),
   })
   return workspaceResult(value, '游玩场地保存')
+}
+
+async function importStorySourceUrl(
+  workspace: StoryWorkspaceSnapshot,
+  url: string,
+  name: string,
+  kind: 'original' | 'reference',
+): Promise<StorySourceImportResult> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/sources/url`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      format: 0,
+      revision: workspace.revision,
+      url,
+      ...(name.trim() === '' ? {} : { name: name.trim() }),
+      kind,
+    }),
+  })
+  const result = workspaceResult(value, '网址资料导入')
+  if (typeof value.sourceImport?.sourceId !== 'string' || typeof value.sourceImport.truncated !== 'boolean') {
+    throw new Error('网址资料导入响应无效')
+  }
+  return { ...result, sourceId: value.sourceImport.sourceId, truncated: value.sourceImport.truncated }
 }
 
 async function listPlayWorldResources(): Promise<readonly PlayWorldResourceDescriptor[]> {
@@ -1168,6 +1198,10 @@ function SourceInspector({ source, update, onDelete }: {
     <h2>{source.name}</h2><div className="story-studio-inspector-subtitle">{sourceKindLabels[source.kind]}资料</div>
     {source.origin?.kind === 'web' && <div className="story-source-origin">
       <span>来自第 {source.origin.turn} 回合网络研究</span>
+      <a href={source.origin.url} target="_blank" rel="noreferrer">打开原网页 ↗</a>
+    </div>}
+    {source.origin?.kind === 'url' && <div className="story-source-origin">
+      <span>{source.origin.truncated ? '直接导入 · 正文已按安全上限截断' : '直接从网页导入'}</span>
       <a href={source.origin.url} target="_blank" rel="noreferrer">打开原网页 ↗</a>
     </div>}
     <TextField label="资料名称" rows={1} value={source.name} onChange={value => { patch(current => ({ ...current, name: value })) }} />
@@ -2318,6 +2352,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   const [worldModuleAvailable, setWorldModuleAvailable] = useState<boolean | null>(null)
   const [webFetchAvailable, setWebFetchAvailable] = useState<boolean | null>(null)
   const [webSearchAvailable, setWebSearchAvailable] = useState<boolean | null>(null)
+  const [sourceUrlOpen, setSourceUrlOpen] = useState(false)
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [sourceUrlName, setSourceUrlName] = useState('')
+  const [sourceUrlKind, setSourceUrlKind] = useState<'original' | 'reference'>('reference')
   const [view, setView] = useState<StudioView>('world')
   const [selection, setSelection] = useState<StudioSelection>()
   const [readerSourceId, setReaderSourceId] = useState<string>()
@@ -2353,6 +2391,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     setDirty(false)
     setSelection(undefined)
     setReaderSourceId(undefined)
+    setSourceUrlOpen(false)
+    setSourceUrl('')
+    setSourceUrlName('')
+    setSourceUrlKind('reference')
     setView('world')
     setPerspectiveId(undefined)
     setPreviewId(undefined)
@@ -2443,6 +2485,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setDirty(false)
       setSelection(undefined)
       setReaderSourceId(undefined)
+      setSourceUrlOpen(false)
+      setSourceUrl('')
+      setSourceUrlName('')
+      setSourceUrlKind('reference')
       setView('world')
       setNotice('新场地已经准备好')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
@@ -2646,6 +2692,26 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setSaving(false)
       if (sourceFileInputRef.current !== null) sourceFileInputRef.current.value = ''
     }
+  }
+  const importSourceFromUrl = (): void => {
+    if (workspace === undefined || dirty || sourceUrl.trim() === '') return
+    setSaving(true)
+    setError(undefined)
+    void importStorySourceUrl(workspace, sourceUrl.trim(), sourceUrlName, sourceUrlKind).then(async imported => {
+      setWorkspace(imported.workspace)
+      setWorldTurn(imported.worldTurn)
+      setWorldModuleAvailable(imported.worldModuleAvailable)
+      setWebFetchAvailable(imported.webFetchAvailable)
+      setWebSearchAvailable(imported.webSearchAvailable)
+      setItems(await listWorkspaces())
+      setDirty(false)
+      setSourceUrlOpen(false)
+      setSourceUrl('')
+      setSourceUrlName('')
+      setSourceUrlKind('reference')
+      select({ kind: 'source', id: imported.sourceId })
+      setNotice(imported.truncated ? '网页资料已经导入；正文超过安全上限的部分未保存' : '网页资料已经导入并保留来源地址')
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const addCitation = (source: StorySource, passage: StorySourcePassage): void => {
     const id = `citation-${createClientOpaqueUuid()}`
@@ -2882,19 +2948,41 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   } else if (view === 'sources') {
     main = readerSource === undefined
       ? <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>原著与研究资料</h1><p>按章节翻阅原文，把准确段落连接到剧情和人物事实。</p></div><div className="story-studio-actions">
-        <span className="story-web-capability" data-available={webSearchAvailable === true && webFetchAvailable === true}
+        <span className="story-web-capability" data-available={webFetchAvailable === true}
           title={webSearchAvailable === true
             ? webFetchAvailable === true ? '研究 Worker 可以搜索网络并读取相关页面正文。' : '研究 Worker 可以搜索网络，但当前 Host 不能读取结果页面正文。'
-            : '研究 Worker 仍会使用本地资料，但不能追加网络查询。'}>
+            : webFetchAvailable === true ? '可以导入已知网页；研究 Worker 仍只使用本地资料。' : '研究 Worker 仍会使用本地资料，但不能追加网络查询。'}>
           {webSearchAvailable === null || webFetchAvailable === null
             ? '正在确认网络研究…'
             : webSearchAvailable ? webFetchAvailable ? '网络搜索与正文读取已接入' : '网络搜索已接入 · 无正文读取'
-              : '当前 Host 未接入网络研究'}
+              : webFetchAvailable ? '可以导入已知网页 · 无网络搜索' : '当前 Host 未接入网络研究'}
         </span>
+        <button className="story-studio-button" type="button" disabled={saving || dirty || webFetchAvailable !== true}
+          title={dirty ? '先保存当前修改，再导入网页资料' : webFetchAvailable === false ? '当前 Host 没有网页正文读取能力' : undefined}
+          onClick={() => { setSourceUrlOpen(current => !current) }}>从网址导入</button>
         <button className="story-studio-button story-studio-button-primary" type="button" disabled={saving}
           onClick={() => { sourceFileInputRef.current?.click() }}>导入 TXT / Markdown</button>
         <button className="story-studio-button" type="button" onClick={addSource}>＋ 空白资料</button>
       </div></div>
+        {sourceUrlOpen && <section className="story-source-url-import" aria-label="从网址导入资料">
+          <div className="story-source-url-fields">
+            <Field label="网页地址"><input className="story-studio-input" type="url" placeholder="https://…" value={sourceUrl}
+              onChange={event => { setSourceUrl(event.target.value) }} /></Field>
+            <Field label="资料名称（可选）"><input className="story-studio-input" value={sourceUrlName}
+              onChange={event => { setSourceUrlName(event.target.value) }} /></Field>
+            <Field label="资料用途"><select className="story-studio-input" value={sourceUrlKind}
+              onChange={event => { setSourceUrlKind(event.target.value === 'original' ? 'original' : 'reference') }}>
+              <option value="reference">参考资料</option><option value="original">原著正文</option>
+            </select></Field>
+          </div>
+          <div className="story-source-url-foot"><span>{sourceUrlKind === 'original'
+            ? '原著正文会参与角色语气检索，请只用于你确认过的原作文本。'
+            : '参考资料参与设定检索，但不会被当作角色原作台词。'}</span><div className="story-studio-actions">
+            <button className="story-studio-button story-studio-button-primary" type="button" disabled={saving || sourceUrl.trim() === ''}
+              onClick={importSourceFromUrl}>读取并导入</button>
+            <button className="story-studio-button" type="button" disabled={saving} onClick={() => { setSourceUrlOpen(false) }}>取消</button>
+          </div></div>
+        </section>}
         {workspace.researchInbox.length > 0 && <section className="story-research-inbox">
           <div className="story-research-heading"><div><strong>研究收件箱</strong><span>网络结果不会自动成为故事事实；收为资料后才能被后续检索和引用。</span></div><span>{workspace.researchInbox.length} 条待处理</span></div>
           <div className="story-research-grid">{workspace.researchInbox.map(item => <article className="story-research-card" key={item.id}>
