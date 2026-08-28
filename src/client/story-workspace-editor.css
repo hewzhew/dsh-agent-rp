@@ -486,6 +486,8 @@
 .story-character-panel-heading strong { display: block; font-size: 13px; }
 .story-character-panel-heading span { color: var(--studio-muted); display: block; font-size: 9px; line-height: 1.5; margin-top: 3px; }
 .story-character-fields { display: grid; gap: 1px; }
+.story-character-source-sync { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 10px; }
+.story-character-source-sync span { color: var(--studio-muted); font-size: 9px; line-height: 1.45; }
 .story-character-state-grid { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
 .story-character-help { color: var(--studio-muted); font-size: 11px; line-height: 1.65; margin: 0; }
 .story-character-fact-list { display: grid; gap: 8px; }

@@ -44,6 +44,7 @@ import {
 import {
   ROLEPLAY_RESOURCE_CATALOG_PATH,
   type RoleplayResourceDescriptor,
+  type RoleplayResourceSelection,
 } from '../roleplay-resource-catalog-protocol.ts'
 import {
   STORY_WORKSPACES_PATH,
@@ -464,7 +465,7 @@ async function dispatchPlayWorldAction(
 async function bindStoryCharacterActor(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
-  actorId?: string,
+  actor?: RoleplayResourceSelection,
 ): Promise<StoryWorkspaceResult> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/characters/${encodeURIComponent(characterId)}/actor`, {
     method: 'POST',
@@ -473,7 +474,7 @@ async function bindStoryCharacterActor(
       format: 0,
       revision: workspace.revision,
       characterId,
-      ...(actorId === undefined ? {} : { actor: { kind: 'actor' as const, id: actorId } }),
+      ...(actor === undefined ? {} : { actor }),
     }),
   })
   return workspaceResult(value, '人物角色卡绑定')
@@ -835,7 +836,11 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
   readonly setPerspectiveId: (id: string | undefined) => void
   readonly setPreviewId: (id: string | undefined) => void
   readonly openStoryMap: () => void
-  readonly onBindActor: (characterId: string, actorId?: string) => void
+  readonly onBindActor: (
+    characterId: string,
+    actor?: RoleplayResourceSelection,
+    intent?: 'bind' | 'refresh',
+  ) => void
   readonly onDelete: (id: string) => void
   readonly selectEvent: (id: string) => void
   readonly addCharacter: () => void
@@ -895,9 +900,16 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
       <section className="story-character-panel story-character-panel-wide"><div className="story-character-panel-heading"><div><strong>人物设定</strong><span>角色卡中持续影响人物身份与行动方式的内容。</span></div></div>
         <div className="story-character-fields">
           <Field label="角色卡来源"><select className="story-studio-input" value={character.actor?.id ?? ''} disabled={busy || dirty}
-            onChange={event => { onBindActor(character.id, event.target.value === '' ? undefined : event.target.value) }}>
+            onChange={event => { onBindActor(character.id, event.target.value === ''
+              ? undefined
+              : { kind: 'actor', id: event.target.value }) }}>
             <option value="">手写人物</option>{actorResources.map(actor => <option key={actor.id} value={actor.id}>{actor.name}</option>)}
           </select></Field>
+          {character.actor !== undefined && <div className="story-character-source-sync">
+            <button className="story-studio-button" type="button" disabled={busy || dirty}
+              onClick={() => { onBindActor(character.id, character.actor, 'refresh') }}>重新同步角色卡设定</button>
+            <span>更新姓名与角色卡档案；保留本局动态、认知、事件和世界进度。</span>
+          </div>}
           {dirty && <p className="story-studio-inline-note">保存当前修改后即可更换角色卡来源。</p>}
           <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
           <TextField label="原作署名" rows={4} value={(character.voiceAliases ?? []).join('\n')}
@@ -2619,18 +2631,26 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setNotice(`${action.label}已经结算`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
-  const bindActor = (characterId: string, actorId?: string): void => {
+  const bindActor = (
+    characterId: string,
+    actor?: RoleplayResourceSelection,
+    intent: 'bind' | 'refresh' = 'bind',
+  ): void => {
     if (workspace === undefined || dirty) return
     setSaving(true)
     setError(undefined)
-    void bindStoryCharacterActor(workspace, characterId, actorId).then(async saved => {
+    void bindStoryCharacterActor(workspace, characterId, actor).then(async saved => {
       setWorkspace(saved.workspace)
       setWorldTurn(saved.worldTurn)
       setWorldModuleAvailable(saved.worldModuleAvailable)
       setWebFetchAvailable(saved.webFetchAvailable)
       setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
-      setNotice(actorId === undefined ? '人物已经改为手写档案' : '角色卡已经绑定到本局人物')
+      setNotice(actor === undefined
+        ? '人物已经改为手写档案'
+        : intent === 'refresh'
+          ? '角色卡档案已经重新同步；本局动态、认知和世界进度保持不变'
+          : '角色卡已经绑定到本局人物')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const advanceSession = (request: string): void => {
