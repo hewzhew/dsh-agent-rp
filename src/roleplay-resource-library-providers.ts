@@ -210,10 +210,13 @@ export function roleplayLibraryResourceProviders(libraries: {
       const resolved = libraries.characters.resolve(libraryId(descriptor.id, 'character:library:'))
       if (resolved.detail.archived) throw new Error('请先恢复这个角色，再绑定人物')
       const name = resolved.card.nickname?.trim() || resolved.card.name
+      const voiceAliases = [...new Set([resolved.card.name.trim(), resolved.card.nickname?.trim() ?? ''])]
+        .filter(alias => alias !== '' && alias !== resolved.detail.displayName)
       const original = `你是${name}。直接以${name}的身份与用户相处和交谈。`
       const expand = (value: string): string => substituteCardMacros(value, resolved.card)
       return {
         name: resolved.detail.displayName,
+        voiceAliases,
         profile: {
           description: expand(resolved.card.description),
           personality: expand(resolved.card.personality),

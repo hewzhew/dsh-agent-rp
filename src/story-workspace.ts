@@ -1451,16 +1451,23 @@ function assemblePlayWorldCast(
     if (selection.characterId !== undefined && existing === undefined) {
       throw new Error(`人物槽位 ${JSON.stringify(selection.slotId)} 指向的既有人物不存在`)
     }
+    const existingVoiceAliases = existing?.voiceAliases ?? []
     const character: StoryCharacter = existing === undefined
       ? {
           id: createStoryCharacterId(),
           name: projection.name,
-          voiceAliases: [],
+          voiceAliases: projection.voiceAliases,
           profile: projection.profile,
           state: emptyCharacterState(),
           actor: selection.actor,
         }
-      : { ...existing, name: projection.name, profile: projection.profile, actor: selection.actor }
+      : {
+          ...existing,
+          name: projection.name,
+          voiceAliases: existingVoiceAliases.length > 0 ? existingVoiceAliases : projection.voiceAliases,
+          profile: projection.profile,
+          actor: selection.actor,
+        }
     usedCharacterIds.add(character.id)
     return { selection, character }
   })
@@ -1869,7 +1876,14 @@ export class StoryWorkspaceStore {
         const { actor: _actor, ...detached } = character
         return detached
       }
-      return { ...character, name: projection.name, profile: projection.profile, actor: request.actor }
+      const existingVoiceAliases = character.voiceAliases ?? []
+      return {
+        ...character,
+        name: projection.name,
+        voiceAliases: existingVoiceAliases.length > 0 ? existingVoiceAliases : projection.voiceAliases,
+        profile: projection.profile,
+        actor: request.actor,
+      }
     })
     const snapshot = normalizeWorkspace({
       ...current,
