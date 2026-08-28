@@ -460,6 +460,8 @@ test('keeps the exact world outcome while preserving only private-section charac
         const body = JSON.stringify(options.messages ?? [])
         const text = system.includes('结构化世界行动 Worker')
           ? JSON.stringify({ actionId: 'roll' })
+          : system.includes('人物参与路由 Worker')
+            ? JSON.stringify({ publicCharacterIds: [reimuId] })
           : system.includes('剧情研究 Worker')
             ? JSON.stringify({ findings: [], followUps: [] })
             : system.includes('指定人物认知')
@@ -536,6 +538,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data] : [])
   assert.equal(stageRequests.find(request => request.stage === 'world-action')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
   const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
@@ -544,11 +547,13 @@ test('keeps the exact world outcome while preserving only private-section charac
   const marisaRequest = characterRequests.find(request => request.subjectId === marisaId)
   const sanaeRequest = characterRequests.find(request => request.subjectId === sanaeId)
   assert.match(JSON.stringify(reimuRequest?.dispatch), /thisCharacterRole=actor/u)
+  assert.match(JSON.stringify(reimuRequest?.dispatch.messages), /publicResponse=allowed/u)
   assert.match(JSON.stringify(marisaRequest?.dispatch), /thisCharacterRole=observer/u)
-  assert.match(JSON.stringify(marisaRequest?.dispatch), /只能由 actor 采用对应要求/u)
+  assert.match(JSON.stringify(marisaRequest?.dispatch.messages), /publicResponse=observe-only/u)
   assert.match(JSON.stringify(marisaRequest?.dispatch), /让魔理沙留意结果/u)
   assert.match(JSON.stringify(sanaeRequest?.dispatch), /thisCharacterRole=observer/u)
-  assert.match(JSON.stringify(sanaeRequest?.dispatch), /玩家本轮没有点名此人物/u)
+  assert.match(JSON.stringify(sanaeRequest?.dispatch.messages), /publicResponse=observe-only/u)
+  assert.match(JSON.stringify(sanaeRequest?.dispatch), /让魔理沙留意结果/u)
   assert.deepEqual(result.worldEventSequences, [2, 3])
   assert.equal(result.hostOnlyWorldDraft, undefined)
   assert.match(result.finalDraft, /## 对局正文\s+博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
@@ -617,6 +622,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const proseId = createStoryOutputId()
   const historyId = createStoryOutputId()
   const reimu = character(reimuId, '博丽灵梦')
+  const marisa = character(marisaId, '雾雨魔理沙')
   const configured = store.save({
     ...editable(created),
     characters: [
@@ -624,7 +630,10 @@ test('assembles a grounded world result and approved dialogue without unowned mo
         ...reimu,
         profile: { ...reimu.profile, exampleDialogue: '灵梦：“你自己说过的话，还要问我？”' },
       },
-      character(marisaId, '雾雨魔理沙'),
+      {
+        ...marisa,
+        profile: { ...marisa.profile, exampleDialogue: '魔理沙：“说过又怎么样？”' },
+      },
     ],
     outputs: [
       { id: proseId, name: '对局正文', kind: 'prose', enabled: true, instructions: '只写本轮。' },
@@ -667,6 +676,8 @@ test('assembles a grounded world result and approved dialogue without unowned mo
         let text: string
         if (system.includes('结构化世界行动 Worker')) {
           text = JSON.stringify({ actionId: 'roll' })
+        } else if (system.includes('人物参与路由 Worker')) {
+          text = JSON.stringify({ publicCharacterIds: [reimuId] })
         } else if (system.includes('剧情研究 Worker')) {
           text = JSON.stringify({ findings: [], followUps: [] })
         } else if (system.includes('指定人物认知')) {
@@ -682,7 +693,17 @@ test('assembles a grounded world result and approved dialogue without unowned mo
               voiceEvidence: [`character:${reimuId}:example-dialogue`],
               insights: [],
             })
-            : JSON.stringify({ observation: '灵梦刚完成本轮。', action: '', speech: null, voiceEvidence: [], insights: [] })
+            : JSON.stringify({
+              observation: '灵梦刚完成本轮。',
+              action: '抢在灵梦之前追问。',
+              speech: {
+                respondsTo: '灵梦刚完成本轮。',
+                move: 'question',
+                content: '追问灵梦为什么不继续说明。',
+              },
+              voiceEvidence: [`character:${marisaId}:example-dialogue`],
+              insights: [],
+            })
         } else if (system.includes('剧情导演 Worker')) {
           text = JSON.stringify({ sections: [
             { sectionId: proseId, beats: [], speech: [{ characterId: reimuId }] },
@@ -733,10 +754,15 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     ? [event.data]
     : [])
   assert.equal(stageRequests.every(request => request.dispatch.reasoningEffort === 'high'), true)
+  assert.equal(stageRequests.some(request => request.stage === 'cast'), true)
+  const characterRequests = stageRequests.filter(request => request.stage === 'character')
+  assert.match(JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages), /publicResponse=allowed/u)
+  assert.match(JSON.stringify(characterRequests.find(request => request.subjectId === marisaId)?.dispatch.messages), /publicResponse=observe-only/u)
   assert.deepEqual(stageRequests.flatMap(request =>
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
       : []), [])
+  assert.doesNotMatch(result.finalDraft, /说过又怎么样|为什么不继续说明|抢在灵梦之前/u)
   session.append('assistant/message', {
     turn: 2,
     step: 1,
