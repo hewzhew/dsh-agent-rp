@@ -84,6 +84,11 @@ import { executeAgentRpCommand } from './agent-rp-command.ts'
 import { importCharacterFile } from './character-library-client.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
 import {
+  inspectStoryPlayWorldReadiness,
+  storyPlayWorldParticipants,
+} from './story-play-world-readiness.ts'
+import { assignImportedStoryWorldActor } from './story-world-actor-assignment.ts'
+import {
   decodeStorySourceFile,
   STORY_SOURCE_FILE_ACCEPT,
   storySourceNameFromFile,
@@ -1746,51 +1751,61 @@ function WorldEventList({ events }: { readonly events: readonly PlayWorldEvent[]
   </section>
 }
 
-function playWorldParticipants(workspace: StoryWorkspaceSnapshot): readonly StoryCharacter[] {
-  const ids = workspace.world !== undefined && isFlyingChessWorldState(workspace.world.state)
-    ? workspace.world.state.playerOrder
-    : (workspace.worldBinding?.cast.length ?? 0) > 0
-      ? workspace.worldBinding?.cast.map(binding => binding.characterId) ?? []
-      : workspace.characters.map(character => character.id)
-  const characters = new Map(workspace.characters.map(character => [character.id, character]))
-  return [...new Set(ids)].flatMap(id => {
-    const character = characters.get(id)
-    return character === undefined ? [] : [character]
-  })
+function readinessCharacterNames(characters: readonly StoryCharacter[]): string {
+  return characters.map(character => character.name).join('、')
 }
 
-function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onOpenSources }: {
+function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onOpenCharacter, onOpenSources }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly configureDisabled: boolean
   readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
 }) {
-  const participants = playWorldParticipants(workspace)
-  const actorCount = participants.filter(character => character.actor !== undefined).length
-  const dialogueCount = participants.filter(character => character.profile.exampleDialogue.trim() !== '').length
-  const originalSources = workspace.sources.filter(source => source.enabled && source.kind === 'original')
-  const originalVoiceLines = originalSources.flatMap(source => parseStoryVoiceDocument(source.content).orderedLines)
-  const sourceVoiceCount = participants.filter(character => {
-    const names = [character.name, ...(character.voiceAliases ?? [])]
-    return originalVoiceLines.some(line => storyVoiceSpeakerMatches(names, line.speaker))
-  }).length
-  const missingActor = actorCount < participants.length
-  const missingSourceVoice = sourceVoiceCount < participants.length
+  const readiness = inspectStoryPlayWorldReadiness(workspace)
+  const participantCount = readiness.participants.length
+  const actorCount = participantCount - readiness.missingActors.length
+  const dialogueCount = participantCount - readiness.missingDialogue.length
+  const sourceVoiceCount = participantCount - readiness.missingSourceVoice.length
+  const firstMissingDialogue = readiness.missingDialogue[0]
+  const firstParticipant = readiness.participants[0]
+  const openActor = onConfigureCast ?? (firstParticipant === undefined ? undefined : () => { onOpenCharacter(firstParticipant.id) })
+  const evidenceSummary = participantCount === 0
+    ? '先为这个世界选择参与人物，再补充各自的角色卡与原著证据。'
+    : readiness.missingActors.length > 0
+      ? `先为${readinessCharacterNames(readiness.missingActors)}绑定角色卡；绑定只更新人物档案，棋局状态保持原样。`
+    : readiness.missingDialogue.length > 0
+      ? `为${readinessCharacterNames(readiness.missingDialogue)}补充真实对话样本，声音阶段会优先使用原著证据。`
+      : readiness.originalSourceCount === 0
+        ? '导入本地原著 TXT 或 Markdown 后，声音阶段才能引用可核对的角色原句。'
+        : readiness.missingSourceVoice.length > 0
+          ? `现有原著还没有识别到${readinessCharacterNames(readiness.missingSourceVoice)}的署名；可在资料阅读器核对署名归属。`
+          : '人物档案、角色样本和原著声音已经覆盖当前全部参与者。'
   return <section className="story-play-evidence" aria-label="场地准备状态">
     <div className="story-play-evidence-items">
-      <span className="story-play-evidence-chip" data-ready={!missingActor}><small>角色卡</small><strong>{actorCount}/{participants.length}</strong></span>
-      <span className="story-play-evidence-chip" data-ready={dialogueCount === participants.length}><small>角色样本</small><strong>{dialogueCount}/{participants.length}</strong></span>
-      <span className="story-play-evidence-chip" data-ready={!missingSourceVoice}><small>原著声音</small><strong>{sourceVoiceCount}/{participants.length}</strong></span>
-      <span className="story-play-evidence-chip" data-ready={originalSources.length > 0}><small>原著资料</small><strong>{originalSources.length}</strong></span>
+      <button className="story-play-evidence-chip" type="button" data-ready={readiness.missingActors.length === 0}
+        disabled={openActor === undefined || configureDisabled} onClick={openActor}><small>角色卡</small><strong>{actorCount}/{participantCount}</strong></button>
+      <button className="story-play-evidence-chip" type="button" data-ready={readiness.missingDialogue.length === 0}
+        disabled={firstMissingDialogue === undefined && firstParticipant === undefined}
+        onClick={() => { onOpenCharacter((firstMissingDialogue ?? firstParticipant)!.id) }}><small>角色样本</small><strong>{dialogueCount}/{participantCount}</strong></button>
+      <button className="story-play-evidence-chip" type="button" data-ready={readiness.missingSourceVoice.length === 0}
+        onClick={onOpenSources}><small>原著声音</small><strong>{sourceVoiceCount}/{participantCount}</strong></button>
+      <button className="story-play-evidence-chip" type="button" data-ready={readiness.originalSourceCount > 0}
+        onClick={onOpenSources}><small>原著资料</small><strong>{readiness.originalSourceCount}</strong></button>
     </div>
     <div className="story-play-evidence-actions">
-      {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={configureDisabled} onClick={onConfigureCast}>人物来源</button>}
-      <button className="story-studio-button" type="button" onClick={onOpenSources}>{missingSourceVoice || originalSources.length === 0 ? '添加原著' : '查看原著'}</button>
+      {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={configureDisabled} onClick={onConfigureCast}>
+        {readiness.missingActors.length > 0 ? '补人物来源' : '人物来源'}</button>}
+      {firstMissingDialogue !== undefined && <button className="story-studio-button" type="button"
+        onClick={() => { onOpenCharacter(firstMissingDialogue.id) }}>补角色样本</button>}
+      <button className="story-studio-button" type="button" onClick={onOpenSources}>
+        {readiness.missingSourceVoice.length > 0 || readiness.originalSourceCount === 0 ? '补原著资料' : '查看原著'}</button>
     </div>
+    <p className="story-play-evidence-summary">{evidenceSummary}</p>
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1803,6 +1818,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
@@ -1830,7 +1846,8 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
         </div>
       </div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onOpenSources={onOpenSources} />
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={currentName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -1873,7 +1890,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1887,6 +1904,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
@@ -1904,7 +1922,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
     ? genericWorldView
     : renderPlayWorldView(workspace.world.moduleId, {
       world: workspace.world,
-      characters: playWorldParticipants(workspace).map(character => ({ id: character.id, name: character.name })),
+      characters: storyPlayWorldParticipants(workspace).map(character => ({ id: character.id, name: character.name })),
       turn,
       busy,
       dirty,
@@ -1923,7 +1941,8 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
           onRestart()
         }}>{restartArmed ? '确认重新开始' : '重新开始'}</button></div></div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onOpenSources={onOpenSources} />
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={characterName} launchTargets={launchTargets} launchTargetId={launchTargetId}
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
@@ -1931,6 +1950,17 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
     {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进世界。</div>}
     {renderedWorldView}
   </div>
+}
+
+function actorMatchesCharacter(actorName: string, character: StoryCharacter): boolean {
+  return storyVoiceSpeakerMatches([character.name, ...(character.voiceAliases ?? [])], actorName)
+}
+
+function actorImportFailureMessage(failures: readonly { readonly fileName: string; readonly message: string }[]): string | undefined {
+  if (failures.length === 0) return undefined
+  const shown = failures.slice(0, 3).map(failure => `${failure.fileName}：${failure.message}`)
+  if (failures.length > shown.length) shown.push(`另有 ${String(failures.length - shown.length)} 个文件未导入`)
+  return shown.join('；')
 }
 
 function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty, onImportActor, onInstall }: {
@@ -1947,7 +1977,7 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
   const [importActorError, setImportActorError] = useState<string>()
   const [actorBySlot, setActorBySlot] = useState<Readonly<Record<string, string>>>(() => Object.fromEntries(
     world.castSlots.flatMap(slot => {
-      const exact = actorResources.find(actor => actor.name === slot.name)
+      const exact = actorResources.find(actor => storyVoiceSpeakerMatches([slot.name, ...slot.aliases], actor.name))
       return exact === undefined ? [] : [[slot.id, exact.id]]
     }),
   ))
@@ -1966,7 +1996,7 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
       const actorId = actorBySlot[slot.id]
       if (actorId === undefined) return []
       const existing = workspace.characters.find(character => !usedCharacterIds.has(character.id)
-        && (character.actor?.id === actorId || character.name === slot.name))
+        && (character.actor?.id === actorId || actorMatchesCharacter(slot.name, character)))
       if (existing !== undefined) usedCharacterIds.add(existing.id)
       return [{
         slotId: slot.id,
@@ -1976,18 +2006,28 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
     })
     onInstall(world.resource, cast)
   }
-  const importActor = (file: File): void => {
+  const importActors = (files: readonly File[]): void => {
+    if (files.length === 0) return
     setImportingActor(true)
     setImportActorError(undefined)
-    void onImportActor(file).then(({ actor }) => {
-      setActorBySlot(current => {
-        const exact = world.castSlots.find(slot => current[slot.id] === undefined && slot.name === actor.name)
-        const target = exact
-          ?? world.castSlots.find(slot => current[slot.id] === undefined && slot.required)
-          ?? world.castSlots.find(slot => current[slot.id] === undefined)
-        return target === undefined ? current : { ...current, [target.id]: actor.id }
-      })
-    }).catch(reason => { setImportActorError(errorMessage(reason)) }).finally(() => { setImportingActor(false) })
+    void (async () => {
+      let assignments = actorBySlot
+      const failures: { fileName: string; message: string }[] = []
+      for (const file of files) {
+        try {
+          const { actor } = await onImportActor(file)
+          assignments = assignImportedStoryWorldActor(assignments, world.castSlots.map(slot => ({
+            slotId: slot.id,
+            names: [slot.name, ...slot.aliases],
+            required: slot.required,
+          })), actor)
+        } catch (reason) {
+          failures.push({ fileName: file.name, message: errorMessage(reason) })
+        }
+      }
+      setActorBySlot(assignments)
+      setImportActorError(actorImportFailureMessage(failures))
+    })().finally(() => { setImportingActor(false) })
   }
   return <article className="story-world-module-card">
     <span>{world.category === 'game' ? '游戏' : '模拟'}</span><h2>{world.name}</h2>
@@ -1996,7 +2036,8 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
       ? <small>需要 {world.minCharacters}–{world.maxCharacters} 位人物 · 当前 {workspace.characters.length} 位</small>
       : <div className="story-world-cast-slots">{world.castSlots.map(slot => <label key={slot.id}>
         <span><b>{slot.name}</b><small>{slot.required ? '必需' : '可选'} · {slot.description}</small></span>
-        <select className="story-studio-input" value={actorBySlot[slot.id] ?? ''} onChange={event => {
+        <select className="story-studio-input" disabled={busy || dirty || importingActor}
+          value={actorBySlot[slot.id] ?? ''} onChange={event => {
           const actorId = event.target.value
           setActorBySlot(current => {
             const next = { ...current }
@@ -2010,14 +2051,14 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
             disabled={actorBySlot[slot.id] !== actor.id && selectedActorIds.has(actor.id)}>{actor.name}</option>)}
         </select>
       </label>)}<div className="story-world-cast-import">
-        <input ref={actorFileInputRef} hidden type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
-          const file = event.target.files?.[0]
+        <input ref={actorFileInputRef} hidden multiple type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
+          const files = Array.from(event.target.files ?? [])
           event.target.value = ''
-          if (file !== undefined) importActor(file)
+          importActors(files)
         }} />
         <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
-          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入角色卡'}</button>
-        <small>PNG / JSON / CHARX 会保存到资源中心，并自动填入一个空槽位。</small>
+          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 批量导入角色卡'}</button>
+        <small>可一次选择多份 PNG / JSON / CHARX；同名角色优先匹配，其余依次填入空槽位。</small>
       </div></div>}
     {world.castSlots.length > 0 && actorResources.length === 0 && !importingActor && <small>还没有可用角色卡；可以在这里直接导入。</small>}
     {importActorError !== undefined && <small className="story-world-cast-error" role="alert">{importActorError}</small>}
@@ -2052,7 +2093,8 @@ function initialInstalledCastCharacters(
     return character === undefined ? [] : [character]
   })
   for (const slot of world.castSlots) {
-    const exact = participants.find(character => !usedCharacterIds.has(character.id) && character.name === slot.name)
+    const exact = participants.find(character => !usedCharacterIds.has(character.id)
+      && [slot.name, ...slot.aliases].some(name => actorMatchesCharacter(name, character)))
     if (exact === undefined) continue
     result[slot.id] = exact.id
     usedCharacterIds.add(exact.id)
@@ -2086,7 +2128,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
       const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
       if (character === undefined) return []
       const actor = actorResources.find(candidate => candidate.id === character.actor?.id)
-        ?? actorResources.find(candidate => candidate.name === character.name)
+        ?? actorResources.find(candidate => actorMatchesCharacter(candidate.name, character))
       return actor === undefined ? [] : [[slot.id, actor.id]]
     }),
   ))
@@ -2106,19 +2148,31 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   const missingAssignedActor = assignedSlots.some(slot => actorBySlot[slot.id] === undefined)
   const ready = !dirty && !missingRequired && !missingAssignedActor && !repeatsActor && unassignedParticipant === undefined
     && assignedSlots.length >= world.minCharacters && assignedSlots.length <= world.maxCharacters
-  const importActor = (file: File): void => {
+  const importActors = (files: readonly File[]): void => {
+    if (files.length === 0) return
     setImportingActor(true)
     setImportActorError(undefined)
-    void onImportActor(file).then(({ actor }) => {
-      setActorBySlot(current => {
-        const exact = world.castSlots.find(slot => {
-          const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
-          return character !== undefined && current[slot.id] === undefined && character.name === actor.name
-        })
-        const target = exact ?? world.castSlots.find(slot => characterBySlot[slot.id] !== undefined && current[slot.id] === undefined)
-        return target === undefined ? current : { ...current, [target.id]: actor.id }
-      })
-    }).catch(reason => { setImportActorError(errorMessage(reason)) }).finally(() => { setImportingActor(false) })
+    void (async () => {
+      let assignments = actorBySlot
+      const failures: { fileName: string; message: string }[] = []
+      for (const file of files) {
+        try {
+          const { actor } = await onImportActor(file)
+          assignments = assignImportedStoryWorldActor(assignments, world.castSlots.flatMap(slot => {
+            const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
+            return character === undefined ? [] : [{
+              slotId: slot.id,
+              names: [character.name, ...(character.voiceAliases ?? [])],
+              required: slot.required,
+            }]
+          }), actor)
+        } catch (reason) {
+          failures.push({ fileName: file.name, message: errorMessage(reason) })
+        }
+      }
+      setActorBySlot(assignments)
+      setImportActorError(actorImportFailureMessage(failures))
+    })().finally(() => { setImportingActor(false) })
   }
   const updateCast = (): void => {
     if (!ready) return
@@ -2143,7 +2197,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
         return <label key={slot.id}>
           <span><small>{slot.name} · {slot.required ? '必需' : '可选'}</small><strong>{character?.name ?? '没有可沿用的人物'}</strong>
             <em>{slot.description}</em></span>
-          <select className="story-studio-input" disabled={character === undefined || busy || dirty}
+          <select className="story-studio-input" disabled={character === undefined || busy || dirty || importingActor}
             value={actorBySlot[slot.id] ?? ''} onChange={event => {
               const actorId = event.target.value
               setActorBySlot(current => {
@@ -2160,14 +2214,14 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
         </label>
       })}</div>
       <div className="story-world-cast-import">
-        <input ref={actorFileInputRef} hidden type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
-          const file = event.target.files?.[0]
+        <input ref={actorFileInputRef} hidden multiple type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
+          const files = Array.from(event.target.files ?? [])
           event.target.value = ''
-          if (file !== undefined) importActor(file)
+          importActors(files)
         }} />
         <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
-          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入角色卡'}</button>
-        <small>PNG / JSON / CHARX 会保存到资源中心，并优先填入同名人物。</small>
+          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 批量导入角色卡'}</button>
+        <small>可一次选择多份 PNG / JSON / CHARX；同名人物优先匹配，其余依次填入空槽位。</small>
       </div>
       {importActorError !== undefined && <small className="story-world-cast-error" role="alert">{importActorError}</small>}
       {unassignedParticipant !== undefined && <small className="story-world-cast-error">当前参与人物无法全部对应到世界槽位，请先检查世界资源。</small>}
@@ -2181,7 +2235,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenSources, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2199,6 +2253,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
+  readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
@@ -2236,14 +2291,15 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
       sessionAction={sessionAction} launchTargets={launchTargets} launchTargetId={launchTargetId}
       launchUnavailableReason={launchUnavailableReason} onLaunchTargetChange={onLaunchTargetChange}
       onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
-      onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} launchTargets={launchTargets}
     launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
     renderPlayWorldView={renderPlayWorldView}
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
-    onConfigureCast={configureCast} onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+    onConfigureCast={configureCast} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+    onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
@@ -2786,6 +2842,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       onLaunchTargetChange={setLaunchTargetId}
       onAdvanceSession={advanceSession}
       onImportActor={importWorldActor} onInstall={installWorld} onUpdateCast={saveWorldCast}
+      onOpenCharacter={id => { select({ kind: 'character', id }) }}
       onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
       onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {

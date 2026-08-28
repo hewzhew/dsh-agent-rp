@@ -41,6 +41,8 @@ export interface RoleplayPersonaResourceDetail {
 export interface RoleplayWorldCastSlotDetail {
   readonly id: string
   readonly name: string
+  /** Alternative written names used to match imported Character Cards to this role. */
+  readonly aliases: readonly string[]
   readonly description: string
   readonly required: boolean
 }
@@ -157,16 +159,28 @@ export function parseRoleplayResourceDetail(
     }
     const castSlots = playWorld?.castSlots.map((slot, index) => {
       if (typeof slot !== 'object' || slot === null || Array.isArray(slot)
-        || !exactDetailKeys(slot, ['id', 'name', 'description', 'required'])) {
+        || !exactDetailKeys(slot, ['id', 'name', 'aliases', 'description', 'required'])) {
         throw new Error(`Roleplay world ${JSON.stringify(reference.id)} cast slot ${index} is invalid`)
       }
       const id = detailId(slot.id, `Roleplay world ${JSON.stringify(reference.id)} cast slot id`)
       if (typeof slot.name !== 'string' || slot.name.trim() === '' || slot.name.length > 120
+        || !Array.isArray(slot.aliases) || slot.aliases.length > 32
+        || slot.aliases.some(alias => typeof alias !== 'string' || alias.trim() === '' || alias.length > 120)
         || typeof slot.description !== 'string' || slot.description.length > 500
         || typeof slot.required !== 'boolean') {
         throw new Error(`Roleplay world ${JSON.stringify(reference.id)} cast slot ${JSON.stringify(id)} is invalid`)
       }
-      return Object.freeze({ id, name: slot.name.trim(), description: slot.description, required: slot.required })
+      const aliases = slot.aliases.map(alias => alias.trim())
+      if (new Set(aliases).size !== aliases.length || aliases.includes(slot.name.trim())) {
+        throw new Error(`Roleplay world ${JSON.stringify(reference.id)} cast slot ${JSON.stringify(id)} repeats a name`)
+      }
+      return Object.freeze({
+        id,
+        name: slot.name.trim(),
+        aliases: Object.freeze(aliases),
+        description: slot.description,
+        required: slot.required,
+      })
     }) ?? []
     const requiredCastCount = castSlots.filter(slot => slot.required).length
     if (new Set(castSlots.map(slot => slot.id)).size !== castSlots.length

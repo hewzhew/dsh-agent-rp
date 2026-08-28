@@ -15,24 +15,28 @@ export const FLYING_CHESS_WORLD_CAST_SLOTS: readonly RoleplayWorldCastSlotDetail
   Object.freeze({
     id: 'reimu',
     name: '博丽灵梦',
+    aliases: Object.freeze(['博麗霊夢', '霊夢']),
     description: '第一位棋手；身份、语气与人物指令来自所选角色卡。',
     required: true,
   }),
   Object.freeze({
     id: 'marisa',
     name: '雾雨魔理沙',
+    aliases: Object.freeze(['霧雨魔理沙', '魔理沙']),
     description: '第二位棋手；身份、语气与人物指令来自所选角色卡。',
     required: true,
   }),
   Object.freeze({
     id: 'guest-1',
     name: '追加人物 1',
+    aliases: Object.freeze([]),
     description: '可选的第三位棋手。',
     required: false,
   }),
   Object.freeze({
     id: 'guest-2',
     name: '追加人物 2',
+    aliases: Object.freeze([]),
     description: '可选的第四位棋手。',
     required: false,
   }),
