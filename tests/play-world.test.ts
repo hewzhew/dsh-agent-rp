@@ -1170,11 +1170,20 @@ test('keeps the exact world outcome while preserving only private-section charac
       { id: historyId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '只写规则事实。' },
     ],
   })
-  const installed = store.installWorld(configured.id, {
+  let installed = store.installWorld(configured.id, {
     format: 0,
     revision: configured.revision,
     resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
     cast: [],
+  })
+  installed = store.save({
+    ...editable(installed),
+    graph: {
+      ...installed.graph,
+      nodes: installed.graph.nodes.map(node => node.id === installed.graph.activeNodeId
+        ? { ...node, participantIds: [marisaId, sanaeId] }
+        : node),
+    },
   })
   const session = Session.create(SessionId('grounded-world-turn'))
   session.append('request/header', {

@@ -359,8 +359,8 @@ type StorySectionDraft = StoryTurnFinalSection
 /** Resolve persisted output templates into the concrete, character-owned sections for one turn. */
 export function expandStoryTurnOutputs(
   workspace: StoryWorkspaceSnapshot,
+  participants: readonly StoryWorkspaceSnapshot['characters'][number][] = storyParticipantCharacters(workspace),
 ): readonly StoryWorkspaceSnapshot['outputs'][number][] {
-  const participants = storyParticipantCharacters(workspace)
   const participantIds = new Set(participants.map(character => character.id))
   return workspace.outputs.flatMap(output => {
     if (!output.enabled) return []
@@ -373,6 +373,28 @@ export function expandStoryTurnOutputs(
       characterId: character.id,
     }))
   })
+}
+
+function storyTurnParticipants(
+  workspace: StoryWorkspaceSnapshot,
+  requiredCharacterIds: readonly string[],
+): readonly StoryWorkspaceSnapshot['characters'][number][] {
+  const participantIds = new Set([
+    ...storyParticipantCharacters(workspace).map(character => character.id),
+    ...requiredCharacterIds,
+  ])
+  return workspace.characters.filter(character => participantIds.has(character.id))
+}
+
+function storyWorldEventActorIds(
+  workspace: StoryWorkspaceSnapshot,
+  sequences: readonly number[],
+): readonly string[] {
+  if (workspace.world === undefined || sequences.length === 0) return []
+  const selected = new Set(sequences)
+  return workspace.world.events.flatMap(event => selected.has(event.sequence) && event.actorId !== undefined
+    ? [event.actorId]
+    : [])
 }
 
 interface StoryCharacterVoiceEvidence {
@@ -2848,7 +2870,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const worldOutcome = renderWorldOutcome(input.workspace, worldEventSequences)
   const worldNarrative = renderWorldNarrative(input, worldEventSequences)
 
-  const enabledCharacters = storyParticipantCharacters(input.workspace)
+  const enabledCharacters = storyTurnParticipants(
+    input.workspace,
+    worldActionCharacterId === undefined ? [] : [worldActionCharacterId],
+  )
   const publicCharacterIds = await resolveStoryTurnCast(
     input,
     reasoning,
@@ -2928,7 +2953,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   )).filter((value): value is StoryCharacterDecisionRecord => value !== undefined)
   const characterDecisionText = characterDecisions.map(record => record.text)
 
-  const enabledSections = expandStoryTurnOutputs(input.workspace)
+  const enabledSections = expandStoryTurnOutputs(input.workspace, enabledCharacters)
   const storyMap = storyDirectorMap(input.workspace)
   const foreshadowing = storyOpenForeshadowing(input.workspace)
   const hostDirectorAssignment = resolveHostWorldDirectorAssignment(
@@ -3328,7 +3353,10 @@ export async function materializeStoryTurn(input: {
   const visibleSections = visibleReplySections(visibleReply, briefEvent.data.finalSections)
   const workspace = input.store.get(input.workspaceId)
   const worldOutcome = renderWorldOutcome(workspace, briefEvent.data.worldEventSequences ?? [])
-  const participants = storyParticipantCharacters(workspace)
+  const participants = storyTurnParticipants(workspace, [
+    ...storyWorldEventActorIds(workspace, briefEvent.data.worldEventSequences ?? []),
+    ...(briefEvent.data.publicDialogues ?? []).map(dialogue => dialogue.characterId),
+  ])
   const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
   const stageInput: RunStoryTurnPipelineInput = {
     ctx: input.ctx,
