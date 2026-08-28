@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -9,7 +11,9 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
 import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
-import { PlayWorldRegistry } from '../src/play-world.ts'
+import { PlayWorldRegistry, type PlayWorldModule } from '../src/play-world.ts'
+import type { AgentRpHttpServer } from '../src/host-http.ts'
+import { installStoryWorkspaceHttp } from '../src/story-workspace-http.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
 import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
 import { acceptStorySuggestionBatch } from '../src/story-suggestion-batch.ts'
@@ -51,6 +55,239 @@ function character(id: string, name: string, description = ''): StoryCharacter {
     state: { location: '', condition: '', objective: '', notes: '' },
   }
 }
+
+function counterWorldModule(name = '计数世界'): PlayWorldModule {
+  return {
+    descriptor: {
+      id: 'fixture/counter',
+      name,
+      summary: '验证第三方世界模块的安全动作投影。',
+      category: 'simulation',
+      minCharacters: 1,
+      maxCharacters: 2,
+    },
+    create(context) {
+      const characterId = context.characters[0]?.id
+      if (characterId === undefined) throw new Error('计数世界需要人物')
+      return {
+        format: 0,
+        instanceId: 'world-counter-fixture',
+        moduleId: 'fixture/counter',
+        moduleVersion: 0,
+        title: name,
+        state: { step: 0, characterId },
+        events: [{ id: 'counter-event-0', sequence: 1, type: 'counter.started', title: '开始', summary: '计数开始。' }],
+      }
+    },
+    normalize(value, context) {
+      const snapshot = value as {
+        readonly format?: unknown
+        readonly instanceId?: unknown
+        readonly moduleId?: unknown
+        readonly moduleVersion?: unknown
+        readonly title?: unknown
+        readonly state?: { readonly step?: unknown; readonly characterId?: unknown }
+        readonly events?: unknown
+      }
+      if (snapshot.format !== 0 || snapshot.instanceId !== 'world-counter-fixture'
+        || snapshot.moduleId !== 'fixture/counter' || snapshot.moduleVersion !== 0 || snapshot.title !== name
+        || !Number.isSafeInteger(snapshot.state?.step) || (snapshot.state?.step as number) < 0
+        || typeof snapshot.state?.characterId !== 'string'
+        || !context.characters.some(character => character.id === snapshot.state?.characterId)
+        || !Array.isArray(snapshot.events)) throw new Error('计数世界快照无效')
+      return value as ReturnType<PlayWorldModule['create']>
+    },
+    dispatch(snapshot, action, context) {
+      const current = this.normalize(snapshot, context)
+      const state = current.state as { readonly step: number; readonly characterId: string }
+      const value = action as { readonly expectedStep?: unknown; readonly hostOnlyToken?: unknown }
+      if (value.expectedStep !== state.step || value.hostOnlyToken !== `secret-${String(state.step)}` || state.step >= 2) {
+        throw new Error('计数世界动作无效')
+      }
+      const next = state.step + 1
+      return {
+        ...current,
+        state: { ...state, step: next },
+        events: [...current.events, {
+          id: `counter-event-${String(next)}`,
+          sequence: current.events.length + 1,
+          type: 'counter.advanced',
+          title: `推进到 ${String(next)}`,
+          summary: `计数值变为 ${String(next)}。`,
+          actorId: state.characterId,
+        }],
+      }
+    },
+    characterTurn(snapshot, context) {
+      const current = this.normalize(snapshot, context)
+      const state = current.state as { readonly step: number; readonly characterId: string }
+      if (state.step >= 2) return undefined
+      return {
+        id: `counter:${String(state.step)}`,
+        characterId: state.characterId,
+        instruction: `请选择第 ${String(state.step + 1)} 次推进。`,
+        actions: [{
+          id: `advance:${String(state.step)}`,
+          label: '推进',
+          description: '让 Host 将计数增加一。',
+          action: { expectedStep: state.step, hostOnlyToken: `secret-${String(state.step)}` },
+        }],
+      }
+    },
+    projectForCharacter(snapshot, _characterId, context) {
+      const state = this.normalize(snapshot, context).state as { readonly step: number }
+      return { title: name, text: `计数为 ${String(state.step)}。` }
+    },
+    projectForDirector(snapshot, context) {
+      const state = this.normalize(snapshot, context).state as { readonly step: number }
+      return { title: name, text: `权威计数为 ${String(state.step)}。` }
+    },
+    renderEventNarrative(snapshot, eventSequences, context) {
+      const events = this.normalize(snapshot, context).events.filter(event => eventSequences.includes(event.sequence))
+      return events.map(event => `${event.title}。`).join('')
+    },
+  }
+}
+
+type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
+
+function storyWorkspaceRoute(store: StoryWorkspaceStore): RegisteredRoute {
+  const routes: RegisteredRoute[] = []
+  const ctx = { effect(register: () => unknown) { register() } } as unknown as Context
+  const server: AgentRpHttpServer = { register(route) { routes.push(route); return () => {} } }
+  installStoryWorkspaceHttp(ctx, store, server)
+  const route = routes.find(candidate => candidate.kind === 'prefix')
+  assert.ok(route)
+  return route
+}
+
+async function invokeStoryWorkspaceRoute(
+  route: RegisteredRoute,
+  method: string,
+  url: string,
+  body?: unknown,
+): Promise<{ readonly status: number; readonly body: unknown }> {
+  const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+  const request = Object.assign(Readable.from(payload), {
+    method,
+    url,
+    headers: {
+      host: '127.0.0.1:3181',
+      origin: 'http://127.0.0.1:3181',
+      'sec-fetch-site': 'same-origin',
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+  }) as unknown as IncomingMessage
+  let status = 0
+  let responseBody = Buffer.alloc(0)
+  const response = {
+    setHeader() { return response },
+    writeHead(value: number) { status = value; return response },
+    end(value?: string | Uint8Array) {
+      if (value !== undefined) responseBody = Buffer.from(value)
+      return response
+    },
+  } as unknown as ServerResponse
+  await route.handler(request, response)
+  return { status, body: JSON.parse(responseBody.toString('utf8')) as unknown }
+}
+
+test('revokes play-world registrations without deleting a newer owner', () => {
+  const worlds = new PlayWorldRegistry()
+  const first = counterWorldModule('第一版')
+  const disposeFirst = worlds.register(first)
+  assert.equal(worlds.get(first.descriptor.id), first)
+  assert.throws(() => worlds.register(counterWorldModule('重复版')), /重复注册/u)
+  disposeFirst()
+  const second = counterWorldModule('第二版')
+  const disposeSecond = worlds.register(second)
+  disposeFirst()
+  assert.equal(worlds.get(second.descriptor.id), second)
+  disposeSecond()
+  assert.throws(() => worlds.get(second.descriptor.id), /未安装/u)
+})
+
+test('runs an unrecognized world through browser-safe action ids', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-custom-play-world-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(counterWorldModule())
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: '第三方世界' })
+  const actorId = createStoryCharacterId()
+  const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    moduleId: 'fixture/counter',
+  })
+  const firstTurn = store.worldTurn(installed.id)
+  assert.deepEqual(firstTurn, {
+    cycleId: 'counter:0',
+    characterId: actorId,
+    instruction: '请选择第 1 次推进。',
+    actions: [{ id: 'advance:0', label: '推进', description: '让 Host 将计数增加一。' }],
+  })
+  assert.doesNotMatch(JSON.stringify(firstTurn), /hostOnlyToken|secret-/u)
+  assert.throws(() => store.dispatchWorldAction(installed.id, {
+    format: 0, revision: installed.revision, cycleId: firstTurn!.cycleId, actionId: 'not-advertised',
+  }), /动作不再合法/u)
+  const once = store.dispatchWorldAction(installed.id, {
+    format: 0, revision: installed.revision, cycleId: firstTurn!.cycleId, actionId: 'advance:0',
+  })
+  assert.equal((once.world?.state as { readonly step: number }).step, 1)
+  assert.throws(() => store.dispatchWorldAction(once.id, {
+    format: 0, revision: once.revision, cycleId: firstTurn!.cycleId, actionId: 'advance:0',
+  }), /回合已经变化/u)
+  const secondTurn = store.worldTurn(once.id)
+  const finished = store.dispatchWorldAction(once.id, {
+    format: 0, revision: once.revision, cycleId: secondTurn!.cycleId, actionId: 'advance:1',
+  })
+  assert.equal((finished.world?.state as { readonly step: number }).step, 2)
+  assert.equal(store.worldTurn(finished.id), undefined)
+})
+
+test('serves and dispatches third-party world turns without action payloads', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-custom-play-world-http-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(counterWorldModule())
+  const store = new StoryWorkspaceStore({ root, worlds })
+  const created = store.create({ format: 2, name: 'HTTP 第三方世界' })
+  const actorId = createStoryCharacterId()
+  const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    moduleId: 'fixture/counter',
+  })
+  const route = storyWorkspaceRoute(store)
+  const path = `/api/agent-rp/story-workspaces/${encodeURIComponent(installed.id)}`
+  const read = await invokeStoryWorkspaceRoute(route, 'GET', path)
+  assert.equal(read.status, 200)
+  assert.doesNotMatch(JSON.stringify(read.body), /hostOnlyToken|secret-/u)
+  assert.deepEqual((read.body as { readonly worldTurn?: unknown }).worldTurn, {
+    cycleId: 'counter:0',
+    characterId: actorId,
+    instruction: '请选择第 1 次推进。',
+    actions: [{ id: 'advance:0', label: '推进', description: '让 Host 将计数增加一。' }],
+  })
+  const rejected = await invokeStoryWorkspaceRoute(route, 'POST', `${path}/world/actions`, {
+    format: 0,
+    revision: installed.revision,
+    action: { expectedStep: 0, hostOnlyToken: 'secret-0' },
+  })
+  assert.equal(rejected.status, 400)
+  const advanced = await invokeStoryWorkspaceRoute(route, 'POST', `${path}/world/actions`, {
+    format: 0,
+    revision: installed.revision,
+    cycleId: 'counter:0',
+    actionId: 'advance:0',
+  })
+  assert.equal(advanced.status, 200)
+  assert.equal(((advanced.body as { readonly workspace: StoryWorkspaceSnapshot }).workspace.world?.state as { readonly step: number }).step, 1)
+  assert.equal((advanced.body as { readonly worldTurn: { readonly cycleId: string } }).worldTurn.cycleId, 'counter:1')
+})
 
 test('advances a host-owned flying-chess world only through typed actions', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-'))
@@ -148,17 +385,24 @@ test('advances a host-owned flying-chess world only through typed actions', (con
     { characters: moved.characters },
   ), '博丽灵梦掷出 6。博丽灵梦把 1 号飞机推进到航线第 1 步。')
 
+  const manualRollTurn = store.worldTurn(moved.id)
+  assert.equal(manualRollTurn?.actions[0]?.id, 'roll')
   const rolledAgain = store.dispatchWorldAction(moved.id, {
     format: 0,
     revision: moved.revision,
-    action: { type: 'roll', actorId: reimuId },
+    cycleId: manualRollTurn!.cycleId,
+    actionId: 'roll',
   })
   const secondPending = rolledAgain.world?.state as FlyingChessWorldState
   assert.equal(secondPending.pendingRoll?.value, 1)
+  const manualMoveTurn = store.worldTurn(rolledAgain.id)
+  const manualMoveActionId = `move:${pieceId}`
+  assert.equal(manualMoveTurn?.actions.some(action => action.id === manualMoveActionId), true)
   const movedAgain = store.dispatchWorldAction(rolledAgain.id, {
     format: 0,
     revision: rolledAgain.revision,
-    action: { type: 'move', actorId: reimuId, pieceId },
+    cycleId: manualMoveTurn!.cycleId,
+    actionId: manualMoveActionId,
   })
   const finalState = movedAgain.world?.state as FlyingChessWorldState
   assert.equal(finalState.pieces.find(piece => piece.id === pieceId)?.steps, 2)
@@ -166,7 +410,8 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.throws(() => store.dispatchWorldAction(movedAgain.id, {
     format: 0,
     revision: rolledAgain.revision,
-    action: { type: 'roll', actorId: marisaId },
+    cycleId: manualMoveTurn!.cycleId,
+    actionId: 'roll',
   }), /当前 revision/u)
 
   const characterContext = compileStoryCharacterContext(movedAgain, reimuId, { playerInput: '继续。' }, worlds)
@@ -493,10 +738,12 @@ test('writes a manually completed world result before another character acts', a
     moduleId: FLYING_CHESS_WORLD_MODULE_ID,
   })
   const withoutMap = store.save({ ...editable(installed), graph: { nodes: [], edges: [] } })
+  const manualTurn = store.worldTurn(withoutMap.id)
   const manuallyAdvanced = store.dispatchWorldAction(withoutMap.id, {
     format: 0,
     revision: withoutMap.revision,
-    action: { type: 'roll', actorId: reimuId },
+    cycleId: manualTurn!.cycleId,
+    actionId: 'roll',
   })
   const stateBeforeWriting = manuallyAdvanced.world?.state as FlyingChessWorldState
   assert.equal(stateBeforeWriting.currentPlayerId, marisaId)

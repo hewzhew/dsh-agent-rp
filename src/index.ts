@@ -19,6 +19,12 @@ import { WorkspaceSettingsStore } from './workspace-settings-store.ts'
 import { installWorkspaceSettingsHttp } from './workspace-settings-http.ts'
 import { installStoryWorkspaceHttp } from './story-workspace-http.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
+import { createFlyingChessWorldModule } from './flying-chess-world.ts'
+import {
+  createDefaultPlayWorldRegistry,
+  PLAY_WORLD_REGISTRY_KEY,
+  PlayWorldRegistry,
+} from './play-world.ts'
 import { executeStoryWorkspaceCommand, readSessionStoryWorkspaceId } from './session-story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from './story-turn-pipeline.ts'
 import { installStoryTurnCompletion } from './story-turn-completion.ts'
@@ -644,7 +650,13 @@ export function installAgentRp(
   const chatLibrary = new SillyTavernChatLibrary()
   const generatedImageLibrary = new GeneratedImageLibrary()
   const workspaceSettings = new WorkspaceSettingsStore()
-  const storyWorkspaces = new StoryWorkspaceStore()
+  let playWorlds: PlayWorldRegistry
+  try {
+    playWorlds = ctx.get(PLAY_WORLD_REGISTRY_KEY) ?? createDefaultPlayWorldRegistry()
+  } catch {
+    playWorlds = createDefaultPlayWorldRegistry()
+  }
+  const storyWorkspaces = new StoryWorkspaceStore({ worlds: playWorlds })
   let turnWorkers: RoleplayTurnWorkerRegistry
   try {
     turnWorkers = ctx.get(ROLEPLAY_TURN_WORKERS_KEY) ?? new RoleplayTurnWorkerRegistry()
@@ -1456,6 +1468,12 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     ctx.provide(ROLEPLAY_RUNTIME_EXTENSIONS_KEY, runtimeExtensions)
     const turnWorkers = new RoleplayTurnWorkerRegistry()
     ctx.provide(ROLEPLAY_TURN_WORKERS_KEY, turnWorkers)
+    const playWorlds = new PlayWorldRegistry()
+    ctx.provide(PLAY_WORLD_REGISTRY_KEY, playWorlds)
+    ctx.effect(
+      () => playWorlds.register(createFlyingChessWorldModule()),
+      'agent-rp: built-in flying chess play world',
+    )
     const resourceCatalog = new RoleplayResourceCatalog()
     const tavernResourcePreflight = new TavernResourcePreflightRegistry()
     ctx.provide(TAVERN_RESOURCE_PREFLIGHT_KEY, tavernResourcePreflight)
@@ -1472,7 +1490,7 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     const regexPackLibrary = new RegexPackLibrary()
     const chatLibrary = new SillyTavernChatLibrary()
     const workspaceSettings = new WorkspaceSettingsStore()
-    const storyWorkspaces = new StoryWorkspaceStore()
+    const storyWorkspaces = new StoryWorkspaceStore({ worlds: playWorlds })
     const generatedImageLibrary = new GeneratedImageLibrary()
     for (const provider of roleplayLibraryResourceProviders({
       characters: characterLibrary,

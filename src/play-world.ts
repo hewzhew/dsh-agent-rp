@@ -1,5 +1,6 @@
 /** Registry and lifecycle boundary for executable play-space worlds. */
 
+import type { Context } from '@deepseek-ai/cordis'
 import type {
   StoryAudience,
   StoryCharacter,
@@ -16,7 +17,18 @@ import type {
   PlayWorldModuleDescriptor,
   PlayWorldPromptProjection,
   PlayWorldSnapshot,
+  PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
+
+/** Host service used by trusted plugins to install executable play worlds. */
+export const PLAY_WORLD_REGISTRY_KEY = 'agentRp.playWorlds'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Executable play-world modules available to Agent RP workspaces. */
+    'agentRp.playWorlds': PlayWorldRegistry
+  }
+}
 
 /** Inputs available when a module creates or advances one world instance. */
 export interface PlayWorldContext {
@@ -104,29 +116,97 @@ export interface PlayWorldModule {
   renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string
 }
 
+interface PlayWorldRegistration {
+  readonly token: symbol
+  readonly module: PlayWorldModule
+  readonly descriptor: PlayWorldModuleDescriptor
+}
+
+function stableModuleId(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() !== value
+    || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(value)) {
+    throw new Error('游玩世界模块 id 必须是稳定的小写标识')
+  }
+  return value
+}
+
+function moduleDescriptor(value: PlayWorldModuleDescriptor): PlayWorldModuleDescriptor {
+  const id = stableModuleId(value.id)
+  if (typeof value.name !== 'string' || value.name.trim() === '' || value.name.length > 120
+    || typeof value.summary !== 'string' || value.summary.trim() === '' || value.summary.length > 1_000
+    || value.category !== 'game' && value.category !== 'simulation'
+    || !Number.isSafeInteger(value.minCharacters) || value.minCharacters < 1
+    || !Number.isSafeInteger(value.maxCharacters) || value.maxCharacters < value.minCharacters) {
+    throw new Error(`游玩世界模块 ${JSON.stringify(id)} 描述无效`)
+  }
+  return Object.freeze({
+    id,
+    name: value.name,
+    summary: value.summary,
+    category: value.category,
+    minCharacters: value.minCharacters,
+    maxCharacters: value.maxCharacters,
+  })
+}
+
+function requiredProjectionText(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > maxLength) {
+    throw new Error(`${label}无效`)
+  }
+  return value
+}
+
+/** Remove Host-only action payloads from one module-advertised character turn. */
+export function projectPlayWorldTurn(turn: PlayWorldCharacterTurn | undefined): PlayWorldTurnProjection | undefined {
+  if (turn === undefined) return undefined
+  const cycleId = requiredProjectionText(turn.id, '游玩世界回合 id', 256)
+  const characterId = requiredProjectionText(turn.characterId, '游玩世界行动人物 id', 256)
+  const instruction = requiredProjectionText(turn.instruction, '游玩世界回合说明', 4_000)
+  if (!Array.isArray(turn.actions) || turn.actions.length === 0 || turn.actions.length > 128) {
+    throw new Error('游玩世界合法动作集合无效')
+  }
+  const ids = new Set<string>()
+  const actions = turn.actions.map((action) => {
+    const id = requiredProjectionText(action.id, '游玩世界动作 id', 240)
+    if (ids.has(id)) throw new Error(`游玩世界动作 ${JSON.stringify(id)} 重复`)
+    ids.add(id)
+    return Object.freeze({
+      id,
+      label: requiredProjectionText(action.label, `游玩世界动作 ${JSON.stringify(id)} 标题`, 200),
+      description: requiredProjectionText(action.description, `游玩世界动作 ${JSON.stringify(id)} 说明`, 1_000),
+    })
+  })
+  return Object.freeze({ cycleId, characterId, instruction, actions: Object.freeze(actions) })
+}
+
 /** Installed world modules keyed by stable module id. */
 export class PlayWorldRegistry {
-  readonly #modules = new Map<string, PlayWorldModule>()
+  readonly #modules = new Map<string, PlayWorldRegistration>()
 
-  /** Register one module and reject ambiguous ownership. */
-  register(module: PlayWorldModule): void {
-    if (this.#modules.has(module.descriptor.id)) {
-      throw new Error(`游玩世界模块 ${JSON.stringify(module.descriptor.id)} 重复注册`)
+  /** Register one module and return a stale-disposer-safe revocation. */
+  register(module: PlayWorldModule): () => void {
+    const descriptor = moduleDescriptor(module.descriptor)
+    if (this.#modules.has(descriptor.id)) {
+      throw new Error(`游玩世界模块 ${JSON.stringify(descriptor.id)} 重复注册`)
     }
-    this.#modules.set(module.descriptor.id, module)
+    const registration = { token: Symbol(descriptor.id), module, descriptor }
+    this.#modules.set(descriptor.id, registration)
+    return () => {
+      if (this.#modules.get(descriptor.id)?.token === registration.token) this.#modules.delete(descriptor.id)
+    }
   }
 
   /** List installed modules in stable presentation order. */
   list(): readonly PlayWorldModuleDescriptor[] {
-    return [...this.#modules.values()].map(module => module.descriptor)
+    return [...this.#modules.values()].map(registration => registration.descriptor)
       .sort((left, right) => left.name.localeCompare(right.name))
   }
 
   /** Resolve one installed module or fail before state can be changed. */
   get(id: string): PlayWorldModule {
-    const module = this.#modules.get(id)
-    if (module === undefined) throw new Error(`游玩世界模块 ${JSON.stringify(id)} 未安装`)
-    return module
+    const registration = this.#modules.get(id)
+    if (registration === undefined) throw new Error(`游玩世界模块 ${JSON.stringify(id)} 未安装`)
+    return registration.module
   }
 
   /** Parse one durable world through its owning module. */
@@ -137,6 +217,15 @@ export class PlayWorldRegistry {
     }
     return this.get((value as { readonly moduleId: string }).moduleId).normalize(value, context)
   }
+}
+
+/** Register one trusted module for the lifetime of its Cordis plugin context. */
+export function registerPlayWorldModule(ctx: Context, module: PlayWorldModule): void {
+  const registry = ctx.get(PLAY_WORLD_REGISTRY_KEY)
+  if (registry === undefined || typeof registry.register !== 'function') {
+    throw new Error('Agent RP 游玩世界注册表不可用')
+  }
+  ctx.effect(() => registry.register(module), `agent-rp: play world ${module.descriptor.id}`)
 }
 
 /** Create the first-party world registry used by local story workspaces. */

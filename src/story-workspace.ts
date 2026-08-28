@@ -14,6 +14,7 @@ import { dirname, join, resolve } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import {
   createDefaultPlayWorldRegistry,
+  projectPlayWorldTurn,
   type PlayWorldRegistry,
   type PlayWorldWorkspaceScaffold,
 } from './play-world.ts'
@@ -22,6 +23,7 @@ import type {
   PlayWorldInstallRequest,
   PlayWorldRestartRequest,
   PlayWorldSnapshot,
+  PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import type { RoleplayActorProjection } from './roleplay-resource-catalog.ts'
 import type {
@@ -1354,6 +1356,14 @@ export class StoryWorkspaceStore {
     return this.worlds.list()
   }
 
+  /** Project the current legal world choices without exposing executable module payloads. */
+  worldTurn(id: string): PlayWorldTurnProjection | undefined {
+    const current = this.get(id)
+    if (current.world === undefined) return undefined
+    const module = this.worlds.get(current.world.moduleId)
+    return projectPlayWorldTurn(module.characterTurn(current.world, { characters: current.characters }))
+  }
+
   /** Replace the executable world with one fresh module-owned instance. */
   installWorld(id: string, request: PlayWorldInstallRequest): StoryWorkspaceSnapshot {
     const current = this.get(id)
@@ -1362,6 +1372,7 @@ export class StoryWorkspaceStore {
     const module = this.worlds.get(request.moduleId)
     const context = { characters: current.characters }
     const world = module.create(context)
+    if (world.moduleId !== request.moduleId) throw new Error('游玩世界模块创建了另一模块的状态')
     const scaffold = current.graph.nodes.length === 0 || current.outputs.length === 0
       ? module.createWorkspaceScaffold?.(context)
       : undefined
@@ -1377,7 +1388,9 @@ export class StoryWorkspaceStore {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
     if (request.format !== 0 || current.world === undefined) throw new Error('当前游玩场地没有可重新开始的世界')
-    const world = this.worlds.get(current.world.moduleId).create({ characters: current.characters })
+    const module = this.worlds.get(current.world.moduleId)
+    const world = module.create({ characters: current.characters })
+    if (world.moduleId !== current.world.moduleId) throw new Error('游玩世界模块重新开局时改变了状态所有者')
     const removedNodeIds = new Set(current.graph.nodes
       .filter(node => node.lifecycle === 'suggested' && node.sourceEventId !== undefined)
       .map(node => node.id))
@@ -1422,13 +1435,23 @@ export class StoryWorkspaceStore {
     return this.get(snapshot.id)
   }
 
-  /** Apply one typed action without permitting whole-workspace state replacement. */
+  /** Resolve and apply one action from the current Host-advertised turn. */
   dispatchWorldAction(id: string, request: PlayWorldActionRequest): StoryWorkspaceSnapshot {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
-    if (request.format !== 0 || current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
+    if (request.format !== 0 || typeof request.cycleId !== 'string' || typeof request.actionId !== 'string'
+      || current.world === undefined) throw new Error('当前游玩场地没有可执行世界')
     const module = this.worlds.get(current.world.moduleId)
-    const world = module.dispatch(current.world, request.action, { characters: current.characters })
+    const turn = module.characterTurn(current.world, { characters: current.characters })
+    if (turn === undefined || turn.id !== request.cycleId) throw new Error('游玩世界回合已经变化')
+    const action = turn.actions.find(candidate => candidate.id === request.actionId)
+    if (action === undefined) throw new Error('游玩世界动作不再合法')
+    const world = module.dispatch(current.world, action.action, { characters: current.characters })
+    if (world.moduleId !== current.world.moduleId || world.instanceId !== current.world.instanceId
+      || world.events.length < current.world.events.length
+      || current.world.events.some((event, index) => world.events[index]?.id !== event.id)) {
+      throw new Error('世界动作没有保留所属模块、实例或既有事件')
+    }
     return this.commitWorld(current, world)
   }
 
@@ -1454,9 +1477,10 @@ export class StoryWorkspaceStore {
     const action = turn.actions.find(candidate => candidate.id === request.actionId)
     if (action === undefined) throw new Error('人物选择的世界动作不再合法')
     const world = module.dispatch(current.world, action.action, { characters: current.characters })
-    if (world.instanceId !== current.world.instanceId || world.events.length < current.world.events.length
+    if (world.moduleId !== current.world.moduleId || world.instanceId !== current.world.instanceId
+      || world.events.length < current.world.events.length
       || current.world.events.some((event, index) => world.events[index]?.id !== event.id)) {
-      throw new Error('世界动作没有保留既有世界事件')
+      throw new Error('世界动作没有保留所属模块、实例或既有事件')
     }
     const receipt: StoryWorldActionReceipt = {
       key: requiredLabel(request.key, '世界动作收据 key'),

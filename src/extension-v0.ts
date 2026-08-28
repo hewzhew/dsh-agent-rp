@@ -46,6 +46,27 @@ export type {
 } from './roleplay-turn-worker.ts'
 
 export {
+  PLAY_WORLD_REGISTRY_KEY,
+  registerPlayWorldModule,
+} from './play-world.ts'
+export type {
+  PlayWorldCharacterAction,
+  PlayWorldCharacterTurn,
+  PlayWorldContext,
+  PlayWorldModule,
+  PlayWorldWorkspaceEdgeTemplate,
+  PlayWorldWorkspaceNodeTemplate,
+  PlayWorldWorkspaceOutputTemplate,
+  PlayWorldWorkspaceScaffold,
+} from './play-world.ts'
+export type {
+  PlayWorldEvent,
+  PlayWorldModuleDescriptor,
+  PlayWorldPromptProjection,
+  PlayWorldSnapshot,
+} from './play-world-protocol.ts'
+
+export {
   registerRoleplayActorRevisionProvider,
   ROLEPLAY_ACTOR_DEFINITION_FIELDS,
   ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY,

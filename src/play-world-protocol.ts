@@ -47,11 +47,27 @@ export interface PlayWorldRestartRequest {
   readonly revision: number
 }
 
-/** Request to apply one module-defined action to the authoritative state. */
+/** One browser-safe legal choice whose executable payload remains inside the Host module. */
+export interface PlayWorldActionDescriptor {
+  readonly id: string
+  readonly label: string
+  readonly description: string
+}
+
+/** Current Host-advertised turn projected without module-owned action payloads. */
+export interface PlayWorldTurnProjection {
+  readonly cycleId: string
+  readonly characterId: string
+  readonly instruction: string
+  readonly actions: readonly PlayWorldActionDescriptor[]
+}
+
+/** Request to apply one currently advertised action to the authoritative state. */
 export interface PlayWorldActionRequest {
   readonly format: 0
   readonly revision: number
-  readonly action: unknown
+  readonly cycleId: string
+  readonly actionId: string
 }
 
 /** Character-specific model input produced without revealing private world state. */

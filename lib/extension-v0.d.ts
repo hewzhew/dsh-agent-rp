@@ -1229,6 +1229,190 @@ declare class RoleplayTurnWorkerRegistry {
 }
 /** Register one trusted Host Worker through the versioned Agent RP extension service. */
 declare function registerRoleplayTurnWorker(ctx: Context, worker: RoleplayTurnWorker): void;
+/** Stable presentation metadata for one executable world module. */
+interface PlayWorldModuleDescriptor {
+  readonly id: string;
+  readonly name: string;
+  readonly summary: string;
+  readonly category: 'game' | 'simulation';
+  readonly minCharacters: number;
+  readonly maxCharacters: number;
+}
+/** One authoritative event emitted by an executable world. */
+interface PlayWorldEvent {
+  readonly id: string;
+  readonly sequence: number;
+  readonly type: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly actorId?: string;
+}
+/** Durable module-owned state attached to one play space. */
+interface PlayWorldSnapshot {
+  readonly format: 0;
+  readonly instanceId: string;
+  readonly moduleId: string;
+  readonly moduleVersion: number;
+  readonly title: string;
+  readonly state: unknown;
+  readonly events: readonly PlayWorldEvent[];
+}
+/** Character-specific model input produced without revealing private world state. */
+interface PlayWorldPromptProjection {
+  readonly title: string;
+  readonly text: string;
+}
+/** Editable role assigned to one ordered output section. */
+type StoryOutputKind = 'prose' | 'character' | 'history';
+/** Node categories rendered on the story map. */
+type StoryNodeKind = 'arc' | 'beat' | 'secret';
+/** Progress state of one story node. */
+type StoryNodeStatus = 'planned' | 'active' | 'completed' | 'dropped';
+/** Typed relationship between story-map nodes. */
+type StoryEdgeKind = 'precedes' | 'causes' | 'foreshadows';
+/** Progress state carried only by foreshadowing relationships. */
+type StoryForeshadowStatus = 'unplanted' | 'planted' | 'triggered' | 'resolved' | 'dropped';
+/** Reader visibility of a story object; character knowledge is tracked separately. */
+type StoryAudience = 'director' | 'public';
+/** Default character-knowledge rule inherited by details inside one story cluster. */
+type StoryKnowledgeMode = 'inherit' | 'none' | 'participants' | 'characters';
+/** Character knowledge granted by one cluster before per-detail overrides. */
+interface StoryKnowledgePolicy {
+  readonly mode: StoryKnowledgeMode;
+  readonly characterIds: readonly string[];
+}
+/** Stable canvas coordinates owned by one story node. */
+interface StoryNodePosition {
+  readonly x: number;
+  readonly y: number;
+}
+/** Reusable identity fields carried by one story character or bound Character Card snapshot. */
+interface StoryCharacterProfile {
+  readonly description: string;
+  readonly personality: string;
+  readonly scenario: string;
+  readonly exampleDialogue: string;
+  readonly systemPrompt: string;
+  readonly postHistoryInstructions: string;
+}
+/** Mutable state owned by one character instance in the current play space. */
+interface StoryCharacterState {
+  readonly location: string;
+  readonly condition: string;
+  readonly objective: string;
+  readonly notes: string;
+}
+/** One independently prompted story character. */
+interface StoryCharacter {
+  readonly id: string;
+  readonly name: string;
+  /** Alternative source-dialogue signatures used only to attribute imported lines to this character. */
+  readonly voiceAliases?: readonly string[];
+  readonly profile: StoryCharacterProfile;
+  readonly state: StoryCharacterState;
+  /** Stable source reference for a Character Card snapshot bound from the resource center. */
+  readonly actor?: RoleplayResourceSelection;
+}
+/** Host service used by trusted plugins to install executable play worlds. */
+declare const PLAY_WORLD_REGISTRY_KEY = "agentRp.playWorlds";
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Executable play-world modules available to Agent RP workspaces. */
+    'agentRp.playWorlds': PlayWorldRegistry;
+  }
+}
+/** Inputs available when a module creates or advances one world instance. */
+interface PlayWorldContext {
+  readonly characters: readonly StoryCharacter[];
+}
+/** One legal character choice whose executable payload stays inside its owning module. */
+interface PlayWorldCharacterAction {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly action: unknown;
+}
+/** One module-defined character turn that may require several consecutive choices. */
+interface PlayWorldCharacterTurn {
+  readonly id: string;
+  readonly characterId: string;
+  readonly instruction: string;
+  readonly actions: readonly PlayWorldCharacterAction[];
+}
+/** One module-local canonical node created only when a workspace has no authored graph. */
+interface PlayWorldWorkspaceNodeTemplate {
+  readonly key: string;
+  readonly kind: StoryNodeKind;
+  readonly parentKey?: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly status: StoryNodeStatus;
+  readonly audience: StoryAudience;
+  readonly position: StoryNodePosition;
+  readonly content: string;
+  readonly participantIds: readonly string[];
+  readonly knowledge: StoryKnowledgePolicy;
+}
+/** One module-local canonical relationship created with a fresh world scaffold. */
+interface PlayWorldWorkspaceEdgeTemplate {
+  readonly key: string;
+  readonly kind: StoryEdgeKind;
+  readonly sourceKey: string;
+  readonly targetKey: string;
+  readonly label: string;
+  readonly audience: StoryAudience;
+  readonly foreshadowStatus?: StoryForeshadowStatus;
+}
+/** One ordered output card recommended by a world for an otherwise empty layout. */
+interface PlayWorldWorkspaceOutputTemplate {
+  readonly key: string;
+  readonly name: string;
+  readonly kind: StoryOutputKind;
+  readonly enabled: boolean;
+  readonly characterId?: string;
+  readonly instructions: string;
+}
+/** Optional authoring defaults that never replace existing story objects. */
+interface PlayWorldWorkspaceScaffold {
+  readonly activeNodeKey?: string;
+  readonly nodes: readonly PlayWorldWorkspaceNodeTemplate[];
+  readonly edges: readonly PlayWorldWorkspaceEdgeTemplate[];
+  readonly outputs: readonly PlayWorldWorkspaceOutputTemplate[];
+}
+/** Host implementation of one typed, deterministic world transition system. */
+interface PlayWorldModule {
+  readonly descriptor: PlayWorldModuleDescriptor;
+  /** Create one fresh authoritative snapshot. */
+  create(context: PlayWorldContext): PlayWorldSnapshot;
+  /** Recommend a story scene and output layout for an otherwise empty workspace. */
+  createWorkspaceScaffold?(context: PlayWorldContext): PlayWorldWorkspaceScaffold;
+  /** Parse durable state owned by this module. */
+  normalize(value: unknown, context: PlayWorldContext): PlayWorldSnapshot;
+  /** Apply one validated action and return the complete next snapshot. */
+  dispatch(snapshot: PlayWorldSnapshot, action: unknown, context: PlayWorldContext): PlayWorldSnapshot;
+  /** Return only the legal choices for the character currently controlling the world. */
+  characterTurn(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldCharacterTurn | undefined;
+  /** Project only knowledge available to one character Worker. */
+  projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
+  /** Project authoritative state for the director Worker. */
+  projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection;
+  /** Render selected authoritative events as the immutable first paragraph of story prose. */
+  renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string;
+}
+/** Installed world modules keyed by stable module id. */
+declare class PlayWorldRegistry {
+  #private;
+  /** Register one module and return a stale-disposer-safe revocation. */
+  register(module: PlayWorldModule): () => void;
+  /** List installed modules in stable presentation order. */
+  list(): readonly PlayWorldModuleDescriptor[];
+  /** Resolve one installed module or fail before state can be changed. */
+  get(id: string): PlayWorldModule;
+  /** Parse one durable world through its owning module. */
+  normalize(value: unknown, context: PlayWorldContext): PlayWorldSnapshot;
+}
+/** Register one trusted module for the lifetime of its Cordis plugin context. */
+declare function registerPlayWorldModule(ctx: Context, module: PlayWorldModule): void;
 declare const ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY = "agentRp.actorRevisions";
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -1376,4 +1560,4 @@ declare function readRoleplayArtifactAutoStageIntent(value: JsonValue | undefine
 /** Versioned public contract for independent DSH plugins extending Agent RP. */
 /** The API version encoded by the `@hewzhew/dsh-agent-rp/extension/v0` export. */
 declare const AGENT_RP_EXTENSION_API_VERSION: 0;
-export { AGENT_RP_EXTENSION_API_VERSION, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };
+export { AGENT_RP_EXTENSION_API_VERSION, PLAY_WORLD_REGISTRY_KEY, type PlayWorldCharacterAction, type PlayWorldCharacterTurn, type PlayWorldContext, type PlayWorldEvent, type PlayWorldModule, type PlayWorldModuleDescriptor, type PlayWorldPromptProjection, type PlayWorldSnapshot, type PlayWorldWorkspaceEdgeTemplate, type PlayWorldWorkspaceNodeTemplate, type PlayWorldWorkspaceOutputTemplate, type PlayWorldWorkspaceScaffold, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerPlayWorldModule, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };
