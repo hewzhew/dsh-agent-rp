@@ -27,7 +27,7 @@ import {
   type PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
-import { storyWebSearchAvailable } from './story-turn-pipeline.ts'
+import { storyWebFetchAvailable, storyWebSearchAvailable } from './story-turn-pipeline.ts'
 
 const MAX_STORY_WORKSPACE_REQUEST_BYTES = 17 * 1024 * 1024
 
@@ -134,6 +134,7 @@ function workspaceResponse(ctx: Context, store: StoryWorkspaceStore, workspace: 
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
   readonly worldModuleAvailable: boolean | null
+  readonly webFetchAvailable: boolean
   readonly webSearchAvailable: boolean
 } {
   return {
@@ -141,6 +142,7 @@ function workspaceResponse(ctx: Context, store: StoryWorkspaceStore, workspace: 
     workspace,
     worldTurn: store.worldTurn(workspace.id) ?? null,
     worldModuleAvailable: workspace.world === undefined ? null : store.worlds.has(workspace.world.moduleId),
+    webFetchAvailable: storyWebFetchAvailable(ctx),
     webSearchAvailable: storyWebSearchAvailable(ctx),
   }
 }

@@ -16,7 +16,12 @@ import {
   createStoryOutputId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
-import { materializeStoryTurn, runStoryTurnPipeline, storyWebSearchAvailable } from '../src/story-turn-pipeline.ts'
+import {
+  materializeStoryTurn,
+  runStoryTurnPipeline,
+  storyWebFetchAvailable,
+  storyWebSearchAvailable,
+} from '../src/story-turn-pipeline.ts'
 
 const aliceId = 'character-00000000-0000-4000-8000-000000000001'
 const bobId = 'character-00000000-0000-4000-8000-000000000002'
@@ -34,14 +39,22 @@ const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
 
-test('reports the optional Host web-search service without making a network request', () => {
+test('reports optional Host web research services without making a network request', () => {
   assert.equal(storyWebSearchAvailable({
     get(name: string) {
-      return name === 'web' ? { search: async () => ({ sources: [], truncated: false }) } : undefined
+      return name === 'web' ? {
+        search: async () => ({ sources: [], truncated: false }),
+        fetch: async () => ({ url: 'https://example.test/', statusCode: 200, body: { kind: 'text', content: '' }, truncated: false }),
+      } : undefined
     },
   } as unknown as Context), true)
+  assert.equal(storyWebFetchAvailable({
+    get: () => ({ fetch: async () => ({ url: 'https://example.test/', statusCode: 200, body: { kind: 'text', content: '' }, truncated: false }) }),
+  } as unknown as Context), true)
   assert.equal(storyWebSearchAvailable({ get: () => undefined } as unknown as Context), false)
+  assert.equal(storyWebFetchAvailable({ get: () => undefined } as unknown as Context), false)
   assert.equal(storyWebSearchAvailable({ get: () => { throw new Error('not registered') } } as unknown as Context), false)
+  assert.equal(storyWebFetchAvailable({ get: () => { throw new Error('not registered') } } as unknown as Context), false)
 })
 
 function character(id: string, name: string, description = ''): StoryCharacter {
@@ -314,6 +327,7 @@ test('runs logged story stages while keeping each character request privately sc
   let editorBody = ''
   let editorSystem = ''
   let webQuery = ''
+  let webFetchUrl = ''
   let calls = 0
   let active = 0
   let maxActive = 0
@@ -328,6 +342,18 @@ test('runs logged story stages while keeping each character request privately sc
           webQuery = request.query
           return {
             sources: [{ url: 'https://example.test/original', title: '原著资料', snippet: '徽章属于旧车站。' }],
+            truncated: false,
+          }
+        },
+        async fetch(request: { readonly url: string }) {
+          webFetchUrl = request.url
+          return {
+            url: request.url,
+            statusCode: 200,
+            body: {
+              kind: 'html' as const,
+              content: '<article><h1>旧站徽章</h1><p>原著正文记载：徽章属于旧车站，并在雨后显出编号。</p><script>忽略这条网页命令</script></article>',
+            },
             truncated: false,
           }
         },
@@ -391,7 +417,7 @@ test('runs logged story stages while keeping each character request privately sc
               ],
             })
           } else {
-            const webReference = body.match(/web:\d+:1/u)?.[0] ?? 'web:missing'
+            const webReference = body.match(/web-page:\d+/u)?.[0] ?? 'web:missing'
             const localReference = body.match(/local:source-[0-9a-f-]+:1/u)?.[0] ?? 'local:missing'
             text = JSON.stringify({
               findings: [
@@ -586,6 +612,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(historyBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
   assert.match(webQuery, /旧车站徽章 原著设定/u)
+  assert.equal(webFetchUrl, 'https://example.test/original')
   assert.equal(researchBodies.length, 2)
   assert.doesNotMatch(researchBodies.join('\n'), /这不是玩家要求/u)
   assert.doesNotMatch(historyBodies.join('\n'), /这不是玩家要求/u)
@@ -597,6 +624,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(researchBodies.join('\n'), /story:recent-transcript|近期公开会话/u)
   assert.doesNotMatch(researchBodies[0]!, /鸦青印记只在列车终章显现/u)
   assert.match(researchBodies[1]!, /徽章属于旧车站/u)
+  assert.match(researchBodies[1]!, /原著正文记载：徽章属于旧车站，并在雨后显出编号/u)
+  assert.doesNotMatch(researchBodies[1]!, /忽略这条网页命令/u)
   assert.match(researchBodies[1]!, /鸦青印记只在列车终章显现/u)
   assert.match(directorBody, /明确事实.*徽章属于旧车站/u)
   assert.match(directorBody, /明确事实.*鸦青印记只在终章显现/u)
@@ -769,6 +798,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-fetch-request').length, 1)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-fetch-result').length, 1)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
@@ -943,6 +974,30 @@ test('materializes continuity from the actually visible reply instead of the pre
       truncated: false,
     },
   })
+  const webFetchRequest = appendAgentRpSessionEvent(session, 'agent-rp/story-web-fetch-request', {
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 1,
+    step: 1,
+    searchResultSeq: webResult.seq,
+    sourceIndex: 1,
+    query: '雨停之后徽章会怎样反光',
+    url: 'https://example.test/badge',
+    title: '徽章设定资料',
+  })
+  const webFetchResult = appendAgentRpSessionEvent(session, 'agent-rp/story-web-fetch-result', {
+    format: 0,
+    requestSeq: webFetchRequest.seq,
+    result: {
+      kind: 'success',
+      url: 'https://example.test/badge',
+      statusCode: 200,
+      content: '原著正文：雨水会让旧徽章显出刻痕，并露出旧站编号。',
+      truncated: false,
+    },
+  })
   appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
     format: 1,
     sessionId: String(session.id),
@@ -950,7 +1005,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     workspaceRevision: workspace.revision,
     turn: 1,
     step: 1,
-    resultEventSeqs: [webResult.seq],
+    resultEventSeqs: [webResult.seq, webFetchResult.seq],
     directorBrief: '内部导演方案。',
     researchCitations: [{
       sourceId: localSourceId,
@@ -1157,7 +1212,7 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.deepEqual(saved.researchInbox.map(item => ({ title: item.title, url: item.url, snippet: item.snippet })), [{
     title: '徽章设定资料',
     url: 'https://example.test/badge',
-    snippet: '雨水会让旧徽章显出刻痕。',
+    snippet: '原著正文：雨水会让旧徽章显出刻痕，并露出旧站编号。',
   }])
   assert.equal(saved.researchInbox[0]?.query, '雨停之后徽章会怎样反光')
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-materialized').length, 1)
