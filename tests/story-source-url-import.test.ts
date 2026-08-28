@@ -173,3 +173,81 @@ test('rejects unsafe, unavailable, and unsuccessful URL imports without changing
   assert.equal(calls, 1)
   assert.equal(store.get(created.id).sources.length, 0)
 })
+
+test('promotes a research result with fresh page text and its original search provenance', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-research-source-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '网络研究场地' })
+  const researched = store.materializeTurn(created.id, {
+    key: 'research-turn',
+    turn: 3,
+    title: '研究回合',
+    summary: '',
+    evidence: '',
+    participantIds: [],
+    changes: { characters: [], facts: [], nodes: [], edges: [] },
+    webResearch: [{
+      kind: 'web',
+      url: 'https://search.example.test/reimu',
+      query: '博丽灵梦 原作台词',
+      sessionId: 'session-research',
+      turn: 3,
+      resultEventSeq: 42,
+      title: '灵梦原作对话',
+      snippet: '搜索结果里的短摘要。',
+    }],
+  })
+  const item = researched.researchInbox[0]!
+  const path = `/api/agent-rp/story-workspaces/${encodeURIComponent(created.id)}/sources/research`
+  const unavailable = await invoke(storyWorkspaceRoute(store), 'POST', path, {
+    format: 0,
+    revision: researched.revision,
+    itemId: item.id,
+  })
+  assert.equal(unavailable.status, 503)
+  assert.equal(store.get(created.id).researchInbox.length, 1)
+
+  let calls = 0
+  const route = storyWorkspaceRoute(store, {
+    async fetch(request: { readonly url: string }) {
+      calls += 1
+      assert.equal(request.url, item.url)
+      return {
+        url: 'https://archive.example.test/reimu',
+        statusCode: 200,
+        body: { kind: 'html' as const, content: '<main>博麗霊夢：「ちゃんと原文を読みなさい。」</main>' },
+        truncated: true,
+      }
+    },
+  })
+  const accepted = await invoke(route, 'POST', path, {
+    format: 0,
+    revision: researched.revision,
+    itemId: item.id,
+  })
+  assert.equal(accepted.status, 201)
+  assert.equal(calls, 1)
+  const sourceImport = accepted.body.sourceImport as { readonly sourceId?: unknown; readonly truncated?: unknown }
+  assert.equal(typeof sourceImport.sourceId, 'string')
+  assert.equal(sourceImport.truncated, true)
+  const workspace = accepted.body.workspace as StoryWorkspaceSnapshot
+  assert.equal(workspace.researchInbox.length, 0)
+  assert.equal(workspace.sources[0]?.content, '博麗霊夢：「ちゃんと原文を読みなさい。」')
+  assert.deepEqual(workspace.sources[0]?.origin, {
+    kind: 'web',
+    url: item.url,
+    query: item.query,
+    sessionId: item.sessionId,
+    turn: item.turn,
+    resultEventSeq: item.resultEventSeq,
+  })
+
+  const stale = await invoke(route, 'POST', path, {
+    format: 0,
+    revision: researched.revision,
+    itemId: item.id,
+  })
+  assert.equal(stale.status, 409)
+  assert.equal(calls, 1)
+})
