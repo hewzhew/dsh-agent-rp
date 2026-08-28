@@ -205,10 +205,29 @@ export interface StoryWebSourceOrigin {
   readonly resultEventSeq: number
 }
 
+/** Provenance retained when the player imports one known page directly. */
+export interface StoryUrlSourceOrigin {
+  readonly kind: 'url'
+  /** Credential-free final HTTP(S) URL returned by the Host Web provider. */
+  readonly url: string
+  /** Original URL when the provider followed a redirect. */
+  readonly requestedUrl?: string
+  /** Whether the provider or story text projection truncated the page. */
+  readonly truncated: boolean
+}
+
 /** Durable provenance for a network result or reusable Host resource copied into the workspace. */
-export type StorySourceOrigin = StoryWebSourceOrigin | {
-  readonly kind: 'resource'
-  readonly resource: RoleplayResourceSelection
+export type StorySourceOrigin = StoryWebSourceOrigin | StoryUrlSourceOrigin
+  | { readonly kind: 'resource'; readonly resource: RoleplayResourceSelection }
+
+/** Revision-guarded request to import one known page as a durable source. */
+export interface StorySourceUrlImportRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly url: string
+  readonly name?: string
+  /** Only an explicit `original` choice makes the page eligible for voice retrieval. */
+  readonly kind: 'original' | 'reference'
 }
 
 /** One network result waiting for the player to keep or dismiss it. */

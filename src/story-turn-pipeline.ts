@@ -51,6 +51,14 @@ import {
   type StoryVoiceSourceQuery,
 } from './story-voice-retrieval.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from './story-world-events.ts'
+import {
+  fetchStoryWebPage,
+  normalizeStoryWebUrl,
+  storyWebFetchGateway,
+  storyWebSearchGateway,
+} from './story-web.ts'
+
+export { storyWebFetchAvailable, storyWebSearchAvailable } from './story-web.ts'
 
 /** Ordered model responsibilities before the visible character request. */
 export type StoryTurnStage = 'world-action' | 'cast' | 'history' | 'research' | 'character' | 'director' | 'section' | 'voice' | 'editor' | 'continuity'
@@ -386,27 +394,6 @@ interface StoryDialogueCandidate {
   readonly seedLineIds: readonly string[]
   readonly mechanics: string
   readonly leftImplicit: string
-}
-
-interface StoryWebGateway {
-  search(request: { readonly query: string; readonly maxResults: number }, signal?: AbortSignal): Promise<{
-    readonly content?: string
-    readonly sources: readonly {
-      readonly url: string
-      readonly title?: string
-      readonly snippet?: string
-      readonly publishedAt?: string
-    }[]
-    readonly truncated: boolean
-  }>
-  fetch?(request: { readonly url: string }, signal?: AbortSignal): Promise<{
-    readonly url: string
-    readonly statusCode: number
-    readonly body:
-      | { readonly kind: 'html'; readonly content: string }
-      | { readonly kind: 'text'; readonly content: string }
-    readonly truncated: boolean
-  }>
 }
 
 /** Inputs owned by one accepted Agent-loop step. */
@@ -1790,40 +1777,6 @@ function historySectionFallback(workspace: StoryWorkspaceSnapshot): string {
   return [continuity, worldEvents].filter(text => text.trim() !== '').join('\n\n')
 }
 
-function webGateway(ctx: Context): Partial<StoryWebGateway> | undefined {
-  const accessor = ctx as unknown as { readonly get?: (name: string) => unknown }
-  if (typeof accessor.get !== 'function') return undefined
-  try {
-    return accessor.get('web') as Partial<StoryWebGateway> | undefined
-  } catch {
-    return undefined
-  }
-}
-
-function webSearchGateway(ctx: Context): StoryWebGateway | undefined {
-  const candidate = webGateway(ctx)
-  return candidate !== undefined && typeof candidate.search === 'function'
-    ? candidate as StoryWebGateway
-    : undefined
-}
-
-function webFetchGateway(ctx: Context): Required<Pick<StoryWebGateway, 'fetch'>> | undefined {
-  const candidate = webGateway(ctx)
-  return candidate !== undefined && typeof candidate.fetch === 'function'
-    ? candidate as Required<Pick<StoryWebGateway, 'fetch'>>
-    : undefined
-}
-
-/** Report whether the current Host context exposes a story-compatible Web search provider. */
-export function storyWebSearchAvailable(ctx: Context): boolean {
-  return webSearchGateway(ctx) !== undefined
-}
-
-/** Report whether the current Host context exposes bounded HTTP(S) page retrieval. */
-export function storyWebFetchAvailable(ctx: Context): boolean {
-  return webFetchGateway(ctx) !== undefined
-}
-
 function webFailure(error: unknown): 'unavailable' | 'aborted' | 'provider' {
   const message = error instanceof Error ? error.message : String(error)
   if (/abort|cancel|取消|中止/iu.test(message)) return 'aborted'
@@ -1843,113 +1796,8 @@ function utf8Prefix(value: string, maxBytes: number): string {
   return characters.join('')
 }
 
-const WEB_HTML_RAW_ELEMENTS = new Set(['script', 'style', 'noscript', 'template', 'iframe', 'object', 'embed'])
-const WEB_HTML_BREAK_ELEMENTS = new Set([
-  'address', 'article', 'aside', 'blockquote', 'br', 'dd', 'div', 'dl', 'dt', 'figcaption', 'figure',
-  'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'li', 'main', 'nav', 'ol', 'p',
-  'pre', 'section', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul',
-])
-
-function webHtmlTagEnd(value: string, start: number): number {
-  let quote: '"' | "'" | undefined
-  for (let index = start; index < value.length; index += 1) {
-    const character = value[index]
-    if (quote !== undefined) {
-      if (character === quote) quote = undefined
-    } else if (character === '"' || character === "'") {
-      quote = character
-    } else if (character === '>') {
-      return index
-    }
-  }
-  return value.length - 1
-}
-
-function decodeWebHtmlEntities(value: string): string {
-  return value.replace(/&(nbsp|amp|lt|gt|quot|apos|#39|#\d{1,7}|#x[0-9a-f]{1,6});/giu, entity => {
-    const key = entity.slice(1, -1).toLowerCase()
-    if (key === 'nbsp') return ' '
-    if (key === 'amp') return '&'
-    if (key === 'lt') return '<'
-    if (key === 'gt') return '>'
-    if (key === 'quot') return '"'
-    if (key === 'apos' || key === '#39') return "'"
-    const radix = key.startsWith('#x') ? 16 : 10
-    const offset = radix === 16 ? 2 : 1
-    const codePoint = Number.parseInt(key.slice(offset), radix)
-    return Number.isSafeInteger(codePoint) && codePoint > 0 && codePoint <= 0x10ffff
-      && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
-      ? String.fromCodePoint(codePoint)
-      : entity
-  })
-}
-
-function webHtmlToText(value: string): string {
-  const lower = value.toLowerCase()
-  const output: string[] = []
-  let offset = 0
-  while (offset < value.length) {
-    const tagStart = value.indexOf('<', offset)
-    if (tagStart < 0) {
-      output.push(value.slice(offset))
-      break
-    }
-    output.push(value.slice(offset, tagStart))
-    if (value.startsWith('<!--', tagStart)) {
-      const commentEnd = value.indexOf('-->', tagStart + 4)
-      offset = commentEnd < 0 ? value.length : commentEnd + 3
-      continue
-    }
-    const tagEnd = webHtmlTagEnd(value, tagStart + 1)
-    const tag = value.slice(tagStart + 1, tagEnd).trim()
-    const closing = tag.startsWith('/')
-    const name = tag.slice(closing ? 1 : 0).match(/^[a-z][a-z0-9:-]*/iu)?.[0]?.toLowerCase()
-    if (name !== undefined && WEB_HTML_BREAK_ELEMENTS.has(name)) output.push('\n')
-    if (!closing && name !== undefined && WEB_HTML_RAW_ELEMENTS.has(name)) {
-      const closingStart = lower.indexOf(`</${name}`, tagEnd + 1)
-      if (closingStart < 0) break
-      offset = webHtmlTagEnd(value, closingStart + 2 + name.length) + 1
-      continue
-    }
-    offset = tagEnd + 1
-  }
-  return decodeWebHtmlEntities(output.join(''))
-    .replace(/\r\n?/gu, '\n')
-    .replace(/[\t\f\v ]+/gu, ' ')
-    .replace(/ *\n */gu, '\n')
-    .replace(/\n{3,}/gu, '\n\n')
-    .trim()
-}
-
-function renderStoryWebFetchBody(
-  body: { readonly kind: 'html' | 'text'; readonly content: string },
-): { readonly content: string; readonly truncated: boolean } {
-  const sourceLimit = 96 * 1_024
-  const outputLimit = 48 * 1_024
-  const source = utf8Prefix(body.content, sourceLimit)
-  const rendered = body.kind === 'html' ? webHtmlToText(source) : source
-  const content = utf8Prefix(rendered, outputLimit)
-  return {
-    content,
-    truncated: Buffer.byteLength(body.content.trim(), 'utf8') > sourceLimit
-      || Buffer.byteLength(rendered.trim(), 'utf8') > outputLimit,
-  }
-}
-
 function researchEvidenceLabel(value: string): string {
   return utf8Prefix(value.replace(/[\r\n\t]+/gu, ' ').trim(), 1_000)
-}
-
-function normalizedWebUrl(value: string): string | undefined {
-  if (value.length > 4_096) return undefined
-  try {
-    const url = new URL(value)
-    return (url.protocol === 'https:' || url.protocol === 'http:') && url.username === '' && url.password === ''
-      ? url.href
-      : undefined
-  } catch {
-    return undefined
-  }
 }
 
 function localExcerptEvidence(excerpt: StorySourceExcerpt): StoryResearchEvidence {
@@ -2023,7 +1871,7 @@ function webResearchEvidence(
   resultEventSeq: number,
 ): readonly StoryResearchEvidence[] {
   const sources = result.sources.slice(0, 12).flatMap((source, index): readonly StoryResearchEvidence[] => {
-    const url = normalizedWebUrl(source.url)
+    const url = normalizeStoryWebUrl(source.url)
     if (url === undefined) return []
     return [{
       reference: `web:${String(resultEventSeq)}:${String(index + 1)}`,
@@ -2082,8 +1930,8 @@ function materializedWebResearch(
       || event.data.result.statusCode >= 300 || event.data.result.content.trim() === '') return []
     const request = fetchRequests.get(event.data.requestSeq)
     if (request === undefined) return []
-    const requestedUrl = normalizedWebUrl(request.url)
-    const url = normalizedWebUrl(event.data.result.url)
+    const requestedUrl = normalizeStoryWebUrl(request.url)
+    const url = normalizeStoryWebUrl(event.data.result.url)
     if (requestedUrl === undefined || url === undefined || acceptedUrls.has(url)) return []
     fetchedSearchUrls.add(requestedUrl)
     acceptedUrls.add(url)
@@ -2105,7 +1953,7 @@ function materializedWebResearch(
     const request = searchRequests.get(event.data.requestSeq)
     if (request === undefined) return []
     return event.data.result.sources.flatMap(source => {
-      const url = normalizedWebUrl(source.url)
+      const url = normalizeStoryWebUrl(source.url)
       if (url === undefined || fetchedSearchUrls.has(url) || acceptedUrls.has(url)) return []
       acceptedUrls.add(url)
       return [{
@@ -2132,8 +1980,8 @@ async function fetchWebSearchSource(
   searchResultSeq: number,
   resultEventSeqs: number[],
 ): Promise<readonly StoryResearchEvidence[]> {
-  const web = webFetchGateway(input.ctx)
-  const url = normalizedWebUrl(source.url)
+  const url = normalizeStoryWebUrl(source.url)
+  const web = storyWebFetchGateway(input.ctx)
   if (web === undefined || url === undefined) return []
   const requestEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-web-fetch-request', {
     format: 0,
@@ -2151,15 +1999,13 @@ async function fetchWebSearchSource(
   })
   try {
     await input.ctx.sessions.flush(input.agent.session)
-    const fetched = await web.fetch({ url }, input.signal)
-    const rendered = renderStoryWebFetchBody(fetched.body)
-    const finalUrl = normalizedWebUrl(fetched.url) ?? url
+    const fetched = await fetchStoryWebPage(input.ctx, url, input.signal)
     const result = {
       kind: 'success' as const,
-      url: finalUrl,
+      url: fetched.url,
       statusCode: fetched.statusCode,
-      content: rendered.content,
-      truncated: fetched.truncated || rendered.truncated,
+      content: fetched.content,
+      truncated: fetched.truncated,
     }
     const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-web-fetch-result', {
       format: 0,
@@ -2202,7 +2048,7 @@ async function searchWeb(
   })
   try {
     await input.ctx.sessions.flush(input.agent.session)
-    const web = webSearchGateway(input.ctx)
+    const web = storyWebSearchGateway(input.ctx)
     if (web === undefined) throw new Error('web search unavailable')
     const result = await web.search({ query, maxResults: 6 }, input.signal)
     const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-web-search-result', {

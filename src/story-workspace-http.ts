@@ -11,6 +11,7 @@ import {
 } from './host-http.ts'
 import {
   STORY_WORKSPACES_PATH,
+  type StorySourceUrlImportRequest,
   type StoryWorkspaceCreateRequest,
   type StoryCharacterActorBindRequest,
   type StoryWorkspaceSaveRequest,
@@ -26,8 +27,8 @@ import {
   type PlayWorldRestartRequest,
   type PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
-import { StoryWorkspaceStore } from './story-workspace.ts'
-import { storyWebFetchAvailable, storyWebSearchAvailable } from './story-turn-pipeline.ts'
+import { createStorySourceId, StoryWorkspaceStore } from './story-workspace.ts'
+import { fetchStoryWebPage, storyWebFetchAvailable, storyWebSearchAvailable } from './story-web.ts'
 
 const MAX_STORY_WORKSPACE_REQUEST_BYTES = 17 * 1024 * 1024
 
@@ -161,10 +162,34 @@ function parseActorBindRequest(value: unknown, characterId: string): StoryCharac
   return record as unknown as StoryCharacterActorBindRequest
 }
 
+function parseSourceUrlImportRequest(value: unknown): StorySourceUrlImportRequest {
+  const record = requestRecord(value)
+  if (record.format !== 0 || typeof record.revision !== 'number' || typeof record.url !== 'string'
+    || record.name !== undefined && typeof record.name !== 'string'
+    || record.kind !== 'original' && record.kind !== 'reference'
+    || Object.keys(record).some(key => !['format', 'revision', 'url', 'name', 'kind'].includes(key))) {
+    throw new Error('网址资料导入请求字段无效')
+  }
+  return record as unknown as StorySourceUrlImportRequest
+}
+
+function sourceNameFromUrl(value: string): string {
+  const url = new URL(value)
+  const lastSegment = url.pathname.split('/').filter(Boolean).at(-1)
+  if (lastSegment === undefined) return url.hostname
+  try {
+    return decodeURIComponent(lastSegment).slice(0, 120) || url.hostname
+  } catch {
+    return lastSegment.slice(0, 120) || url.hostname
+  }
+}
+
 function responseStatus(message: string): number {
   if (/请求过大|不能超过/u.test(message)) return 413
   if (/当前 revision|回合已经变化|动作不再合法/u.test(message)) return 409
   if (/无法读取故事工作区/u.test(message)) return 404
+  if (/没有可用的网页正文读取能力/u.test(message)) return 503
+  if (/网页读取失败/u.test(message)) return 502
   return 400
 }
 
@@ -240,6 +265,44 @@ export function installStoryWorkspaceHttp(
             segments[0]!, binding, binding.actor === undefined ? undefined : resources!.projectActor(binding.actor),
           )
           json(response, 200, workspaceResponse(ctx, store, workspace))
+          return
+        }
+        if (request.method === 'POST' && segments.length === 3 && segments[1] === 'sources' && segments[2] === 'url') {
+          const input = parseSourceUrlImportRequest(await readJson(request))
+          const current = store.get(segments[0]!)
+          if (!Number.isSafeInteger(input.revision) || input.revision < 0 || input.revision !== current.revision) {
+            throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
+          }
+          let fetched
+          try {
+            fetched = await fetchStoryWebPage(ctx, input.url)
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (/资料 URL 必须|没有可用的网页正文读取能力|最终 URL/u.test(message)) throw error
+            throw new Error(`网页读取失败：${message}`, { cause: error })
+          }
+          if (fetched.statusCode < 200 || fetched.statusCode >= 300) {
+            throw new Error(`网页读取失败：HTTP ${String(fetched.statusCode)}`)
+          }
+          if (fetched.content.trim() === '') throw new Error('网页读取失败：页面没有可导入的正文')
+          const sourceId = createStorySourceId()
+          const workspace = store.appendSource(segments[0]!, input.revision, {
+            id: sourceId,
+            name: input.name?.trim() || sourceNameFromUrl(fetched.url),
+            kind: input.kind,
+            enabled: true,
+            content: fetched.content,
+            origin: {
+              kind: 'url',
+              url: fetched.url,
+              ...(fetched.requestedUrl === fetched.url ? {} : { requestedUrl: fetched.requestedUrl }),
+              truncated: fetched.truncated,
+            },
+          })
+          json(response, 201, {
+            ...workspaceResponse(ctx, store, workspace),
+            sourceImport: { sourceId, truncated: fetched.truncated },
+          })
           return
         }
         if (request.method === 'GET' && id !== undefined) {
