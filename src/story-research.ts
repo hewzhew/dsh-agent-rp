@@ -43,7 +43,7 @@ export function renderStorySourceExcerpt(excerpt: StorySourceExcerpt): string {
 
 /** Select bounded structured source excerpts relevant to one research query. */
 export function searchStoryWorkspaceSourceExcerpts(
-  workspace: StoryWorkspaceSnapshot,
+  workspace: Pick<StoryWorkspaceSnapshot, 'sources'>,
   query: string,
   maxCharacters = 48_000,
 ): readonly StorySourceExcerpt[] {
