@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
+import { parseStoryVoiceDocument } from '../src/story-voice-evidence.ts'
 import {
   fetchStoryWebPage,
   normalizeStoryWebUrl,
@@ -51,6 +52,78 @@ test('cleans active HTML and enforces the durable source byte limit', async () =
   assert.equal(bounded.truncated, true)
   assert.ok(Buffer.byteLength(bounded.content, 'utf8') <= 48 * 1_024)
   assert.ok(bounded.content.length > 0)
+})
+
+test('preserves semantic Web dialogue as explicit speaker-labelled evidence', () => {
+  const rendered = renderStoryWebPageBody({
+    kind: 'html',
+    content: [
+      '<article><div class="dialogue-card">',
+      '<div class="dialogue-char">博麗霊夢</div>',
+      '<div class="dialogue-content"><div class="poem"><p>先走一步。<br />别落后。</p></div></div>',
+      '</div></article>',
+    ].join(''),
+  })
+  assert.deepEqual(rendered, {
+    content: '博麗霊夢：「先走一步。 别落后。」',
+    truncated: false,
+  })
+})
+
+test('recovers blocked MediaWiki pages through bounded top-level sections', async () => {
+  const pageUrl = 'https://wiki.example.test/wiki/%E8%A7%92%E8%89%B2%E5%AF%B9%E8%AF%9D'
+  const calls: string[] = []
+  const ctx = {
+    get() {
+      return {
+        async fetch(request: { readonly url: string }) {
+          calls.push(request.url)
+          if (request.url === pageUrl) {
+            return {
+              url: request.url,
+              statusCode: 468,
+              body: { kind: 'html' as const, content: '<main>访问校验</main>' },
+              truncated: false,
+            }
+          }
+          const url = new URL(request.url)
+          assert.equal(url.pathname, '/api.php')
+          assert.equal(url.searchParams.get('page'), '角色对话')
+          const section = url.searchParams.get('section')
+          const content = section === null
+            ? JSON.stringify({ parse: { sections: [
+                { index: '1', level: '2' },
+                { index: '2', level: '3' },
+                { index: '3', level: '2' },
+              ] } })
+            : JSON.stringify({ parse: { text: section === '1'
+                ? '<div class="dialogue-char">霧雨魔理沙</div><div class="dialogue-content"><p>先确认线索。</p></div>'
+                : `<p>第 ${section} 节</p>` } })
+          return {
+            url: request.url,
+            statusCode: 200,
+            body: { kind: 'text' as const, content },
+            truncated: false,
+          }
+        },
+      }
+    },
+  } as unknown as Context
+
+  const page = await fetchStoryWebPage(ctx, pageUrl)
+  assert.equal(page.statusCode, 200)
+  assert.equal(page.url, pageUrl)
+  assert.equal(page.requestedUrl, pageUrl)
+  assert.equal(page.truncated, false)
+  assert.match(page.content, /霧雨魔理沙：「先确认线索。」/u)
+  assert.match(page.content, /第 0 节/u)
+  assert.match(page.content, /第 3 节/u)
+  assert.equal(calls.some(call => new URL(call).searchParams.get('section') === '2'), false)
+  assert.equal(calls.length, 5)
+  assert.deepEqual(parseStoryVoiceDocument(page.content).orderedLines.map(line => ({
+    speaker: line.speaker,
+    dialogue: line.dialogue,
+  })), [{ speaker: '霧雨魔理沙', dialogue: '先确认线索。' }])
 })
 
 test('requires a fetch-capable Host and a valid final URL', async () => {
