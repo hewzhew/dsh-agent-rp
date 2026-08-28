@@ -418,9 +418,11 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as {
     worldBinding?: unknown
     characters: { actor?: unknown }[]
+    outputs: unknown[]
   }
   delete stored.worldBinding
   stored.characters = stored.characters.map(({ actor: _actor, ...character }) => character)
+  stored.outputs = []
   writeFileSync(storyPath, `${JSON.stringify(stored, null, 2)}\n`)
   writeFileSync(join(root, installed.id, 'characters', reimuId, 'description.md'), '旧灵梦档案')
   writeFileSync(join(root, installed.id, 'characters', marisaId, 'description.md'), '旧魔理沙档案')
@@ -449,6 +451,12 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   assert.deepEqual(upgraded.world, beforeWorld)
   assert.deepEqual(upgraded.events, beforeEvents)
   assert.deepEqual(upgraded.graph, beforeGraph)
+  assert.deepEqual(upgraded.outputs.map(output => [output.name, output.kind, output.characterId]), [
+    ['正文', 'prose', undefined],
+    ['博丽灵梦视角', 'character', reimuId],
+    ['雾雨魔理沙视角', 'character', marisaId],
+    ['棋局记录', 'history', undefined],
+  ])
   assert.deepEqual(upgraded.worldBinding?.resource, { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID })
   assert.equal(upgraded.worldBinding?.moduleId, FLYING_CHESS_WORLD_MODULE_ID)
   assert.deepEqual(upgraded.worldBinding?.configuration, { format: 0, ruleset: 'classic-24' })
