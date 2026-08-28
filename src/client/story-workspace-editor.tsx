@@ -24,6 +24,7 @@ import {
   useState,
 } from 'react'
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
+import type { CharacterLibraryImportResult } from '../character-library-protocol.ts'
 import type { AgentRpStoryTurnProgress, AgentRpStoryTurnStage } from '../projection-types.ts'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
@@ -72,6 +73,7 @@ import { groupStoryTimeline, type StoryTimelineGroup } from '../story-timeline.t
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from '../story-world-events.ts'
 import { executeAgentRpCommand } from './agent-rp-command.ts'
+import { importCharacterFile } from './character-library-client.ts'
 import { createClientOpaqueUuid } from './client-opaque-id.ts'
 import {
   decodeStorySourceFile,
@@ -116,6 +118,11 @@ interface RoleplayResourcesResponse {
   readonly format?: number
   readonly entries?: readonly RoleplayResourceDescriptor[]
   readonly error?: string
+}
+
+interface ImportedWorldActor {
+  readonly actor: RoleplayResourceDescriptor
+  readonly outcome: CharacterLibraryImportResult['outcome']
 }
 
 type StudioView = 'world' | 'map' | 'timeline' | 'characters' | 'sources' | 'outputs'
@@ -1735,14 +1742,18 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   </div>
 }
 
-function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty, onInstall }: {
+function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty, onImportActor, onInstall }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly world: PlayWorldResourceDescriptor
   readonly actorResources: readonly RoleplayResourceDescriptor[]
   readonly busy: boolean
   readonly dirty: boolean
+  readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
 }) {
+  const actorFileInputRef = useRef<HTMLInputElement>(null)
+  const [importingActor, setImportingActor] = useState(false)
+  const [importActorError, setImportActorError] = useState<string>()
   const [actorBySlot, setActorBySlot] = useState<Readonly<Record<string, string>>>(() => Object.fromEntries(
     world.castSlots.flatMap(slot => {
       const exact = actorResources.find(actor => actor.name === slot.name)
@@ -1774,6 +1785,19 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
     })
     onInstall(world.resource, cast)
   }
+  const importActor = (file: File): void => {
+    setImportingActor(true)
+    setImportActorError(undefined)
+    void onImportActor(file).then(({ actor }) => {
+      setActorBySlot(current => {
+        const exact = world.castSlots.find(slot => current[slot.id] === undefined && slot.name === actor.name)
+        const target = exact
+          ?? world.castSlots.find(slot => current[slot.id] === undefined && slot.required)
+          ?? world.castSlots.find(slot => current[slot.id] === undefined)
+        return target === undefined ? current : { ...current, [target.id]: actor.id }
+      })
+    }).catch(reason => { setImportActorError(errorMessage(reason)) }).finally(() => { setImportingActor(false) })
+  }
   return <article className="story-world-module-card">
     <span>{world.category === 'game' ? '游戏' : '模拟'}</span><h2>{world.name}</h2>
     <p>{world.summary}</p>
@@ -1794,8 +1818,18 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
           {actorResources.map(actor => <option value={actor.id} key={actor.id}
             disabled={actorBySlot[slot.id] !== actor.id && selectedActorIds.has(actor.id)}>{actor.name}</option>)}
         </select>
-      </label>)}</div>}
-    {world.castSlots.length > 0 && actorResources.length === 0 && <small>资源中心还没有可用角色卡；先导入人物卡，再回来装入世界。</small>}
+      </label>)}<div className="story-world-cast-import">
+        <input ref={actorFileInputRef} hidden type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file !== undefined) importActor(file)
+        }} />
+        <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
+          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入角色卡'}</button>
+        <small>PNG / JSON / CHARX 会保存到资源中心，并自动填入一个空槽位。</small>
+      </div></div>}
+    {world.castSlots.length > 0 && actorResources.length === 0 && !importingActor && <small>还没有可用角色卡；可以在这里直接导入。</small>}
+    {importActorError !== undefined && <small className="story-world-cast-error" role="alert">{importActorError}</small>}
     {repeatsActor && <small>同一张角色卡不能同时扮演多个世界人物。</small>}
     {!world.moduleAvailable && <small>需要安装规则模块：{world.id}</small>}
     <button className="story-studio-button story-studio-button-primary" type="button" disabled={!ready || busy || dirty}
@@ -1805,7 +1839,7 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
   </article>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onInstall, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onImportActor, onInstall, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -1815,6 +1849,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly dirty: boolean
   readonly sessionAction: 'start' | 'continue' | undefined
   readonly onAdvanceSession: (request: string) => void
+  readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
@@ -1823,7 +1858,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
     return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
       <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
       <div className="story-world-module-grid">{worlds.map(world => <PlayWorldInstallerCard workspace={workspace} world={world}
-        actorResources={actorResources} busy={busy} dirty={dirty} onInstall={onInstall}
+        actorResources={actorResources} busy={busy} dirty={dirty} onImportActor={onImportActor} onInstall={onInstall}
         key={`${world.resource.kind}:${world.resource.id}`} />)}
       {worlds.length === 0 && <div className="story-studio-empty">当前没有可装入的世界资源。</div>}</div>
     </div>
@@ -1991,6 +2026,25 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经装入场地`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const importWorldActor = async (file: File): Promise<ImportedWorldActor> => {
+    setSaving(true)
+    setError(undefined)
+    try {
+      const imported = await importCharacterFile(file)
+      const actors = await listActorResources()
+      const actor = actors.find(candidate => candidate.id === `character:library:${imported.entry.id}`)
+      if (actor === undefined) throw new Error('角色卡已经导入，但暂时没有出现在人物资源目录中')
+      setActorResources(actors)
+      setNotice(imported.outcome === 'created'
+        ? `角色卡「${actor.name}」已导入并加入人物槽位`
+        : imported.outcome === 'restored'
+          ? `角色卡「${actor.name}」已从收纳箱恢复并加入人物槽位`
+          : `角色卡「${actor.name}」已在资源中心并加入人物槽位`)
+      return { actor, outcome: imported.outcome }
+    } finally {
+      setSaving(false)
+    }
   }
   const restartWorld = (): void => {
     if (workspace === undefined || workspace.world === undefined || dirty) return
@@ -2312,7 +2366,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         ? 'start'
         : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}
       onAdvanceSession={advanceSession}
-      onInstall={installWorld} onRestart={restartWorld} onAction={runWorldAction} />
+      onImportActor={importWorldActor} onInstall={installWorld} onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}
       clearPerspective={() => { setPerspectiveId(undefined) }} />

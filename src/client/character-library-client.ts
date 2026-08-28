@@ -5,6 +5,7 @@ import {
   type CharacterLibraryDetail,
   type CharacterLibraryRuntimeDetail,
   type CharacterLibraryEditRequest,
+  type CharacterLibraryImportResult,
   type CharacterLibraryWorldInfoPage,
   type CharacterRemoteResourcePolicy,
   type CharacterRemoteResourceType,
@@ -33,6 +34,26 @@ export async function fetchCharacterDetail(id: string): Promise<CharacterLibrary
 /** Load active card metadata and presentation rules in one Host parse for the roleplay renderer. */
 export async function fetchCharacterRuntimeDetail(id: string): Promise<CharacterLibraryRuntimeDetail> {
   return characterLibraryJson<CharacterLibraryRuntimeDetail>(`/${encodeURIComponent(id)}/runtime-detail`)
+}
+
+/** Import one local PNG, JSON, or CHARX card into the Host-owned library. */
+export async function importCharacterFile(file: File): Promise<CharacterLibraryImportResult> {
+  const response = await fetch(`${CHARACTER_LIBRARY_PATH}/import?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': file.type || 'application/octet-stream' },
+    body: file,
+  })
+  const value = await response.json() as {
+    readonly error?: string
+    readonly format?: 0
+    readonly entry?: CharacterLibraryDetail
+    readonly outcome?: CharacterLibraryImportResult['outcome']
+  }
+  if (!response.ok || value.format !== 0 || value.entry === undefined || value.outcome === undefined) {
+    throw new Error(value.error ?? `角色卡导入失败（${response.status}）`)
+  }
+  notifyCharacterLibraryChanged(value.entry.id)
+  return { entry: value.entry, outcome: value.outcome }
 }
 
 /** Notify mounted character consumers after a successful Host mutation. */

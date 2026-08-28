@@ -225,6 +225,10 @@
 .story-world-cast-slots label > span { display: grid; gap: 3px; }
 .story-world-cast-slots b { font-size: 11px; }
 .story-world-cast-slots .story-studio-input { margin: 0; min-width: 0; }
+.story-world-cast-import { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.story-world-cast-import .story-studio-button { margin: 0; }
+.story-world-cast-import > small { flex: 1; line-height: 1.45; min-width: 160px; }
+.story-world-cast-error { color: var(--dsw-alias-state-danger, #e26773) !important; }
 .story-studio-canvas { height: 100%; }
 .story-studio-canvas .react-flow__background { background: var(--studio-bg); }
 .story-studio-canvas .react-flow__controls { box-shadow: none; }
