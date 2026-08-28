@@ -1789,10 +1789,11 @@ function readinessCharacterNames(characters: readonly StoryCharacter[]): string 
   return characters.map(character => character.name).join('、')
 }
 
-function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources }: {
+function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly configureDisabled: boolean
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSourceUrl: () => void
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
@@ -1812,7 +1813,7 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
     : readiness.missingDialogue.length > 0
       ? `为${readinessCharacterNames(readiness.missingDialogue)}补充真实对话样本，声音阶段会优先使用原著证据。`
       : readiness.originalSourceCount === 0
-        ? '导入本地原著 TXT 或 Markdown 后，声音阶段才能引用可核对的角色原句。'
+        ? '从已知网页或本地 TXT / Markdown 导入原著后，声音阶段才能引用可核对的角色原句。'
         : readiness.missingSourceVoice.length > 0
           ? `现有原著还没有识别到${readinessCharacterNames(readiness.missingSourceVoice)}的署名；可在资料阅读器核对署名归属。`
           : '人物档案、角色样本和原著声音已经覆盖当前全部参与者。'
@@ -1834,14 +1835,15 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
       {firstMissingDialogue !== undefined && <button className="story-studio-button" type="button"
         onClick={() => { onOpenCharacter(firstMissingDialogue.id) }}>补角色样本</button>}
       {(readiness.missingSourceVoice.length > 0 || readiness.originalSourceCount === 0)
-        && <button className="story-studio-button" type="button" onClick={onImportSources}>导入原著文件</button>}
+        && <><button className="story-studio-button story-studio-button-primary" type="button" onClick={onImportSourceUrl}>从网址导入原著</button>
+          <button className="story-studio-button" type="button" onClick={onImportSources}>导入本地原著</button></>}
       <button className="story-studio-button" type="button" onClick={onOpenSources}>查看资料</button>
     </div>
     <p className="story-play-evidence-summary">{evidenceSummary}</p>
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1854,6 +1856,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSourceUrl: () => void
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
@@ -1883,7 +1886,8 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
         </div>
       </div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onImportSources={onImportSources}
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+      onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
       onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={currentName} launchTargets={launchTargets} launchTargetId={launchTargetId}
@@ -1927,7 +1931,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1941,6 +1945,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSourceUrl: () => void
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
@@ -1979,7 +1984,8 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
           onRestart()
         }}>{restartArmed ? '确认重新开始' : '重新开始'}</button></div></div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onImportSources={onImportSources}
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+      onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
       onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={characterName} launchTargets={launchTargets} launchTargetId={launchTargetId}
@@ -2273,7 +2279,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onImportSourceUrl, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2289,6 +2295,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
+  readonly onImportSourceUrl: () => void
   readonly onImportSources: () => void
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
@@ -2330,7 +2337,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
       sessionAction={sessionAction} launchTargets={launchTargets} launchTargetId={launchTargetId}
       launchUnavailableReason={launchUnavailableReason} onLaunchTargetChange={onLaunchTargetChange}
       onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
-      onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+      onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
       onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
@@ -2338,7 +2345,8 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
     launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
     renderPlayWorldView={renderPlayWorldView}
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
-    onConfigureCast={configureCast} onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+    onConfigureCast={configureCast} onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources}
+    onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
     onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
@@ -2913,7 +2921,13 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       renderPlayWorldView={renderPlayWorldView}
       onLaunchTargetChange={setLaunchTargetId}
       onAdvanceSession={advanceSession}
-      onImportActor={importWorldActor} onImportSources={() => { sourceFileInputRef.current?.click() }}
+      onImportActor={importWorldActor} onImportSourceUrl={() => {
+        setView('sources')
+        setSelection(undefined)
+        setReaderSourceId(undefined)
+        setSourceUrlOpen(true)
+        setSourceUrlKind('original')
+      }} onImportSources={() => { sourceFileInputRef.current?.click() }}
       onInstall={installWorld} onUpdateCast={saveWorldCast}
       onOpenCharacter={id => { select({ kind: 'character', id }) }}
       onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
