@@ -36,13 +36,18 @@ import type {
   StoryWorkspaceSnapshot,
 } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './story-research.ts'
-import { splitStorySourcePassages } from './story-source.ts'
 import {
   normalizeStoryVoiceSpeakerName,
   parseStoryVoiceEvidence,
+  storyVoiceRelevanceScore,
+  storyVoiceRelevanceTokens,
   type StoryVoiceEvidenceLine,
   type StoryVoiceEvidenceParts,
 } from './story-voice-evidence.ts'
+import {
+  StoryVoiceSourceIndex,
+  type StoryVoiceSourceQuery,
+} from './story-voice-retrieval.ts'
 import { hasPendingCharacterWorldResult, storyPendingWorldEvents } from './story-world-events.ts'
 
 /** Ordered model responsibilities before the visible character request. */
@@ -377,13 +382,6 @@ interface StoryVoiceSeedUnit extends StoryVoiceEvidenceUnit {
   readonly reference: string
   /** Immediately preceding context line that this target-character seed answered. */
   readonly replyToSeedId?: string
-}
-
-interface StoryVoiceEvidenceQuery {
-  /** Exact public premise and semantic focus selected by the character Worker. */
-  readonly primary: string
-  /** Broader public scene text used only when the speaking decision has no direct source match. */
-  readonly context: string
 }
 
 interface StoryDialogueCandidate {
@@ -807,29 +805,6 @@ function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoice
   ]
 }
 
-function voiceRelevanceTokens(value: string): ReadonlySet<string> {
-  const normalized = value.normalize('NFKC').toLocaleLowerCase()
-  const tokens = new Set<string>()
-  for (const match of normalized.matchAll(/[\p{Script=Han}]+|[\p{L}\p{N}]+/gu)) {
-    const chunk = match[0]
-    if (/^[\p{Script=Han}]+$/u.test(chunk)) {
-      for (let width = 2; width <= Math.min(4, chunk.length); width += 1) {
-        for (let index = 0; index + width <= chunk.length; index += 1) {
-          tokens.add(chunk.slice(index, index + width))
-        }
-      }
-    } else if (chunk.length >= 2) {
-      tokens.add(chunk)
-    }
-  }
-  return tokens
-}
-
-function voiceRelevanceScore(tokens: ReadonlySet<string>, value: string): number {
-  const normalized = value.normalize('NFKC').toLocaleLowerCase()
-  return [...tokens].reduce((score, token) => score + (normalized.includes(token) ? token.length : 0), 0)
-}
-
 function voiceEvidenceUnitText(unit: StoryVoiceEvidenceUnit): string {
   const preferred = unit.lines.find(line => line.variant === 'translation')
     ?? unit.lines.find(line => line.variant === 'example')
@@ -969,14 +944,14 @@ function selectSpeechVoiceEvidence(
   speech: StoryDirectorSpeechPlan,
   evidence: readonly StoryCharacterVoiceEvidence[],
   relevantSourceEvidence: readonly StoryResearchEvidence[],
-  query: StoryVoiceEvidenceQuery,
+  query: StoryVoiceSourceQuery,
 ): readonly StoryCharacterVoiceEvidence[] {
   const character = evidence.find(candidate => candidate.characterId === speech.characterId)
   if (character === undefined) return []
   const candidates = [...relevantSourceEvidence, ...character.evidence].filter((item, index, source) =>
     source.findIndex(candidate => candidate.reference === item.reference) === index)
-  const primaryTokens = voiceRelevanceTokens(query.primary)
-  const contextTokens = voiceRelevanceTokens(query.context)
+  const primaryTokens = storyVoiceRelevanceTokens(query.primary)
+  const contextTokens = storyVoiceRelevanceTokens(query.context)
   const parsed = candidates.map((item, itemIndex) => {
     const parts = resolvedVoiceEvidenceParts(character.speakerNames, item)
     const units = voiceEvidenceUnits(parts)
@@ -989,8 +964,8 @@ function selectSpeechVoiceEvidence(
     return [{
       itemIndex: candidate.itemIndex,
       unitIndex,
-      primaryScore: voiceRelevanceScore(primaryTokens, window),
-      contextScore: voiceRelevanceScore(contextTokens, window),
+      primaryScore: storyVoiceRelevanceScore(primaryTokens, window),
+      contextScore: storyVoiceRelevanceScore(contextTokens, window),
     }]
   }))
   const selectedIndexes = new Map<number, Set<number>>()
@@ -1077,11 +1052,11 @@ function selectSpeechVoiceEvidence(
     const note = [...parsed].filter(candidate => !selectedIndexes.has(candidate.itemIndex)
       && candidate.parts.targetLines.length === 0 && candidate.parts.notes !== '')
       .sort((left, right) => (/(?:语气|对话|台词|说话|措辞|声音)/u.test(right.item.label) ? 1_000 : 0)
-        + voiceRelevanceScore(primaryTokens, `${right.item.label}\n${right.parts.notes}`) * 4
-        + voiceRelevanceScore(contextTokens, `${right.item.label}\n${right.parts.notes}`)
+        + storyVoiceRelevanceScore(primaryTokens, `${right.item.label}\n${right.parts.notes}`) * 4
+        + storyVoiceRelevanceScore(contextTokens, `${right.item.label}\n${right.parts.notes}`)
         - (/(?:语气|对话|台词|说话|措辞|声音)/u.test(left.item.label) ? 1_000 : 0)
-        - voiceRelevanceScore(primaryTokens, `${left.item.label}\n${left.parts.notes}`) * 4
-        - voiceRelevanceScore(contextTokens, `${left.item.label}\n${left.parts.notes}`)
+        - storyVoiceRelevanceScore(primaryTokens, `${left.item.label}\n${left.parts.notes}`) * 4
+        - storyVoiceRelevanceScore(contextTokens, `${left.item.label}\n${left.parts.notes}`)
         || left.itemIndex - right.itemIndex)[0]
     if (note !== undefined) {
       selected.push({
@@ -2035,67 +2010,25 @@ function localResearchEvidence(
   return searchStoryWorkspaceSourceExcerpts(input.workspace, query, maxCharacters).map(localExcerptEvidence)
 }
 
-const VOICE_SOURCE_CONTEXT_RADIUS = 4
-const VOICE_SOURCE_CONTEXT_CHARACTERS = 6_000
-
-function sourceLocatorSection(locator: string): string {
-  return locator.replace(/(?:^| · )第 \d+ 段$/u, '')
-}
-
 function localVoiceEvidence(
-  input: RunStoryTurnPipelineInput,
+  sourceIndex: StoryVoiceSourceIndex,
   characterNames: readonly string[],
-  query: string,
+  query: StoryVoiceSourceQuery,
   maxCharacters: number,
 ): readonly StoryResearchEvidence[] {
-  const excerpts = searchStoryWorkspaceSourceExcerpts(input.workspace, query, maxCharacters)
-  const sources = new Map(input.workspace.sources.map(source => [source.id, source]))
-  const passageCache = new Map<string, ReturnType<typeof splitStorySourcePassages>>()
-  const seenGroups = new Set<string>()
-  return excerpts.flatMap(excerpt => {
-    const evidence = localExcerptEvidence(excerpt)
-    const direct = parseStoryVoiceEvidence(characterNames, excerpt.text)
-    if (direct.targetLines.length === 0) return [evidence]
-    const source = sources.get(excerpt.sourceId)
-    if (source === undefined) return [evidence]
-    let passages = passageCache.get(source.id)
-    if (passages === undefined) {
-      passages = splitStorySourcePassages(source)
-      passageCache.set(source.id, passages)
-    }
-    const center = passages[excerpt.ordinal]
-    if (center === undefined) return [evidence]
-    const section = sourceLocatorSection(center.locator)
-    const selected = [center]
-    let characters = center.text.length
-    for (let distance = 1; distance <= VOICE_SOURCE_CONTEXT_RADIUS; distance += 1) {
-      for (const ordinal of [excerpt.ordinal - distance, excerpt.ordinal + distance]) {
-        const candidate = passages[ordinal]
-        if (candidate === undefined || sourceLocatorSection(candidate.locator) !== section
-          || characters + candidate.text.length > VOICE_SOURCE_CONTEXT_CHARACTERS) continue
-        selected.push(candidate)
-        characters += candidate.text.length
-      }
-    }
-    selected.sort((left, right) => left.ordinal - right.ordinal)
-    const parts = parseStoryVoiceEvidence(characterNames, selected.map(passage => passage.text).join('\n'))
-    const groupKey = [source.id, section, ...parts.targetLines.map(line => `${line.variant}:${line.speaker}:${line.dialogue}`)].join('\n')
-    if (seenGroups.has(groupKey)) return []
-    seenGroups.add(groupKey)
-    const first = selected[0]!
-    const last = selected.at(-1)!
-    return [{
-      ...evidence,
-      label: `${evidence.label}（含相邻对话）`,
-      citation: {
-        sourceId: source.id,
-        locator: first.locator === last.locator ? first.locator : `${first.locator} – ${last.locator}`,
-        quote: selected.map(passage => passage.text).join('\n'),
-        note: '',
-      },
-      voiceParts: parts,
-    }]
-  })
+  return sourceIndex.search(characterNames, query, maxCharacters).map(excerpt => ({
+    reference: excerpt.reference,
+    kind: 'local',
+    label: researchEvidenceLabel(`${excerpt.sourceName} · ${excerpt.locator}（含相邻对话）`),
+    text: excerpt.text,
+    citation: {
+      sourceId: excerpt.sourceId,
+      locator: excerpt.citationLocator,
+      quote: excerpt.text,
+      note: '',
+    },
+    voiceParts: excerpt.voiceParts,
+  }))
 }
 
 function uniqueCitationDrafts(
@@ -3256,6 +3189,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const dialogueByReference = new Map<string, string>()
   const voiceCitationsByReference = new Map<string, readonly StoryCitationDraft[]>()
   if (directorDecision !== undefined) {
+    const voiceSourceIndex = new StoryVoiceSourceIndex(input.workspace.sources)
     const speechTurns = directorDecision.sections.flatMap(section => section.speech.map(speech => ({ section, speech })))
     for (const [speechIndex, { section, speech }] of speechTurns.entries()) {
       input.signal.throwIfAborted()
@@ -3271,11 +3205,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         worldOutcome,
       ].filter(value => value !== '').join('\n')
       const characterSpeakerNames = character === undefined ? [] : [character.name, ...(character.voiceAliases ?? [])]
-      const relevantSourceEvidence = character === undefined ? [] : localVoiceEvidence(input, characterSpeakerNames, [
-        ...characterSpeakerNames,
-        primaryVoiceQuery,
-        contextVoiceQuery,
-      ].join('\n'), 20_000)
+      const relevantSourceEvidence = character === undefined ? [] : localVoiceEvidence(voiceSourceIndex, characterSpeakerNames, {
+        primary: primaryVoiceQuery,
+        context: contextVoiceQuery,
+      }, 20_000)
       const selectedVoiceEvidence = selectSpeechVoiceEvidence(speech, voiceEvidence, relevantSourceEvidence, {
         primary: primaryVoiceQuery,
         context: contextVoiceQuery,

@@ -33,3 +33,24 @@ test('retains prose as notes and deduplicates repeated labelled lines', () => {
   assert.equal(parts.targetLines[0]?.variant, 'example')
   assert.equal(parts.notes, '这一段说明她会直接反问。')
 })
+
+test('resets original and translated variants across repeated bilingual blocks', () => {
+  const parts = parseStoryVoiceEvidence(['灵梦'], [
+    '原文：',
+    '灵梦：「最初の返事。」',
+    '参考译文：',
+    '灵梦：“第一次回答。”',
+    '原文：',
+    '灵梦：「次の返事。」',
+    '参考译文：',
+    '灵梦：“第二次回答。”',
+  ].join('\n'))
+
+  assert.deepEqual(parts.orderedLines.map(line => line.variant), [
+    'original',
+    'translation',
+    'original',
+    'translation',
+  ])
+  assert.equal(parts.notes, '')
+})
