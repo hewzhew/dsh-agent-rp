@@ -70,8 +70,11 @@ import {
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import { splitStorySourcePassages, type StorySourcePassage } from '../story-source.ts'
 import {
+  attributeStoryVoiceDocument,
   parseStoryVoiceDocument,
+  storyVoiceEvidenceUnits,
   storyVoiceSpeakerMatches,
+  storyVoiceSpeakerAttributions,
 } from '../story-voice-evidence.ts'
 import { groupStoryTimeline, type StoryTimelineGroup } from '../story-timeline.ts'
 import { resolveStoryTurnRequest } from '../story-turn-request.ts'
@@ -1230,32 +1233,94 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
   </>
 }
 
-function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectCitation, onAddCitation }: {
+const SOURCE_VOICE_UNIT_PAGE_SIZE = 12
+const SOURCE_VOICE_DIAGNOSTIC_LIMIT = 16
+
+function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectCitation, onAddCitation, onEditCharacter }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly source: StorySource
   readonly selectedCitationId: string | undefined
   readonly onBack: () => void
   readonly onSelectCitation: (id: string) => void
   readonly onAddCitation: (passage: StorySourcePassage) => void
+  readonly onEditCharacter: (id: string) => void
 }) {
   const passages = splitStorySourcePassages(source)
   const citations = workspace.citations.filter(citation => citation.sourceId === source.id)
-  const voiceDocument = parseStoryVoiceDocument(source.content)
-  const voiceMatches = workspace.characters.flatMap(character => {
+  const [selectedVoiceCharacterId, setSelectedVoiceCharacterId] = useState(workspace.characters[0]?.id)
+  const [visibleVoiceUnitCount, setVisibleVoiceUnitCount] = useState(SOURCE_VOICE_UNIT_PAGE_SIZE)
+  const voiceDocument = useMemo(() => parseStoryVoiceDocument(source.content), [source.content])
+  const characterVoices = useMemo(() => workspace.characters.map(character => {
     const names = [character.name, ...(character.voiceAliases ?? [])]
-    const lines = voiceDocument.orderedLines.filter(line => storyVoiceSpeakerMatches(names, line.speaker))
-    const primaryLines = lines.filter(line => line.variant !== 'translation')
-    const count = primaryLines.length > 0 ? primaryLines.length : lines.length
-    return count === 0 ? [] : [{ character, count }]
-  })
+    const parts = attributeStoryVoiceDocument(names, voiceDocument)
+    return {
+      character,
+      units: storyVoiceEvidenceUnits(parts).filter(unit => unit.owner === 'target'),
+    }
+  }), [voiceDocument, workspace.characters])
+  const activeCharacterVoice = characterVoices.find(item => item.character.id === selectedVoiceCharacterId)
+    ?? characterVoices[0]
+  const voiceAttributions = useMemo(() => storyVoiceSpeakerAttributions(voiceDocument, workspace.characters.map(character => ({
+    id: character.id,
+    names: [character.name, ...(character.voiceAliases ?? [])],
+  }))), [voiceDocument, workspace.characters])
+  const unmatchedSpeakers = voiceAttributions.filter(item => item.characterIds.length === 0)
+  const ambiguousSpeakers = voiceAttributions.filter(item => item.characterIds.length > 1)
+  useEffect(() => {
+    setVisibleVoiceUnitCount(SOURCE_VOICE_UNIT_PAGE_SIZE)
+  }, [activeCharacterVoice?.character.id, source.id])
   return <div className="story-source-reader">
     <div className="story-studio-view-heading"><div><button className="story-source-back" type="button" onClick={onBack}>← 资料库</button>
       <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div></div>
-    {source.kind === 'original' && <div className="story-source-voice-status" data-empty={voiceMatches.length === 0}>
-      <strong>人物声音</strong>{voiceMatches.length === 0
-        ? <span>没有识别到人物署名台词；可在人物档案补充原作署名。</span>
-        : <div>{voiceMatches.map(({ character, count }) => <span key={character.id}>{character.name}<b>{count} 句</b></span>)}</div>}
-    </div>}
+    {source.kind === 'original' && <section className="story-source-voice-inspection">
+      <div className="story-source-voice-heading"><div><strong>原作声音</strong><span>逐句核对识别结果；署名遗漏或冲突可以回人物档案修正。</span></div>
+        <span>{voiceDocument.orderedLines.length} 行署名台词</span></div>
+      {characterVoices.length === 0
+        ? <div className="story-source-voice-empty">先添加人物，再检查原作署名是否正确归属。</div>
+        : <>
+          <div className="story-source-voice-tabs" role="tablist" aria-label="选择人物声音">
+            {characterVoices.map(item => <button aria-selected={activeCharacterVoice?.character.id === item.character.id}
+              className="story-source-voice-tab" data-empty={item.units.length === 0} key={item.character.id} role="tab" type="button"
+              onClick={() => { setSelectedVoiceCharacterId(item.character.id) }}>
+              <span>{item.character.name}</span><b>{item.units.length} 句</b>
+            </button>)}
+          </div>
+          {activeCharacterVoice !== undefined && <div className="story-source-voice-character">
+            <div className="story-source-voice-character-heading"><div><strong>{activeCharacterVoice.character.name}</strong>
+              <span>{activeCharacterVoice.units.length === 0
+                ? '当前署名没有命中此人物。'
+                : `已识别 ${String(activeCharacterVoice.units.length)} 个台词单元。`}</span></div>
+              <button className="story-studio-button" type="button" onClick={() => { onEditCharacter(activeCharacterVoice.character.id) }}>编辑人物署名</button></div>
+            {activeCharacterVoice.units.length === 0
+              ? <div className="story-source-voice-empty">若原文确有此人物台词，请把原始署名补到人物档案的“原作署名”。</div>
+              : <div className="story-source-voice-units">{activeCharacterVoice.units.slice(0, visibleVoiceUnitCount).map((unit, unitIndex) => <article
+                className="story-source-voice-unit" key={`${activeCharacterVoice.character.id}:${String(unitIndex)}`}>
+                <div className="story-source-voice-unit-heading"><span>台词 {String(unitIndex + 1)}</span><small>{[...new Set(unit.lines.map(line => line.speaker))].join(' / ')}</small></div>
+                {unit.lines.map((line, lineIndex) => <div className="story-source-voice-line" data-variant={line.variant}
+                  key={`${line.variant}:${line.speaker}:${String(lineIndex)}`}>
+                  <small>{line.variant === 'original' ? '原文' : line.variant === 'translation' ? '参考译文' : '示例'} · {line.speaker}</small>
+                  <p>{line.dialogue}</p>
+                </div>)}
+              </article>)}</div>}
+            {visibleVoiceUnitCount < activeCharacterVoice.units.length && <button className="story-source-voice-more" type="button"
+              onClick={() => { setVisibleVoiceUnitCount(count => count + SOURCE_VOICE_UNIT_PAGE_SIZE) }}>
+              继续显示（还有 {String(activeCharacterVoice.units.length - visibleVoiceUnitCount)} 句）
+            </button>}
+          </div>}
+        </>}
+      {(unmatchedSpeakers.length > 0 || ambiguousSpeakers.length > 0) && <div className="story-source-voice-diagnostics">
+        <div><strong>署名待校对</strong><span>未归属需要补充别名；多人物命中需要移除冲突别名。</span></div>
+        {[...unmatchedSpeakers, ...ambiguousSpeakers].slice(0, SOURCE_VOICE_DIAGNOSTIC_LIMIT).map((item, index) => <div
+          className="story-source-voice-diagnostic" data-kind={item.characterIds.length === 0 ? 'unmatched' : 'ambiguous'}
+          key={`${item.labels.join(':')}:${String(index)}`}>
+          <strong>{item.labels.join(' / ')}</strong><span>{item.characterIds.length === 0
+            ? `未归属 · ${String(item.lineCount)} 行`
+            : `同时命中 ${item.characterIds.map(id => workspace.characters.find(character => character.id === id)?.name ?? id).join('、')}`}</span>
+        </div>)}
+        {unmatchedSpeakers.length + ambiguousSpeakers.length > SOURCE_VOICE_DIAGNOSTIC_LIMIT
+          && <small>另有 {String(unmatchedSpeakers.length + ambiguousSpeakers.length - SOURCE_VOICE_DIAGNOSTIC_LIMIT)} 个署名未展开。</small>}
+      </div>}
+    </section>}
     {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
       {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
         key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
@@ -2772,7 +2837,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       </div>
       : <SourceReader workspace={workspace} source={readerSource} selectedCitationId={selectedCitation?.id}
         onBack={() => { setSelection(undefined); setReaderSourceId(undefined) }} onSelectCitation={id => { setSelection({ kind: 'citation', id }) }}
-        onAddCitation={passage => { addCitation(readerSource, passage) }} />
+        onAddCitation={passage => { addCitation(readerSource, passage) }} onEditCharacter={id => { select({ kind: 'character', id }) }} />
   } else {
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>输出布局</h1><p>拖动卡片或使用上下按钮，决定生成和展示顺序。</p></div><button className="story-studio-button" type="button" onClick={addOutput}>＋ 添加分区</button></div>
       <div className="story-studio-card-list">{workspace.outputs.map((output, index) => <article draggable className="story-studio-card story-output-card"

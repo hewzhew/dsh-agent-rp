@@ -33,6 +33,25 @@ export interface StoryVoiceEvidenceParts {
   readonly notes: string
 }
 
+/** One primary utterance and its aligned reference translation. */
+export interface StoryVoiceEvidenceUnit {
+  readonly lines: readonly StoryVoiceEvidenceLine[]
+  readonly owner: StoryVoiceEvidenceLine['owner']
+}
+
+/** Character identity used to diagnose speaker-label attribution. */
+export interface StoryVoiceCharacterIdentity {
+  readonly id: string
+  readonly names: readonly string[]
+}
+
+/** One normalized speaker label and every character identity that accepts it. */
+export interface StoryVoiceSpeakerAttribution {
+  readonly labels: readonly string[]
+  readonly characterIds: readonly string[]
+  readonly lineCount: number
+}
+
 /** Normalize one written speaker name for alias matching and evidence deduplication. */
 export function normalizeStoryVoiceSpeakerName(value: string): string {
   return value.normalize('NFKC').replace(/[\s·・]/gu, '')
@@ -118,9 +137,11 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
   return { occurrences, orderedLines, notes }
 }
 
-/** Parse speaker-labelled dialogue and attribute lines using one character's names and aliases. */
-export function parseStoryVoiceEvidence(characterNames: readonly string[], text: string): StoryVoiceEvidenceParts {
-  const document = parseStoryVoiceDocument(text)
+/** Attribute one parsed document using a character's names and aliases. */
+export function attributeStoryVoiceDocument(
+  characterNames: readonly string[],
+  document: StoryVoiceDocument,
+): StoryVoiceEvidenceParts {
   const orderedLines = document.orderedLines.map((line): StoryVoiceEvidenceLine => ({
     speaker: line.speaker,
     dialogue: line.dialogue,
@@ -133,4 +154,67 @@ export function parseStoryVoiceEvidence(characterNames: readonly string[], text:
     contextLines: orderedLines.filter(line => line.owner === 'context'),
     notes: document.notes,
   }
+}
+
+/** Parse speaker-labelled dialogue and attribute lines using one character's names and aliases. */
+export function parseStoryVoiceEvidence(characterNames: readonly string[], text: string): StoryVoiceEvidenceParts {
+  return attributeStoryVoiceDocument(characterNames, parseStoryVoiceDocument(text))
+}
+
+/** Pair primary dialogue with reference translations using the same ownership rules as voice generation. */
+export function storyVoiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoiceEvidenceUnit[] {
+  const primary = parts.orderedLines.filter(line => line.variant !== 'translation')
+  const translations = parts.orderedLines.filter(line => line.variant === 'translation')
+  if (primary.length === 0) return translations.map(line => ({ lines: [line], owner: line.owner }))
+  const unusedTranslations = new Set(translations.map((_line, index) => index))
+  const units = primary.map((line, index): StoryVoiceEvidenceUnit => {
+    const aligned = translations[index]
+    const sameOwner = (candidate: StoryVoiceEvidenceLine): boolean => candidate.owner === line.owner
+    const sameFallbackSpeaker = (candidate: StoryVoiceEvidenceLine): boolean => line.owner === 'target'
+      || normalizeStoryVoiceSpeakerName(candidate.speaker) === normalizeStoryVoiceSpeakerName(line.speaker)
+    const translationIndex = aligned !== undefined
+      && unusedTranslations.has(index)
+      && sameOwner(aligned)
+      ? index
+      : translations.findIndex((candidate, candidateIndex) => unusedTranslations.has(candidateIndex)
+        && sameOwner(candidate) && sameFallbackSpeaker(candidate))
+    const translation = translationIndex < 0 ? undefined : translations[translationIndex]
+    if (translation !== undefined) unusedTranslations.delete(translationIndex)
+    return {
+      lines: translation === undefined ? [line] : [line, translation],
+      owner: line.owner,
+    }
+  })
+  return [
+    ...units,
+    ...[...unusedTranslations].map(index => ({
+      lines: [translations[index]!],
+      owner: translations[index]!.owner,
+    })),
+  ]
+}
+
+/** Group written speaker labels and report unmatched or multiply matched identities. */
+export function storyVoiceSpeakerAttributions(
+  document: StoryVoiceDocument,
+  characters: readonly StoryVoiceCharacterIdentity[],
+): readonly StoryVoiceSpeakerAttribution[] {
+  const grouped = new Map<string, { labels: string[]; lineCount: number }>()
+  for (const line of document.orderedLines) {
+    const key = normalizeStoryVoiceSpeakerName(line.speaker)
+    const current = grouped.get(key)
+    if (current === undefined) {
+      grouped.set(key, { labels: [line.speaker], lineCount: 1 })
+      continue
+    }
+    if (!current.labels.includes(line.speaker)) current.labels.push(line.speaker)
+    current.lineCount += 1
+  }
+  return [...grouped.values()].map(group => ({
+    labels: group.labels,
+    characterIds: characters
+      .filter(character => group.labels.some(label => storyVoiceSpeakerMatches(character.names, label)))
+      .map(character => character.id),
+    lineCount: group.lineCount,
+  }))
 }

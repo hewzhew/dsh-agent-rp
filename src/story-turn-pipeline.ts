@@ -39,10 +39,12 @@ import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './s
 import {
   normalizeStoryVoiceSpeakerName,
   parseStoryVoiceEvidence,
+  storyVoiceEvidenceUnits,
   storyVoiceRelevanceScore,
   storyVoiceRelevanceTokens,
   type StoryVoiceEvidenceLine,
   type StoryVoiceEvidenceParts,
+  type StoryVoiceEvidenceUnit,
 } from './story-voice-evidence.ts'
 import {
   StoryVoiceSourceIndex,
@@ -370,11 +372,6 @@ interface StoryCharacterVoiceEvidence {
   readonly characterName: string
   readonly speakerNames: readonly string[]
   readonly evidence: readonly StoryResearchEvidence[]
-}
-
-interface StoryVoiceEvidenceUnit {
-  readonly lines: readonly StoryVoiceEvidenceLine[]
-  readonly owner: StoryVoiceEvidenceLine['owner']
 }
 
 interface StoryVoiceSeedUnit extends StoryVoiceEvidenceUnit {
@@ -773,38 +770,6 @@ function resolvedVoiceEvidenceParts(
   return item.voiceParts ?? parseStoryVoiceEvidence(characterNames, item.text)
 }
 
-function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoiceEvidenceUnit[] {
-  const primary = parts.orderedLines.filter(line => line.variant !== 'translation')
-  const translations = parts.orderedLines.filter(line => line.variant === 'translation')
-  if (primary.length === 0) return translations.map(line => ({ lines: [line], owner: line.owner }))
-  const unusedTranslations = new Set(translations.map((_line, index) => index))
-  const units = primary.map((line, index): StoryVoiceEvidenceUnit => {
-    const aligned = translations[index]
-    const sameOwner = (candidate: StoryVoiceEvidenceLine): boolean => candidate.owner === line.owner
-      && (line.owner === 'target'
-        || normalizeStoryVoiceSpeakerName(candidate.speaker) === normalizeStoryVoiceSpeakerName(line.speaker))
-    const translationIndex = aligned !== undefined
-      && unusedTranslations.has(index)
-      && sameOwner(aligned)
-      ? index
-      : translations.findIndex((candidate, candidateIndex) => unusedTranslations.has(candidateIndex)
-        && sameOwner(candidate))
-    const translation = translationIndex < 0 ? undefined : translations[translationIndex]
-    if (translation !== undefined) unusedTranslations.delete(translationIndex)
-    return {
-      lines: translation === undefined ? [line] : [line, translation],
-      owner: line.owner,
-    }
-  })
-  return [
-    ...units,
-    ...[...unusedTranslations].map(index => ({
-      lines: [translations[index]!],
-      owner: translations[index]!.owner,
-    })),
-  ]
-}
-
 function voiceEvidenceUnitText(unit: StoryVoiceEvidenceUnit): string {
   const preferred = unit.lines.find(line => line.variant === 'translation')
     ?? unit.lines.find(line => line.variant === 'example')
@@ -818,7 +783,7 @@ function selectVoiceEvidenceParts(
   selectedUnitIndexes: ReadonlySet<number>,
   notes = '',
 ): StoryVoiceEvidenceParts {
-  const units = voiceEvidenceUnits(resolvedVoiceEvidenceParts(characterNames, item))
+  const units = storyVoiceEvidenceUnits(resolvedVoiceEvidenceParts(characterNames, item))
   const orderedLines = units.flatMap((unit, index) => selectedUnitIndexes.has(index) ? unit.lines : [])
   return {
     orderedLines,
@@ -831,7 +796,7 @@ function selectVoiceEvidenceParts(
 function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryVoiceSeedUnit[] {
   const renderedUnitIds = new Map<string, string>()
   return character.evidence.flatMap(item => {
-    const units = voiceEvidenceUnits(resolvedVoiceEvidenceParts(character.speakerNames, item))
+    const units = storyVoiceEvidenceUnits(resolvedVoiceEvidenceParts(character.speakerNames, item))
     const unitIds: string[] = []
     return units.flatMap((unit, index): readonly StoryVoiceSeedUnit[] => {
       const preferred = voiceEvidenceUnitText(unit)
@@ -954,7 +919,7 @@ function selectSpeechVoiceEvidence(
   const contextTokens = storyVoiceRelevanceTokens(query.context)
   const parsed = candidates.map((item, itemIndex) => {
     const parts = resolvedVoiceEvidenceParts(character.speakerNames, item)
-    const units = voiceEvidenceUnits(parts)
+    const units = storyVoiceEvidenceUnits(parts)
     return { item, itemIndex, parts, units }
   })
   const anchors = parsed.flatMap(candidate => candidate.units.flatMap((unit, unitIndex) => {
