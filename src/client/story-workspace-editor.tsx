@@ -1278,7 +1278,7 @@ function OutputInspector({ workspace, output, update, onDelete }: {
     </select></Field>
     {output.kind === 'character' && <Field label="目标人物"><select className="story-studio-input" value={output.characterId ?? ''}
       onChange={event => { patch(current => event.target.value === '' ? selectWithoutCharacter(current) : { ...current, characterId: event.target.value }) }}>
-      <option value="">全部参与人物</option>{workspace.characters.map(character => <option key={character.id} value={character.id}>{character.name}</option>)}
+      <option value="">每位参与人物各自一份</option>{workspace.characters.map(character => <option key={character.id} value={character.id}>{character.name}</option>)}
     </select></Field>}
     <label className="story-studio-check" style={{ marginBottom: 12 }}><input type="checkbox" checked={output.enabled}
       onChange={event => { patch(current => ({ ...current, enabled: event.target.checked })) }} />生成此分区</label>

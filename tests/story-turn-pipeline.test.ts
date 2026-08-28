@@ -17,6 +17,7 @@ import {
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 import {
+  expandStoryTurnOutputs,
   materializeStoryTurn,
   runStoryTurnPipeline,
   storyWebFetchAvailable,
@@ -35,6 +36,8 @@ const historyEventId = 'event-00000000-0000-4000-8000-000000000001'
 const bobHistoryEventId = 'event-00000000-0000-4000-8000-000000000002'
 const sectionId = 'output-00000000-0000-4000-8000-000000000001'
 const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
+const aliceCharacterSectionId = `${characterSectionId}:${aliceId}`
+const bobCharacterSectionId = `${characterSectionId}:${bobId}`
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
@@ -201,7 +204,7 @@ function workspace(): StoryWorkspaceSnapshot {
     ],
     outputs: [
       { id: sectionId, name: '正文', kind: 'prose', enabled: true, instructions: '保持第三人称。' },
-      { id: characterSectionId, name: '阿梨视角', kind: 'character', enabled: true, characterId: aliceId, instructions: '只写阿梨能表现出的内容。' },
+      { id: characterSectionId, name: '人物私记', kind: 'character', enabled: true, instructions: '只写各人物能表现出的内容。' },
       { id: historySectionId, name: '公开档案', kind: 'history', enabled: true, instructions: '使用简短时间线。' },
     ],
     sources: [
@@ -292,6 +295,133 @@ function workspace(): StoryWorkspaceSnapshot {
     researchInbox: [],
   }
 }
+
+test('expands an unbound character output into one stable section per participating character', () => {
+  const base = workspace()
+  const template = {
+    id: characterSectionId,
+    name: '人物私记',
+    kind: 'character' as const,
+    enabled: true,
+    instructions: '只保留各自的私有决定。',
+  }
+  const input: StoryWorkspaceSnapshot = {
+    ...base,
+    outputs: [
+      base.outputs[0]!,
+      template,
+      base.outputs[2]!,
+      { ...template, id: createStoryOutputId(), name: '停用模板', enabled: false },
+    ],
+  }
+
+  const first = expandStoryTurnOutputs(input)
+  const second = expandStoryTurnOutputs(input)
+  const characterOutputs = first.filter(output => output.kind === 'character')
+
+  assert.deepEqual(first, second)
+  assert.deepEqual(characterOutputs.map(output => ({
+    id: output.id,
+    name: output.name,
+    characterId: output.characterId,
+  })), [{
+    id: `${characterSectionId}:${aliceId}`,
+    name: '人物私记 · 阿梨',
+    characterId: aliceId,
+  }, {
+    id: `${characterSectionId}:${bobId}`,
+    name: '人物私记 · 柏舟',
+    characterId: bobId,
+  }])
+  assert.equal(first.some(output => output.name === '停用模板'), false)
+
+  const aliceOnly: StoryWorkspaceSnapshot = {
+    ...input,
+    graph: {
+      ...input.graph,
+      nodes: input.graph.nodes.map(node => node.id === activeNodeId
+        ? { ...node, participantIds: [aliceId] }
+        : node),
+    },
+    outputs: [
+      template,
+      { ...template, id: createStoryOutputId(), name: '柏舟专属', characterId: bobId },
+    ],
+  }
+  assert.deepEqual(expandStoryTurnOutputs(aliceOnly).map(output => ({
+    id: output.id,
+    characterId: output.characterId,
+  })), [{
+    id: `${characterSectionId}:${aliceId}`,
+    characterId: aliceId,
+  }])
+})
+
+test('omits character outputs when their isolated character decision is unavailable', async () => {
+  const session = Session.create(SessionId('story-character-section-isolation'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const inputWorkspace: StoryWorkspaceSnapshot = {
+    ...base,
+    pipeline: { ...base.pipeline, researchMaxPasses: 1 },
+    outputs: [{
+      id: characterSectionId,
+      name: '人物私记',
+      kind: 'character',
+      enabled: true,
+      instructions: '',
+    }],
+    sources: [],
+  }
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        if (system.includes('指定人物认知')) {
+          return (async function* () {
+            throw new Error('fixture character failure')
+          })()
+        }
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : system.includes('剧情研究 Worker')
+            ? JSON.stringify({ findings: [], followUps: [] })
+            : system.includes('剧情导演 Worker')
+              ? JSON.stringify({
+                sections: [
+                  { sectionId: aliceCharacterSectionId, characterId: aliceId },
+                  { sectionId: bobCharacterSectionId, characterId: bobId },
+                ],
+              })
+              : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    workspace: inputWorkspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    signal: new AbortController().signal,
+  })
+  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+
+  assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [aliceId, bobId])
+  assert.equal(stageRequests.some(request => request.stage === 'section'), false)
+  assert.deepEqual(result.finalSections, [])
+})
 
 test('runs logged story stages while keeping each character request privately scoped', async () => {
   const session = Session.create(SessionId('story-turn-pipeline'))
@@ -470,7 +600,8 @@ test('runs logged story stages while keeping each character request privately sc
                   },
                 ],
               },
-              { sectionId: characterSectionId, characterId: '阿梨' },
+              { sectionId: aliceCharacterSectionId, characterId: '阿梨' },
+              { sectionId: bobCharacterSectionId, characterId: '柏舟' },
               { sectionId: historySectionId, beats: ['记录已经发生的公开事实。'] },
             ],
           })
@@ -547,7 +678,7 @@ test('runs logged story stages while keeping each character request privately sc
                 sectionId,
                 text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n柏舟说：“编辑器新增的台词。”',
               },
-              { sectionId: characterSectionId, text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
+              { sectionId: aliceCharacterSectionId, text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
               { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
             ],
           })
@@ -759,9 +890,9 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
   assert.doesNotMatch(sectionBodies[0]!, /对白收束/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
-  assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(characterSectionId))
-  assert.ok(editorBody.indexOf(characterSectionId) < editorBody.indexOf(historySectionId))
-  assert.match(editorBody, new RegExp(`${characterSectionId}[\\s\\S]*自己的旧站记忆`, 'u'))
+  assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(aliceCharacterSectionId))
+  assert.ok(editorBody.indexOf(aliceCharacterSectionId) < editorBody.indexOf(historySectionId))
+  assert.match(editorBody, new RegExp(`${aliceCharacterSectionId}[\\s\\S]*自己的旧站记忆`, 'u'))
   assert.match(editorBody, /先看“徽章”，别忙着猜/u)
   assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
@@ -787,8 +918,11 @@ test('runs logged story stages while keeping each character request privately sc
     characterId: section.characterId,
   })), [
     { sectionId, kind: 'prose', characterId: undefined },
-    { sectionId: characterSectionId, kind: 'character', characterId: aliceId },
+    { sectionId: aliceCharacterSectionId, kind: 'character', characterId: aliceId },
     { sectionId: historySectionId, kind: 'history', characterId: undefined },
+  ])
+  assert.deepEqual(result.finalSections.find(section => section.sectionId === aliceCharacterSectionId)?.privateInsights, [
+    { kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
   ])
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
@@ -804,6 +938,8 @@ test('runs logged story stages while keeping each character request privately sc
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
   assert.deepEqual(stageRequests.filter(request => request.stage === 'history').map(request => request.subjectId), [aliceId, bobId])
+  assert.equal(stageRequests.some(request => request.stage === 'section'
+    && request.subjectId?.startsWith(`${characterSectionId}:`)), false)
   assert.ok(stageRequests.findLastIndex(request => request.stage === 'history')
     < stageRequests.findIndex(request => request.stage === 'character'))
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
@@ -901,7 +1037,8 @@ test('materializes continuity from the actually visible reply instead of the pre
   const marisaId = createStoryCharacterId()
   const nodeId = createStoryNodeId()
   const proseSectionId = createStoryOutputId()
-  const privateSectionId = createStoryOutputId()
+  const privateTemplateId = createStoryOutputId()
+  const privateSectionId = `${privateTemplateId}:${marisaId}`
   const historySectionId = createStoryOutputId()
   const localSourceId = 'source-00000000-0000-4000-8000-000000000099'
   const workspace = store.save({
@@ -932,7 +1069,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     events: [],
     outputs: [
       { id: proseSectionId, name: '对局正文', kind: 'prose', enabled: true, instructions: '' },
-      { id: privateSectionId, name: '魔理沙视角', kind: 'character', enabled: true, characterId: marisaId, instructions: '' },
+      { id: privateTemplateId, name: '人物私记', kind: 'character', enabled: true, instructions: '' },
       { id: historySectionId, name: '公开回合记录', kind: 'history', enabled: true, instructions: '' },
     ],
     sources: [{
@@ -1017,7 +1154,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       { sectionId: proseSectionId, name: '对局正文', kind: 'prose', text: '流水线准备稿里的公开正文。' },
       {
         sectionId: privateSectionId,
-        name: '魔理沙视角',
+        name: '人物私记 · 雾雨魔理沙',
         kind: 'character',
         characterId: marisaId,
         privateInsights: [{ kind: 'decision', text: '流水线准备稿里的私人决定。' }],
@@ -1025,7 +1162,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       },
       { sectionId: historySectionId, name: '公开回合记录', kind: 'history', text: '流水线准备稿里的公开记录。' },
     ],
-    finalDraft: '## 对局正文\n\n流水线准备稿里的公开正文。\n\n## 魔理沙视角\n\n流水线准备稿里的私人决定。\n\n## 公开回合记录\n\n流水线准备稿里的公开记录。',
+    finalDraft: '## 对局正文\n\n流水线准备稿里的公开正文。\n\n## 人物私记 · 雾雨魔理沙\n\n流水线准备稿里的私人决定。\n\n## 公开回合记录\n\n流水线准备稿里的公开记录。',
     modelContext: '准备上下文。',
     publicDialogues: [{
       characterId: reimuId,
@@ -1045,7 +1182,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       source: { provider: 'fixture', model: 'fixture' },
       content: [{
         type: 'text',
-        text: '## 对局正文\n\n实际展示时，两人都看见雨停了。博丽灵梦说：“先看清，再下结论。”\n\n## 魔理沙视角\n\n魔理沙决定继续当前棋局。\n\n## 公开回合记录\n\n雨停了。',
+        text: '## 对局正文\n\n实际展示时，两人都看见雨停了。博丽灵梦说：“先看清，再下结论。”\n\n## 人物私记 · 雾雨魔理沙\n\n魔理沙决定继续当前棋局。\n\n## 公开回合记录\n\n雨停了。',
       }],
     }),
   }, { surfaceOp: 'append' })
