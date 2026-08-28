@@ -1755,10 +1755,11 @@ function readinessCharacterNames(characters: readonly StoryCharacter[]): string 
   return characters.map(character => character.name).join('、')
 }
 
-function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onOpenCharacter, onOpenSources }: {
+function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly configureDisabled: boolean
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
 }) {
@@ -1798,14 +1799,15 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
         {readiness.missingActors.length > 0 ? '补人物来源' : '人物来源'}</button>}
       {firstMissingDialogue !== undefined && <button className="story-studio-button" type="button"
         onClick={() => { onOpenCharacter(firstMissingDialogue.id) }}>补角色样本</button>}
-      <button className="story-studio-button" type="button" onClick={onOpenSources}>
-        {readiness.missingSourceVoice.length > 0 || readiness.originalSourceCount === 0 ? '补原著资料' : '查看原著'}</button>
+      {(readiness.missingSourceVoice.length > 0 || readiness.originalSourceCount === 0)
+        && <button className="story-studio-button" type="button" onClick={onImportSources}>导入原著文件</button>}
+      <button className="story-studio-button" type="button" onClick={onOpenSources}>查看资料</button>
     </div>
     <p className="story-play-evidence-summary">{evidenceSummary}</p>
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1818,6 +1820,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onRestart: () => void
@@ -1846,7 +1849,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
         </div>
       </div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onImportSources={onImportSources}
       onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={currentName} launchTargets={launchTargets} launchTargetId={launchTargetId}
@@ -1890,7 +1893,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onImportSources, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1904,6 +1907,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
+  readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onRestart: () => void
@@ -1941,7 +1945,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
           onRestart()
         }}>{restartArmed ? '确认重新开始' : '重新开始'}</button></div></div>
     </div>
-    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast}
+    <PlayWorldEvidenceStatus workspace={workspace} configureDisabled={busy || dirty} onConfigureCast={onConfigureCast} onImportSources={onImportSources}
       onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} />
     <PlaySessionAction workspace={workspace} sessionAction={sessionAction} busy={busy || dirty}
       currentName={characterName} launchTargets={launchTargets} launchTargetId={launchTargetId}
@@ -2235,7 +2239,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2251,6 +2255,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
+  readonly onImportSources: () => void
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
   readonly onOpenCharacter: (id: string) => void
@@ -2291,14 +2296,15 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
       sessionAction={sessionAction} launchTargets={launchTargets} launchTargetId={launchTargetId}
       launchUnavailableReason={launchUnavailableReason} onLaunchTargetChange={onLaunchTargetChange}
       onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
-      onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+      onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+      onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} launchTargets={launchTargets}
     launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
     renderPlayWorldView={renderPlayWorldView}
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
-    onConfigureCast={configureCast} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
+    onConfigureCast={configureCast} onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
     onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
@@ -2841,7 +2847,8 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       renderPlayWorldView={renderPlayWorldView}
       onLaunchTargetChange={setLaunchTargetId}
       onAdvanceSession={advanceSession}
-      onImportActor={importWorldActor} onInstall={installWorld} onUpdateCast={saveWorldCast}
+      onImportActor={importWorldActor} onImportSources={() => { sourceFileInputRef.current?.click() }}
+      onInstall={installWorld} onUpdateCast={saveWorldCast}
       onOpenCharacter={id => { select({ kind: 'character', id }) }}
       onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
       onRestart={restartWorld} onAction={runWorldAction} />
@@ -2884,9 +2891,6 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
             : webSearchAvailable ? webFetchAvailable ? '网络搜索与正文读取已接入' : '网络搜索已接入 · 无正文读取'
               : '当前 Host 未接入网络研究'}
         </span>
-        <input ref={sourceFileInputRef} hidden multiple type="file" accept={STORY_SOURCE_FILE_ACCEPT} onChange={event => {
-          void importSourceFiles(Array.from(event.target.files ?? []))
-        }} />
         <button className="story-studio-button story-studio-button-primary" type="button" disabled={saving}
           onClick={() => { sourceFileInputRef.current?.click() }}>导入 TXT / Markdown</button>
         <button className="story-studio-button" type="button" onClick={addSource}>＋ 空白资料</button>
@@ -2956,6 +2960,8 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   return <div className="agent-rp-story-studio" role="dialog" aria-modal="true" aria-label="游玩场地"
     style={{ '--story-accent': accent } as CSSProperties}>
     <style>{xyFlowCss}</style><style>{storyStudioCss}</style>
+    <input ref={sourceFileInputRef} hidden multiple type="file" accept={STORY_SOURCE_FILE_ACCEPT} disabled={workspace === undefined || saving}
+      onChange={event => { void importSourceFiles(Array.from(event.target.files ?? [])) }} />
     <header className="story-studio-topbar">
       <div className="story-studio-brand"><span className="story-studio-brand-mark">✦</span><div><strong>游玩场地</strong><span>世界、人物与故事</span></div></div>
       <select className="story-studio-project" aria-label="当前场地" value={workspace?.id ?? ''} disabled={saving || items.length === 0}
