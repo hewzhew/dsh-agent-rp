@@ -16,7 +16,7 @@ import {
   createStoryOutputId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
-import { materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
+import { materializeStoryTurn, runStoryTurnPipeline, storyWebSearchAvailable } from '../src/story-turn-pipeline.ts'
 
 const aliceId = 'character-00000000-0000-4000-8000-000000000001'
 const bobId = 'character-00000000-0000-4000-8000-000000000002'
@@ -33,6 +33,16 @@ const characterSectionId = 'output-00000000-0000-4000-8000-000000000002'
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
+
+test('reports the optional Host web-search service without making a network request', () => {
+  assert.equal(storyWebSearchAvailable({
+    get(name: string) {
+      return name === 'web' ? { search: async () => ({ sources: [], truncated: false }) } : undefined
+    },
+  } as unknown as Context), true)
+  assert.equal(storyWebSearchAvailable({ get: () => undefined } as unknown as Context), false)
+  assert.equal(storyWebSearchAvailable({ get: () => { throw new Error('not registered') } } as unknown as Context), false)
+})
 
 function character(id: string, name: string, description = ''): StoryCharacter {
   const sourceDuplicate = name === '阿梨' ? '\n阿梨：“没看清就别急着下结论。”' : ''

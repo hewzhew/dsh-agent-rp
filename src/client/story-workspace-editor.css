@@ -598,6 +598,8 @@
 .story-research-card-heading a { color: var(--story-accent); flex: 0 0 auto; text-decoration: none; }
 .story-research-card p { font-size: 11px; line-height: 1.55; margin: 10px 0; white-space: pre-wrap; }
 .story-research-query { line-height: 1.45; max-height: 2.9em; overflow: hidden; }
+.story-web-capability { align-items: center; background: var(--studio-panel); border: 1px solid var(--studio-border); border-radius: 999px; color: var(--studio-muted); display: inline-flex; font-size: 9px; padding: 5px 8px; }
+.story-web-capability[data-available='true'] { border-color: color-mix(in srgb, var(--story-accent) 45%, var(--studio-border)); color: var(--story-accent); }
 .story-source-origin { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 8px; display: grid; font-size: 10px; gap: 4px; margin: 0 0 14px; padding: 8px 9px; }
 .story-source-origin span { color: var(--studio-muted); }
 .story-source-origin a { color: var(--story-accent); text-decoration: none; }

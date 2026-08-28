@@ -1873,6 +1873,11 @@ function webSearchGateway(ctx: Context): StoryWebSearchGateway | undefined {
   }
 }
 
+/** Report whether the current Host context exposes a story-compatible Web search provider. */
+export function storyWebSearchAvailable(ctx: Context): boolean {
+  return webSearchGateway(ctx) !== undefined
+}
+
 function webFailure(error: unknown): 'unavailable' | 'aborted' | 'provider' {
   const message = error instanceof Error ? error.message : String(error)
   if (/abort|cancel|取消|中止/iu.test(message)) return 'aborted'
