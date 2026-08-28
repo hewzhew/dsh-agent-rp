@@ -471,7 +471,11 @@ test('keeps the exact world outcome while preserving only private-section charac
                 speech: null,
                 voiceEvidence: [],
                 insights: body.includes('# 人物：博丽灵梦')
-                  ? [{ kind: 'decision', text: '灵梦决定继续当前棋局，不再要求作废已结算回合。' }]
+                  ? [{
+                      kind: 'decision',
+                      text: '灵梦决定继续当前棋局，不再要求作废已结算回合。',
+                      futureChoice: '本轮结束后遇到不利结果时，仍会接受结算并继续这局。',
+                    }]
                   : [],
               })
               : system.includes('剧情导演 Worker')
@@ -694,7 +698,11 @@ test('assembles a grounded world result and approved dialogue without unowned mo
                 content: '指出是魔理沙自己把两个判断接在了一起。',
               },
               voiceEvidence: [`character:${reimuId}:example-dialogue`],
-              insights: [],
+              insights: [{
+                kind: 'intention',
+                text: '继续逼魔理沙承认她自己把两个判断接在了一起。',
+                futureChoice: '本轮回答结束后继续指出魔理沙自己把两个判断接在了一起。',
+              }],
             })
             : JSON.stringify({
               observation: '灵梦刚完成本轮。',
@@ -771,6 +779,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
       : []), [])
+  assert.doesNotMatch(result.directorBrief, /继续逼魔理沙/u)
   assert.doesNotMatch(result.finalDraft, /说过又怎么样|为什么不继续说明|抢在灵梦之前/u)
   session.append('assistant/message', {
     turn: 2,

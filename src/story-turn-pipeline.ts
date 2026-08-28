@@ -270,6 +270,7 @@ export interface StoryTurnPrivateInsight {
 interface StoryCharacterInsightCandidate {
   readonly kind: StoryTurnPrivateInsight['kind'] | 'world-action'
   readonly text: string
+  readonly futureChoice: string
 }
 
 interface ContinuityUpdate {
@@ -569,7 +570,7 @@ function parseCharacterDecision(
     )
     return resolved === undefined ? [] : [resolved]
   })
-  const insights = parseCharacterInsights(record.insights, '人物决策.insights')
+  const insights = parseCharacterInsights(record.insights, '人物决策.insights', speech)
   return { observation, action, speech, voiceEvidence, insights }
 }
 
@@ -835,7 +836,7 @@ function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryV
     item,
   )).flatMap((unit, index): readonly StoryVoiceSeedUnit[] => {
     const preferred = voiceEvidenceUnitText(unit)
-    const key = `${unit.owner}\u0000${normalizeSpeakerName(unit.lines[0]?.speaker ?? '')}\u0000${normalizedDialogue(preferred)}`
+    const key = `${unit.owner}\u0000${normalizeSpeakerName(unit.lines[0]?.speaker ?? '')}\u0000${normalizedComparableText(preferred)}`
     if (renderedUnits.has(key)) return []
     renderedUnits.add(key)
     return [{ ...unit, id: `${item.reference}#seed-${String(index + 1)}`, reference: item.reference }]
@@ -1124,25 +1125,25 @@ const VOICE_DRAFT_SYSTEM = [
 ].join('\n')
 const VOICE_REVIEW_SYSTEM = '你是一个人物自己的对白审校 Worker，只负责从同一人物的至多三个候选中选出一句，或全部拒绝，绝不参与创作。character_context 是此人物获准拥有的全部认知；不得借助导演信息或其他人物私有知识。逐项对照真实语气证据、结构化说话决定、此前已获准公开的相邻对白和此人物可见世界状态。<voice_exchange> 保留原始相邻顺序：同一 seed ID 的原文与参考译文属于一个发言单元；[目标人物] seed 才是此人物自己的原句，[对话上下文] seed 只说明别人说了什么以及目标人物怎样接话，不能拿来模仿；<voice_notes> 是资料分析。先核对每个候选列出的 seed 与 mechanics：这些 seed 是否真的共同支持所声明的分句次序、转折、反问、翻转或省略机制，候选是否把该机制作用于当前前提；只列编号、只共享话题或只像其中一条原句都必须拒绝。再做意图复述检验：如果候选只是把“回应前提”或“传达内容”换成带问号或句号的口语，或者只是在“你怎么还没……”“你不过是……”“你是连……都……”“你连……都……，谈什么……”“要……也得先……再说吧”“现在……还轮不到你……”“别说得像……”这类普通框架里填入场景名词，它没有使用人物证据，必须排除。即使句子准确指出了当前事实，只要去掉棋盘名词后仍是这些框架，也不能因其短促或像纠正句而批准。再做匿名替换检验：遮去人物名、专有名词和场景名词后，如果一句话仍可由任意竞争者、朋友或对手原样说出，它就是泛化对白，必须排除。仅复述公开世界事实、表示顺利或倒霉、领先或落后、加油或别得意的句子仍是通用对白。再做素材归属检验：不得把只出现在 [对话上下文] 或原作事件中的具体名词、比喻和意象搬进新场景；即使改写后字面不相似，这仍是声音交换或套用原句。用证据中不存在的绰号、物件联想、动物、身体意象或临时类比制造俏皮感也必须排除。可批准的句子应体现多条本人 seed 共同支持的推理或接话机制，不要求华丽口癖或显眼修辞；由多条本人原句共同支持、又准确作用于当前具体前提的朴素短句可以批准。若 prior_approved_dialogue 非空，候选必须直接回应其中已经表达的内容；若为空，则必须能自然回应已发生的可见行动。dialogue 只能逐字返回 draft_candidates 中同一 reference 下的一句候选，或返回空字符串；不得增删、替换、润色、合并或重写任何字。多个候选合格时只选 seed 映射最具体、人物机制最清楚且最简洁的一句。审校不拥有也不返回说话动作。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","dialogue":"逐字选中的候选或空字符串"}]}。不要解释审校过程，不要使用 Markdown 围栏。'
 
-function normalizedDialogue(text: string): string {
+function normalizedComparableText(text: string): string {
   return text.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '')
 }
 
-function dialogueBigrams(text: string): ReadonlySet<string> {
+function textBigrams(text: string): ReadonlySet<string> {
   return new Set(Array.from({ length: Math.max(0, text.length - 1) }, (_value, index) => text.slice(index, index + 2)))
 }
 
 function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCharacterVoiceEvidence[]): boolean {
-  const candidate = normalizedDialogue(replacement)
+  const candidate = normalizedComparableText(replacement)
   const excerpts = evidence.flatMap(character => character.evidence.flatMap(item =>
     resolvedVoiceEvidenceParts(character.characterName, item).orderedLines
-      .map(line => normalizedDialogue(line.dialogue))))
+      .map(line => normalizedComparableText(line.dialogue))))
   if (excerpts.some(excerpt => excerpt === candidate)) return true
   if (candidate.length < 4) return false
-  const candidateBigrams = dialogueBigrams(candidate)
+  const candidateBigrams = textBigrams(candidate)
   return excerpts.some(excerpt => {
     if (candidate.length >= 8 && (excerpt.includes(candidate) || candidate.includes(excerpt))) return true
-    const excerptBigrams = dialogueBigrams(excerpt)
+    const excerptBigrams = textBigrams(excerpt)
     const overlap = [...candidateBigrams].filter(pair => excerptBigrams.has(pair)).length
     return Math.min(candidateBigrams.size, excerptBigrams.size) >= 5
       && overlap / Math.min(candidateBigrams.size, excerptBigrams.size) >= 0.72
@@ -1299,26 +1300,58 @@ function appendMissingApprovedDialogue(text: string, approved: ReadonlySet<strin
   return [filtered, ...missing].filter(value => value !== '').join('\n\n')
 }
 
-function parseCharacterInsights(value: unknown, subject: string): readonly StoryTurnPrivateInsight[] {
+function insightRestatesSpeech(value: string, speech: StoryCharacterSpeechIntent): boolean {
+  const candidate = normalizedComparableText(value)
+  if (candidate.length < 6) return false
+  return [speech.respondsTo, speech.content, `${speech.respondsTo}${speech.content}`].some(source => {
+    const normalizedSource = normalizedComparableText(source)
+    if (normalizedSource.length < 6) return false
+    if (candidate.includes(normalizedSource) || normalizedSource.includes(candidate)) return true
+    const candidateBigrams = textBigrams(candidate)
+    const sourceBigrams = textBigrams(normalizedSource)
+    const comparable = Math.min(candidateBigrams.size, sourceBigrams.size)
+    if (comparable < 6) return false
+    const overlap = [...candidateBigrams].filter(pair => sourceBigrams.has(pair)).length
+    return overlap / comparable >= 0.36
+  })
+}
+
+function parseCharacterInsights(
+  value: unknown,
+  subject: string,
+  speech?: StoryCharacterSpeechIntent,
+): readonly StoryTurnPrivateInsight[] {
   if (!Array.isArray(value)) throw new Error(`${subject}不是数组`)
   const insights = value.slice(0, 8).map((item, index): StoryCharacterInsightCandidate => {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
       throw new Error(`${subject}[${String(index)}]不是对象`)
     }
     const insight = item as Record<string, unknown>
-    if (Object.keys(insight).some(key => key !== 'kind' && key !== 'text')
+    if (Object.keys(insight).some(key => key !== 'kind' && key !== 'text' && key !== 'futureChoice')
       || !['knowledge', 'intention', 'decision', 'world-action'].includes(String(insight.kind))) {
       throw new Error(`${subject}[${String(index)}]字段无效`)
     }
     return {
       kind: insight.kind as StoryCharacterInsightCandidate['kind'],
       text: boundedString(insight.text, `${subject}[${String(index)}].text`, 2_048),
+      futureChoice: insight.futureChoice === undefined
+        ? ''
+        : boundedString(insight.futureChoice, `${subject}[${String(index)}].futureChoice`, 2_048),
     }
   }).filter(insight => insight.text !== '')
-  if (insights.some(insight => DIRECT_DIALOGUE_PATTERN.test(insight.text))) {
+  if (insights.some(insight => DIRECT_DIALOGUE_PATTERN.test(insight.text)
+    || DIRECT_DIALOGUE_PATTERN.test(insight.futureChoice))) {
     throw new Error(`${subject}包含对白`)
   }
-  return insights.filter((insight): insight is StoryTurnPrivateInsight => insight.kind !== 'world-action')
+  return insights.flatMap((insight): readonly StoryTurnPrivateInsight[] => {
+    if (insight.kind === 'world-action') return []
+    if (insight.kind === 'knowledge') return [{ kind: insight.kind, text: insight.text }]
+    if (insight.futureChoice === '') return []
+    if (speech !== undefined
+      && insightRestatesSpeech(insight.text, speech)
+      && insightRestatesSpeech(insight.futureChoice, speech)) return []
+    return [{ kind: insight.kind, text: insight.text }]
+  })
 }
 
 function parseCharacterSectionDecision(text: string): StoryCharacterSectionDecision {
@@ -2593,8 +2626,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           'action 只保留由本轮结果引起、能够改变人物选择或关系的具体非规则反应；不要用看向、换手、敲碰物件、摆姿势、轻笑或等待开口填空，没有实际反应时留空。',
           'speech 必须是 null，或者由 respondsTo、move 和 content 组成的对象。respondsTo 只写输入中已经公开发生、这句话要接住的具体前提；不能填未来假设、人物不知情的事或抽象话题。move 只能是 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose。content 只写这个人要向对方传达、要求或促成的最小语义，不写语气、句式、口癖或逐字台词。',
           '只有实际需要改变对方理解、决定或行动时才返回非空 speech。为了让场面热闹、表达领先落后、复述双方都看见的事，或者无法指出具体 respondsTo 时，speech 必须为 null。speech 非空时，voiceEvidence 必须至少引用一项确实含 [目标人物] 原句的证据；只有分析、性格标签或对方原句不足以支持开口。',
-          'insights 中 knowledge 是本轮新获得且未公开的知识，intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，Host 会丢弃它。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
-          '不要写完整正文或逐字对白。只返回 JSON：{"observation":"此人能观察到的事实","action":"此人对刚发生结果的非规则反应，或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","content":"最小语义目标"},"voiceEvidence":["实际使用的语气证据编号"],"insights":[{"kind":"knowledge|intention|decision|world-action","text":"一项私有变化或待丢弃的规则动作"}]}。不开口时把 speech 设为 null 且 voiceEvidence 设为空数组。observation、action、speech 内容和 insights 不能包含引号包围的台词；voiceEvidence 只能引用输入中真实存在的编号。不要使用 Markdown 围栏。',
+          'insights 中 knowledge 是本轮新获得且未公开的知识；其 futureChoice 使用空字符串。intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；两者的 futureChoice 必须写明：假设本轮 action 与 speech 已经完整结束，下一轮仍会因此改变的一个具体非规则选择。只把 speech 的传达内容换成“继续……”不构成未来选择，Host 会比较两者并丢弃这种复述。当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 使用空字符串，Host 会丢弃整项。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
+          '不要写完整正文或逐字对白。只返回 JSON：{"observation":"此人能观察到的事实","action":"此人对刚发生结果的非规则反应，或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","content":"最小语义目标"},"voiceEvidence":["实际使用的语气证据编号"],"insights":[{"kind":"knowledge|intention|decision|world-action","text":"一项私有变化或待丢弃的规则动作","futureChoice":"本轮回应完成后仍会改变的具体非规则选择，或空字符串"}]}。不开口时把 speech 设为 null 且 voiceEvidence 设为空数组。observation、action、speech 内容和 insights 不能包含引号包围的台词；voiceEvidence 只能引用输入中真实存在的编号。不要使用 Markdown 围栏。',
         ].join('\n'),
         [
           context.text,
@@ -2866,7 +2899,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const outputInstruction = section.kind === 'character'
-          ? '只返回 JSON：{"insights":[{"kind":"knowledge|intention|decision|world-action","text":"一项私有内容"}]}。knowledge 是新掌握但未公开的知识，intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，Host 会丢弃它。不要收录转瞬即逝的情绪、对公开动作的猜测或为正文补气氛的内心话；不用公开动作或棋盘事实铺垫，不含对白。没有独有且持久的内容时使用空数组。不要使用 Markdown 围栏。'
+          ? '只返回 JSON：{"insights":[{"kind":"knowledge|intention|decision|world-action","text":"一项私有内容","futureChoice":"本轮回应完成后仍会改变的具体非规则选择，或空字符串"}]}。knowledge 是新掌握但未公开的知识，其 futureChoice 为空；intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择，两者必须用 futureChoice 写明本轮结束后仍会改变的一项非规则选择；当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 为空，Host 会丢弃它。不要收录转瞬即逝的情绪、对公开动作的猜测或为正文补气氛的内心话；不用公开动作或棋盘事实铺垫，不含对白。没有独有且持久的内容时使用空数组。不要使用 Markdown 围栏。'
           : section.kind === 'prose' && worldNarrative !== ''
             ? 'Host 会把 world_narrative 原样放在本分区首段；只返回它之后确有信息增量的角色反应和获准对白，不得复述或改写世界事件。没有额外内容时返回 <omit-section />。'
           : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
