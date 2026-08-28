@@ -685,6 +685,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
         const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
           .map(match => match[1]!))]
         const candidateSeeds = targetSeedIds.slice(0, Math.min(2, targetSeedIds.length))
+        const sourceBackedVoice = body.includes('博麗霊夢｜')
         let text: string
         if (system.includes('结构化世界行动 Worker')) {
           text = JSON.stringify({ actionId: 'roll' })
@@ -751,10 +752,17 @@ test('assembles a grounded world result and approved dialogue without unowned mo
             seedLineIds: candidateSeeds,
             mechanics: '先把对方的问题翻回其已经说过的话',
             leftImplicit: '两句话具体怎样被接到一起。',
-            dialogue: '“你自己把两句话接在一起，还问我是哪句？”',
+            dialogue: sourceBackedVoice
+              ? '“都被你接到一块了，怎么反倒来问我？”'
+              : '“你自己把两句话接在一起，还问我是哪句？”',
           }] })
         } else if (system.includes('对白审校 Worker')) {
-          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '你自己把两句话接在一起，还问我是哪句？' }] })
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            dialogue: sourceBackedVoice
+              ? '都被你接到一块了，怎么反倒来问我？'
+              : '你自己把两句话接在一起，还问我是哪句？',
+          }] })
         } else {
           throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
         }
@@ -841,10 +849,11 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), false)
 
+  const originalDialogueSourceId = createStorySourceId()
   const sourced = store.save({
     ...editable(saved),
     sources: [{
-      id: createStorySourceId(),
+      id: originalDialogueSourceId,
       name: '单段原作对白',
       kind: 'original',
       enabled: true,
@@ -870,7 +879,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     options: { provider: 'fixture', model: 'fixture' },
     session: sourcedSession,
   } as Agent
-  await runStoryTurnPipeline({
+  const sourcedResult = await runStoryTurnPipeline({
     ctx: fake,
     agent: sourcedAgent,
     store,
@@ -886,6 +895,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const sourcedStageRequests = sourcedSession.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
+  const sourcedBrief = sourcedSession.events.findLast(event => event.type === 'agent-rp/story-turn-brief')?.data
   const sourcedVoiceBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'voice'
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
   assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:\d+/u)
@@ -902,6 +912,16 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const sourcedReimuCharacterBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'character'
     && request.subjectId === reimuId)?.dispatch.messages)
   assert.doesNotMatch(sourcedReimuCharacterBody, /博麗霊夢|霧雨魔理沙|自分で二つの話/u)
+  const sourcedVoiceCitations = sourcedBrief?.publicDialogues?.[0]?.voiceCitations
+  assert.equal(sourcedVoiceCitations?.length, 1)
+  assert.equal(sourcedVoiceCitations?.[0]?.sourceId, originalDialogueSourceId)
+  assert.match(sourcedVoiceCitations?.[0]?.quote ?? '', /霧雨魔理沙：「どの台詞のことだ？」/u)
+  assert.match(sourcedVoiceCitations?.[0]?.quote ?? '', /博麗霊夢：「自分で二つの話を繋げておいて、どっちかなんて聞くの？」/u)
+  assert.equal(sourcedVoiceCitations?.[0]?.note, '用于校准“博丽灵梦”本回合获准对白')
+  assert.deepEqual(sourcedResult.publicDialogues?.map(({ characterId, dialogue }) => ({ characterId, dialogue })), [{
+    characterId: reimuId,
+    dialogue: '“都被你接到一块了，怎么反倒来问我？”',
+  }])
 
   const constrainedWorkspace = store.get(sourced.id)
   const constrainedSession = Session.create(SessionId('host-world-dialogue-no-world-restatement'))

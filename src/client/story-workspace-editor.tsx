@@ -880,7 +880,7 @@ function EventInspector({ workspace, event, update, onOpenKnowledge, onSelect, o
         onClick={() => { onSelect({ kind: 'world-event', id: worldEvent.id }) }}>
         <span>#{worldEvent.sequence}</span><b>{worldEvent.title}</b>
       </button>)}</div>}
-    {citations.length > 0 && <div className="story-timeline-rule-sources"><strong>本回合研究依据</strong>
+    {citations.length > 0 && <div className="story-timeline-rule-sources"><strong>本回合资料依据</strong>
       {citations.map(citation => <button type="button" key={citation.id}
         onClick={() => { onSelect({ kind: 'citation', id: citation.id }) }}>
         <span>{workspace.sources.find(source => source.id === citation.sourceId)?.name ?? '本地资料'}</span><b>{citation.locator}</b>

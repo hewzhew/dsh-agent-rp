@@ -836,7 +836,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       name: '旧站原著',
       kind: 'original',
       enabled: true,
-      content: '雨水会让旧徽章显出刻痕。',
+      content: '雨水会让旧徽章显出刻痕。\n\n灵梦：“先看清，再下结论。”',
     }],
     citations: [],
     researchInbox: [],
@@ -899,6 +899,16 @@ test('materializes continuity from the actually visible reply instead of the pre
     ],
     finalDraft: '## 对局正文\n\n流水线准备稿里的公开正文。\n\n## 魔理沙视角\n\n流水线准备稿里的私人决定。\n\n## 公开回合记录\n\n流水线准备稿里的公开记录。',
     modelContext: '准备上下文。',
+    publicDialogues: [{
+      characterId: reimuId,
+      dialogue: '“先看清，再下结论。”',
+      voiceCitations: [{
+        sourceId: localSourceId,
+        locator: '角色对白 · 第 2 段',
+        quote: '灵梦：“先看清，再下结论。”',
+        note: '用于校准“博丽灵梦”本回合获准对白',
+      }],
+    }],
   })
   session.append('assistant/message', {
     turn: 1,
@@ -907,7 +917,7 @@ test('materializes continuity from the actually visible reply instead of the pre
       source: { provider: 'fixture', model: 'fixture' },
       content: [{
         type: 'text',
-        text: '## 对局正文\n\n实际展示时，两人都看见雨停了。\n\n## 魔理沙视角\n\n魔理沙决定继续当前棋局。\n\n## 公开回合记录\n\n雨停了。',
+        text: '## 对局正文\n\n实际展示时，两人都看见雨停了。博丽灵梦说：“先看清，再下结论。”\n\n## 魔理沙视角\n\n魔理沙决定继续当前棋局。\n\n## 公开回合记录\n\n雨停了。',
       }],
     }),
   }, { surfaceOp: 'append' })
@@ -1017,6 +1027,12 @@ test('materializes continuity from the actually visible reply instead of the pre
     quote: '雨水会让旧徽章显出刻痕。',
     note: '本回合研究 Worker 引用',
   }])
+  assert.deepEqual(result?.voiceCitations, [{
+    sourceId: localSourceId,
+    locator: '角色对白 · 第 2 段',
+    quote: '灵梦：“先看清，再下结论。”',
+    note: '用于校准“博丽灵梦”本回合获准对白',
+  }])
   assert.equal(result?.changes.nodes.length, 2)
   assert.equal(result?.changes.edges.length, 2)
   const saved = store.get(workspace.id)
@@ -1034,13 +1050,22 @@ test('materializes continuity from the actually visible reply instead of the pre
     quote: citation.quote,
     note: citation.note,
     target: citation.target,
-  })), [{
-    sourceId: localSourceId,
-    locator: '徽章篇 · 第 4 段',
-    quote: '雨水会让旧徽章显出刻痕。',
-    note: '本回合研究 Worker 引用',
-    target: { kind: 'event', eventId: saved.events[0]!.id },
-  }])
+  })), [
+    {
+      sourceId: localSourceId,
+      locator: '徽章篇 · 第 4 段',
+      quote: '雨水会让旧徽章显出刻痕。',
+      note: '本回合研究 Worker 引用',
+      target: { kind: 'event', eventId: saved.events[0]!.id },
+    },
+    {
+      sourceId: localSourceId,
+      locator: '角色对白 · 第 2 段',
+      quote: '灵梦：“先看清，再下结论。”',
+      note: '用于校准“博丽灵梦”本回合获准对白',
+      target: { kind: 'event', eventId: saved.events[0]!.id },
+    },
+  ])
   const reimuContext = compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' })
   const marisaContext = compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' })
   assert.doesNotMatch(reimuContext.privateKnowledge, /继续当前棋局/u)
@@ -1074,5 +1099,5 @@ test('materializes continuity from the actually visible reply instead of the pre
     signal: new AbortController().signal,
   }), result)
   assert.equal(store.get(workspace.id).revision, saved.revision)
-  assert.equal(store.get(workspace.id).citations.length, 1)
+  assert.equal(store.get(workspace.id).citations.length, 2)
 })

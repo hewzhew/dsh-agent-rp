@@ -365,7 +365,7 @@ export interface StoryTurnMaterialization {
   /** Executable-world events that the visible reply was required to represent. */
   readonly worldEventSequences?: readonly number[]
   readonly changes: StoryChangeSet
-  /** Local research excerpts shown to the director for this turn. */
+  /** Local source excerpts used by research or approved dialogue during this turn. */
   readonly citations?: readonly StoryCitationDraft[]
   readonly webResearch: readonly Omit<StoryResearchItem, 'id'>[]
 }

@@ -78,6 +78,8 @@ export interface StoryTurnFinalSection {
 export interface StoryTurnPublicDialogue {
   readonly characterId: string
   readonly dialogue: string
+  /** Local source windows containing the target-character seeds used for this utterance. */
+  readonly voiceCitations?: readonly StoryCitationDraft[]
 }
 
 /** Final draft and provenance used for the authoritative visible reply. */
@@ -119,6 +121,7 @@ export interface StoryTurnMaterializedRecord {
   readonly eventSummary: string
   readonly changes: StoryChangeSet
   readonly researchCitations?: readonly StoryCitationDraft[]
+  readonly voiceCitations?: readonly StoryCitationDraft[]
 }
 
 /** Logged network-search request generated from an enabled Web source. */
@@ -1907,22 +1910,42 @@ function localVoiceEvidence(
     const groupKey = [source.id, section, ...parts.targetLines.map(line => `${line.variant}:${line.speaker}:${line.dialogue}`)].join('\n')
     if (seenGroups.has(groupKey)) return []
     seenGroups.add(groupKey)
-    return [{ ...evidence, label: `${evidence.label}（含相邻对话）`, voiceParts: parts }]
+    const first = selected[0]!
+    const last = selected.at(-1)!
+    return [{
+      ...evidence,
+      label: `${evidence.label}（含相邻对话）`,
+      citation: {
+        sourceId: source.id,
+        locator: first.locator === last.locator ? first.locator : `${first.locator} – ${last.locator}`,
+        quote: selected.map(passage => passage.text).join('\n'),
+        note: '',
+      },
+      voiceParts: parts,
+    }]
   })
+}
+
+function uniqueCitationDrafts(
+  citations: readonly StoryCitationDraft[],
+  maxItems: number,
+): readonly StoryCitationDraft[] {
+  const seen = new Set<string>()
+  return citations.filter(item => {
+    const key = [item.sourceId, item.locator, item.quote].join('\n')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, maxItems)
 }
 
 function researchSourceCitations(
   evidence: readonly StoryResearchEvidence[],
   note: string,
 ): readonly StoryCitationDraft[] {
-  const seen = new Set<string>()
-  return evidence.flatMap(item => {
-    if (item.citation === undefined) return []
-    const key = [item.citation.sourceId, item.citation.locator, item.citation.quote].join('\n')
-    if (seen.has(key)) return []
-    seen.add(key)
-    return [{ ...item.citation, note }]
-  }).slice(0, 12)
+  return uniqueCitationDrafts(evidence.flatMap(item => item.citation === undefined
+    ? []
+    : [{ ...item.citation, note }]), 12)
 }
 
 function webResearchEvidence(
@@ -2823,6 +2846,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     }
   }
   const dialogueByReference = new Map<string, string>()
+  const voiceCitationsByReference = new Map<string, readonly StoryCitationDraft[]>()
   if (directorDecision !== undefined) {
     const speechTurns = directorDecision.sections.flatMap(section => section.speech.map(speech => ({ section, speech })))
     for (const [speechIndex, { section, speech }] of speechTurns.entries()) {
@@ -2900,7 +2924,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           return new Map()
         }
       }
-      let approved = await reviewDialogue(initialCandidates, 'review')
+      let approvedCandidates = initialCandidates
+      let approved = await reviewDialogue(approvedCandidates, 'review')
       if ([...initialCandidates.values()].some(dialogues => dialogues.length > 0)
         && ![...approved.values()].some(dialogue => dialogue !== '')) {
         const retry = await runStage(input, 'voice', generateOptions(
@@ -2928,11 +2953,26 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             retryCandidates = new Map()
           }
         }
-        approved = await reviewDialogue(retryCandidates, 'retry-review')
+        approvedCandidates = retryCandidates
+        approved = await reviewDialogue(approvedCandidates, 'retry-review')
       }
       const approvedDialogue = approved.get(speech.reference)
       if (approvedDialogue !== undefined && approvedDialogue !== '') {
         dialogueByReference.set(speech.reference, approvedDialogue)
+        const approvedCandidate = approvedCandidates.get(speech.reference)
+          ?.find(candidate => candidate.dialogue === approvedDialogue)
+        const seedReferences = new Map(selectedVoiceEvidence.flatMap(voiceCharacter =>
+          voiceSeedUnits(voiceCharacter).map(seed => [seed.id, seed.reference] as const)))
+        const usedReferences = new Set(approvedCandidate?.seedLineIds.flatMap(seedId => {
+          const reference = seedReferences.get(seedId)
+          return reference === undefined ? [] : [reference]
+        }) ?? [])
+        const citations = researchSourceCitations(
+          selectedVoiceEvidence.flatMap(voiceCharacter =>
+            voiceCharacter.evidence.filter(item => usedReferences.has(item.reference))),
+          `用于校准“${character.name}”本回合获准对白`,
+        )
+        if (citations.length > 0) voiceCitationsByReference.set(speech.reference, citations)
       }
     }
   }
@@ -3090,7 +3130,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     && finalDraft === renderSectionDrafts(hostWorldDialogueSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
-    return dialogue === undefined || dialogue === '' ? [] : [{ characterId: speech.characterId, dialogue }]
+    const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
+    return dialogue === undefined || dialogue === '' ? [] : [{
+      characterId: speech.characterId,
+      dialogue,
+      ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
+    }]
   })) ?? []
   const context = modelContext(finalDraft)
   const record: StoryTurnBriefRecord = {
@@ -3135,6 +3180,8 @@ export async function materializeStoryTurn(input: {
   if (briefEvent === undefined) return undefined
   const visibleReply = visibleReplyText(input.agent.session.events, input.turn)
   if (visibleReply === '') return undefined
+  const voiceCitations = uniqueCitationDrafts((briefEvent.data.publicDialogues ?? []).flatMap(dialogue =>
+    visibleReply.includes(dialogue.dialogue) ? dialogue.voiceCitations ?? [] : []), 12)
   const visibleSections = visibleReplySections(visibleReply, briefEvent.data.finalSections)
   const workspace = input.store.get(input.workspaceId)
   const worldOutcome = renderWorldOutcome(workspace, briefEvent.data.worldEventSequences ?? [])
@@ -3253,7 +3300,10 @@ export async function materializeStoryTurn(input: {
     participantIds: participants.map(character => character.id),
     worldEventSequences: briefEvent.data.worldEventSequences ?? [],
     changes: update.changes,
-    citations: briefEvent.data.researchCitations ?? [],
+    citations: uniqueCitationDrafts([
+      ...(briefEvent.data.researchCitations ?? []),
+      ...voiceCitations,
+    ], 24),
     webResearch: materializedWebResearch(
       input.agent.session.events,
       briefEvent.data.resultEventSeqs,
@@ -3272,6 +3322,7 @@ export async function materializeStoryTurn(input: {
     eventSummary: update.history,
     changes: update.changes,
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
+    ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-materialized', record)
   await input.ctx.sessions.flush(input.agent.session)
