@@ -847,6 +847,22 @@ test('projects Markdown headings and paragraphs into stable source passages', ()
   ])
 })
 
+test('projects common Chinese TXT chapters and single-line paragraphs', () => {
+  const passages = splitStorySourcePassages({
+    id: createStorySourceId(),
+    name: '红雾异变',
+    kind: 'original',
+    enabled: true,
+    content: '第一章 红雾笼罩幻想乡\r\n灵梦离开神社。\r\n魔理沙从森林赶来。\r\n\r\n第二章　湖边\r\n两人在湖边会合。',
+  })
+
+  assert.deepEqual(passages.map(passage => ({ locator: passage.locator, text: passage.text })), [
+    { locator: '第一章 红雾笼罩幻想乡 · 第 1 段', text: '灵梦离开神社。' },
+    { locator: '第一章 红雾笼罩幻想乡 · 第 2 段', text: '魔理沙从森林赶来。' },
+    { locator: '第二章　湖边 · 第 1 段', text: '两人在湖边会合。' },
+  ])
+})
+
 test('retrieves the most relevant bounded original excerpts before model research', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-search-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
