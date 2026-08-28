@@ -123,6 +123,23 @@ export interface StoryCharacterState {
   readonly notes: string
 }
 
+/** Character Card fields tracked independently so source refreshes can retain local edits. */
+export type StoryCharacterActorField =
+  | 'name'
+  | 'voiceAliases'
+  | 'description'
+  | 'personality'
+  | 'scenario'
+  | 'exampleDialogue'
+  | 'systemPrompt'
+  | 'postHistoryInstructions'
+
+/** Fingerprints of the last Character Card projection observed for one bound character. */
+export interface StoryCharacterActorBaseline {
+  readonly format: 0
+  readonly fingerprints: Readonly<Record<StoryCharacterActorField, string>>
+}
+
 /** One independently prompted story character. */
 export interface StoryCharacter {
   readonly id: string
@@ -133,6 +150,8 @@ export interface StoryCharacter {
   readonly state: StoryCharacterState
   /** Stable source reference for a Character Card snapshot bound from the resource center. */
   readonly actor?: RoleplayResourceSelection
+  /** Source-field baseline used to distinguish later local edits from refreshable card values. */
+  readonly actorBaseline?: StoryCharacterActorBaseline
 }
 
 /** Revision-guarded request to bind or detach one actor resource from a character instance. */
@@ -141,6 +160,15 @@ export interface StoryCharacterActorBindRequest {
   readonly revision: number
   readonly characterId: string
   readonly actor?: RoleplayResourceSelection
+}
+
+/** Result of binding, refreshing, replacing, or detaching one Character Card source. */
+export interface StoryCharacterActorSyncReport {
+  readonly mode: 'detached' | 'replaced' | 'refreshed'
+  /** True when a legacy binding had no source baseline, so differing fields were retained conservatively. */
+  readonly baselineCreated: boolean
+  readonly updatedFields: readonly StoryCharacterActorField[]
+  readonly preservedFields: readonly StoryCharacterActorField[]
 }
 
 /** Provenance for a manually authored or observed fact. */
