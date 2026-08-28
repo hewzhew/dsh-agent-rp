@@ -277,10 +277,11 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   const withCharacters = store.save({
     ...editable(created),
     characters: [
-      character(first, '甲'),
+      { ...character(first, '甲'), voiceAliases: [' 博麗霊夢 ', '霊夢', '博麗霊夢', ''] },
       character(second, '乙'),
     ],
   })
+  assert.deepEqual(withCharacters.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   const installed = store.installWorld(withCharacters.id, {
     format: 0,
     revision: withCharacters.revision,
@@ -313,6 +314,7 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
     actor: { kind: 'actor', id: 'actor:reimu' },
   }, { name: '博丽灵梦', profile: character(first, '博丽灵梦', '博丽神社的巫女。').profile })
   assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
+  assert.deepEqual(bound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   const detached = store.bindCharacterActor(bound.id, {
     format: 0,
     revision: bound.revision,
@@ -321,6 +323,8 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   assert.equal(detached.characters[0]?.actor, undefined)
   assert.equal(detached.characters[0]?.name, '博丽灵梦')
   assert.equal(detached.characters[0]?.profile.description, '博丽神社的巫女。')
+  assert.deepEqual(detached.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
+  assert.deepEqual(store.get(detached.id).characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   assert.deepEqual(detached.world, installed.world)
 })
 
@@ -630,10 +634,12 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     characters: [
       {
         ...reimu,
+        voiceAliases: ['博麗霊夢', '霊夢'],
         profile: { ...reimu.profile, exampleDialogue: '灵梦：“你自己说过的话，还要问我？”' },
       },
       {
         ...marisa,
+        voiceAliases: ['霧雨魔理沙', '魔理沙'],
         profile: { ...marisa.profile, exampleDialogue: '魔理沙：“说过又怎么样？”' },
       },
     ],
@@ -842,7 +848,14 @@ test('assembles a grounded world result and approved dialogue without unowned mo
       name: '单段原作对白',
       kind: 'original',
       enabled: true,
-      content: '魔理沙：“你问的是哪句话？”\n灵梦：“你自己说过的话，还要问我？”',
+      content: [
+        '原文：',
+        '霧雨魔理沙：「どの台詞のことだ？」',
+        '博麗霊夢：「自分で二つの話を繋げておいて、どっちかなんて聞くの？」',
+        '参考译文：',
+        '雾雨魔理沙：“你问的是哪句话？”',
+        '博丽灵梦：“你自己把两句话接在一起，还问我是哪句？”',
+      ].join('\n'),
     }],
   })
   const sourcedSession = Session.create(SessionId('host-world-dialogue-sourced'))
@@ -875,10 +888,20 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     : [])
   const sourcedVoiceBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'voice'
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
-  assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:2/u)
-  assert.match(sourcedVoiceBody, /\[对话上下文\]\[示例\] 魔理沙｜你问的是哪句话？/u)
-  assert.match(sourcedVoiceBody, /\[目标人物\]\[示例\] 灵梦｜你自己说过的话，还要问我？/u)
+  assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:\d+/u)
+  assert.match(sourcedVoiceBody, /\[对话上下文\]\[原文\] 霧雨魔理沙｜どの台詞のことだ？/u)
+  assert.match(sourcedVoiceBody, /\[目标人物\]\[原文\] 博麗霊夢｜自分で二つの話を繋げておいて、どっちかなんて聞くの？/u)
+  assert.match(sourcedVoiceBody, /\[对话上下文\]\[参考译文\] 雾雨魔理沙｜你问的是哪句话？/u)
+  assert.match(sourcedVoiceBody, /\[目标人物\]\[参考译文\] 博丽灵梦｜你自己把两句话接在一起，还问我是哪句？/u)
+  assert.doesNotMatch(sourcedVoiceBody, /\[目标人物\]\[(?:原文|参考译文)\] (?:霧雨魔理沙|雾雨魔理沙)/u)
+  const reimuOriginalSeed = sourcedVoiceBody.match(/\[seed:([^\]]+)\]\[目标人物\]\[原文\] 博麗霊夢｜/u)?.[1]
+  const reimuTranslationSeed = sourcedVoiceBody.match(/\[seed:([^\]]+)\]\[目标人物\]\[参考译文\] 博丽灵梦｜/u)?.[1]
+  assert.equal(typeof reimuOriginalSeed, 'string')
+  assert.equal(reimuTranslationSeed, reimuOriginalSeed)
   assert.doesNotMatch(sourcedVoiceBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
+  const sourcedReimuCharacterBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'character'
+    && request.subjectId === reimuId)?.dispatch.messages)
+  assert.doesNotMatch(sourcedReimuCharacterBody, /博麗霊夢|霧雨魔理沙|自分で二つの話/u)
 
   const constrainedWorkspace = store.get(sourced.id)
   const constrainedSession = Session.create(SessionId('host-world-dialogue-no-world-restatement'))

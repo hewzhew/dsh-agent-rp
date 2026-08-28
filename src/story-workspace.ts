@@ -74,6 +74,7 @@ const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 const MAX_WORKSPACE_BYTES = 16 * 1024 * 1024
 const MAX_CITATION_BYTES = 32 * 1024
 const MAX_WORLD_ACTION_RECEIPTS = 256
+const MAX_CHARACTER_VOICE_ALIASES = 32
 const NODE_KINDS = new Set<StoryNodeKind>(['arc', 'beat', 'secret'])
 const NODE_LIFECYCLES = new Set<StoryNodeLifecycle>(['canonical', 'suggested'])
 const NODE_STATUSES = new Set<StoryNodeStatus>(['planned', 'active', 'completed', 'dropped'])
@@ -358,10 +359,33 @@ function normalizeCharacter(value: unknown): StoryCharacter {
   return {
     id: value.id,
     name: cleanName(value.name, '人物'),
+    voiceAliases: normalizeCharacterVoiceAliases(value.voiceAliases),
     profile: normalizeCharacterProfile(value.profile),
     state: normalizeCharacterState(value.state),
     ...(actor === undefined ? {} : { actor }),
   }
+}
+
+function normalizeCharacterVoiceAliases(value: unknown): readonly string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some(alias => typeof alias !== 'string')) {
+    throw new Error(`人物原作署名应为不超过 ${String(MAX_CHARACTER_VOICE_ALIASES)} 项的文本数组`)
+  }
+  const rawAliases = value as readonly string[]
+  const populated = rawAliases.map(alias => alias.trim()).filter(alias => alias !== '')
+  if (populated.length > MAX_CHARACTER_VOICE_ALIASES) {
+    throw new Error(`人物原作署名应为不超过 ${String(MAX_CHARACTER_VOICE_ALIASES)} 项的文本数组`)
+  }
+  const aliases: string[] = []
+  const normalized = new Set<string>()
+  for (const rawAlias of populated) {
+    const alias = cleanName(rawAlias, '人物原作署名')
+    const key = alias.normalize('NFKC')
+    if (normalized.has(key)) continue
+    normalized.add(key)
+    aliases.push(alias)
+  }
+  return aliases
 }
 
 function normalizeKnowledgePolicy(value: unknown, characterIds: ReadonlySet<string>): StoryKnowledgePolicy {

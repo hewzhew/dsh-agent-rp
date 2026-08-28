@@ -294,6 +294,7 @@ type StorySectionDraft = StoryTurnFinalSection
 interface StoryCharacterVoiceEvidence {
   readonly characterId: string
   readonly characterName: string
+  readonly speakerNames: readonly string[]
   readonly evidence: readonly StoryResearchEvidence[]
 }
 
@@ -695,20 +696,22 @@ function renderDirectorDecision(
   }).join('\n\n')
 }
 
-const LABELED_DIALOGUE_PATTERN = /([\p{L}·・]{1,16})(?:\s*[：:]\s*[“"]([^”"\r\n]+)[”"]|\s*[「『]([^」』\r\n]+)[」』])/gu
+const LABELED_DIALOGUE_PATTERN = /([\p{L}·・]{1,16})(?:\s*[：:]\s*[“"]([^”"\r\n]+)[”"]|\s*[：:]?\s*[「『]([^」』\r\n]+)[」』])/gu
 
 function normalizeSpeakerName(value: string): string {
   return value.normalize('NFKC').replace(/[\s·・]/gu, '')
 }
 
-function isTargetSpeaker(characterName: string, speaker: string): boolean {
-  const target = normalizeSpeakerName(characterName)
+function isTargetSpeaker(characterNames: readonly string[], speaker: string): boolean {
   const candidate = normalizeSpeakerName(speaker)
   return candidate.length >= 2
-    && (target === candidate || target.endsWith(candidate) || candidate.endsWith(target))
+    && characterNames.some(characterName => {
+      const target = normalizeSpeakerName(characterName)
+      return target === candidate || target.endsWith(candidate) || candidate.endsWith(target)
+    })
 }
 
-function voiceEvidenceParts(characterName: string, text: string): StoryVoiceEvidenceParts {
+function voiceEvidenceParts(characterNames: readonly string[], text: string): StoryVoiceEvidenceParts {
   const orderedLines: StoryVoiceEvidenceLine[] = []
   const targetLines: StoryVoiceEvidenceLine[] = []
   const contextLines: StoryVoiceEvidenceLine[] = []
@@ -728,7 +731,7 @@ function voiceEvidenceParts(characterName: string, text: string): StoryVoiceEvid
     const key = `${normalizeSpeakerName(speaker)}\u0000${dialogue}`
     if (dialogue === '' || seen.has(key)) continue
     seen.add(key)
-    const owner = isTargetSpeaker(characterName, speaker) ? 'target' : 'context'
+    const owner = isTargetSpeaker(characterNames, speaker) ? 'target' : 'context'
     const variant = translated
       ? 'translation'
       : /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(dialogue) ? 'original' : 'example'
@@ -748,10 +751,10 @@ function voiceEvidenceParts(characterName: string, text: string): StoryVoiceEvid
 }
 
 function resolvedVoiceEvidenceParts(
-  characterName: string,
+  characterNames: readonly string[],
   item: StoryResearchEvidence,
 ): StoryVoiceEvidenceParts {
-  return item.voiceParts ?? voiceEvidenceParts(characterName, item.text)
+  return item.voiceParts ?? voiceEvidenceParts(characterNames, item.text)
 }
 
 function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoiceEvidenceUnit[] {
@@ -761,14 +764,15 @@ function voiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonly StoryVoice
   const unusedTranslations = new Set(translations.map((_line, index) => index))
   const units = primary.map((line, index): StoryVoiceEvidenceUnit => {
     const aligned = translations[index]
+    const sameOwner = (candidate: StoryVoiceEvidenceLine): boolean => candidate.owner === line.owner
+      && (line.owner === 'target'
+        || normalizeSpeakerName(candidate.speaker) === normalizeSpeakerName(line.speaker))
     const translationIndex = aligned !== undefined
       && unusedTranslations.has(index)
-      && normalizeSpeakerName(aligned.speaker) === normalizeSpeakerName(line.speaker)
-      && aligned.owner === line.owner
+      && sameOwner(aligned)
       ? index
       : translations.findIndex((candidate, candidateIndex) => unusedTranslations.has(candidateIndex)
-        && normalizeSpeakerName(candidate.speaker) === normalizeSpeakerName(line.speaker)
-        && candidate.owner === line.owner)
+        && sameOwner(candidate))
     const translation = translationIndex < 0 ? undefined : translations[translationIndex]
     if (translation !== undefined) unusedTranslations.delete(translationIndex)
     return {
@@ -816,12 +820,12 @@ function voiceEvidenceUnitText(unit: StoryVoiceEvidenceUnit): string {
 }
 
 function selectVoiceEvidenceParts(
-  characterName: string,
+  characterNames: readonly string[],
   item: StoryResearchEvidence,
   selectedUnitIndexes: ReadonlySet<number>,
   notes = '',
 ): StoryVoiceEvidenceParts {
-  const units = voiceEvidenceUnits(resolvedVoiceEvidenceParts(characterName, item))
+  const units = voiceEvidenceUnits(resolvedVoiceEvidenceParts(characterNames, item))
   const orderedLines = units.flatMap((unit, index) => selectedUnitIndexes.has(index) ? unit.lines : [])
   return {
     orderedLines,
@@ -834,7 +838,7 @@ function selectVoiceEvidenceParts(
 function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryVoiceSeedUnit[] {
   const renderedUnits = new Set<string>()
   return character.evidence.flatMap(item => voiceEvidenceUnits(resolvedVoiceEvidenceParts(
-    character.characterName,
+    character.speakerNames,
     item,
   )).flatMap((unit, index): readonly StoryVoiceSeedUnit[] => {
     const preferred = voiceEvidenceUnitText(unit)
@@ -846,11 +850,11 @@ function voiceSeedUnits(character: StoryCharacterVoiceEvidence): readonly StoryV
 }
 
 function renderVoiceEvidenceItem(
-  characterName: string,
+  characterNames: readonly string[],
   item: StoryResearchEvidence,
   seeds: readonly StoryVoiceSeedUnit[],
 ): string {
-  const parts = resolvedVoiceEvidenceParts(characterName, item)
+  const parts = resolvedVoiceEvidenceParts(characterNames, item)
   const variantLabel = (variant: StoryVoiceEvidenceLine['variant']): string => {
     if (variant === 'original') return '原文'
     if (variant === 'translation') return '参考译文'
@@ -934,7 +938,7 @@ function selectSpeechVoiceEvidence(
     source.findIndex(candidate => candidate.reference === item.reference) === index)
   const tokens = voiceRelevanceTokens(query)
   const parsed = candidates.map((item, itemIndex) => {
-    const parts = resolvedVoiceEvidenceParts(character.characterName, item)
+    const parts = resolvedVoiceEvidenceParts(character.speakerNames, item)
     const units = voiceEvidenceUnits(parts)
     return { item, itemIndex, parts, units }
   })
@@ -1001,7 +1005,7 @@ function selectSpeechVoiceEvidence(
     if (indexes === undefined) return []
     return [{
       ...candidate.item,
-      voiceParts: selectVoiceEvidenceParts(character.characterName, candidate.item, indexes),
+      voiceParts: selectVoiceEvidenceParts(character.speakerNames, candidate.item, indexes),
     }]
   })
   if (selected.length < VOICE_EVIDENCE_MAX_ITEMS) {
@@ -1016,7 +1020,7 @@ function selectSpeechVoiceEvidence(
       selected.push({
         ...note.item,
         voiceParts: selectVoiceEvidenceParts(
-          character.characterName,
+          character.speakerNames,
           note.item,
           new Set(),
           note.parts.notes.slice(0, VOICE_EVIDENCE_MAX_NOTES_CHARACTERS),
@@ -1152,7 +1156,7 @@ function suppressForbiddenWorldOutcomeSpeech(
 function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCharacterVoiceEvidence[]): boolean {
   const candidate = normalizedComparableText(replacement)
   const excerpts = evidence.flatMap(character => character.evidence.flatMap(item =>
-    resolvedVoiceEvidenceParts(character.characterName, item).orderedLines
+    resolvedVoiceEvidenceParts(character.speakerNames, item).orderedLines
       .map(line => normalizedComparableText(line.dialogue))))
   if (excerpts.some(excerpt => excerpt === candidate)) return true
   if (candidate.length < 4) return false
@@ -1208,7 +1212,7 @@ function parseDialogueCandidates(
     const planEvidence = planCharacter?.evidence
       .filter(item => plan.voiceEvidence.includes(item.reference)) ?? []
     const hasOwnedDialogue = planCharacter !== undefined && planEvidence.some(item =>
-      resolvedVoiceEvidenceParts(planCharacter.characterName, item).targetLines.length > 0)
+      resolvedVoiceEvidenceParts(planCharacter.speakerNames, item).targetLines.length > 0)
     const availableSeeds = new Set(planCharacter === undefined
       ? []
       : voiceSeedUnits({ ...planCharacter, evidence: planEvidence })
@@ -1619,6 +1623,7 @@ function buildCharacterProfileVoiceEvidence(
     return {
       characterId: character.id,
       characterName: character.name,
+      speakerNames: [character.name, ...(character.voiceAliases ?? [])],
       evidence: profileEvidence,
     }
   })
@@ -1630,7 +1635,7 @@ function renderCharacterVoiceEvidence(evidence: readonly StoryCharacterVoiceEvid
     return [
       `## ${character.characterName}（${character.characterId}）`,
       character.evidence.map(item => renderVoiceEvidenceItem(
-        character.characterName,
+        character.speakerNames,
         item,
         seeds.filter(seed => seed.reference === item.reference),
       )).join('\n\n'),
@@ -1864,7 +1869,7 @@ function sourceLocatorSection(locator: string): string {
 
 function localVoiceEvidence(
   input: RunStoryTurnPipelineInput,
-  characterName: string,
+  characterNames: readonly string[],
   query: string,
   maxCharacters: number,
 ): readonly StoryResearchEvidence[] {
@@ -1874,7 +1879,7 @@ function localVoiceEvidence(
   const seenGroups = new Set<string>()
   return excerpts.flatMap(excerpt => {
     const evidence = localExcerptEvidence(excerpt)
-    const direct = voiceEvidenceParts(characterName, excerpt.text)
+    const direct = voiceEvidenceParts(characterNames, excerpt.text)
     if (direct.targetLines.length === 0) return [evidence]
     const source = sources.get(excerpt.sourceId)
     if (source === undefined) return [evidence]
@@ -1898,7 +1903,7 @@ function localVoiceEvidence(
       }
     }
     selected.sort((left, right) => left.ordinal - right.ordinal)
-    const parts = voiceEvidenceParts(characterName, selected.map(passage => passage.text).join('\n'))
+    const parts = voiceEvidenceParts(characterNames, selected.map(passage => passage.text).join('\n'))
     const groupKey = [source.id, section, ...parts.targetLines.map(line => `${line.variant}:${line.speaker}:${line.dialogue}`)].join('\n')
     if (seenGroups.has(groupKey)) return []
     seenGroups.add(groupKey)
@@ -2831,8 +2836,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         playerInput,
         worldOutcome,
       ].filter(value => value !== '').join('\n')
-      const relevantSourceEvidence = character === undefined ? [] : localVoiceEvidence(input, character.name, [
-        character.name,
+      const characterSpeakerNames = character === undefined ? [] : [character.name, ...(character.voiceAliases ?? [])]
+      const relevantSourceEvidence = character === undefined ? [] : localVoiceEvidence(input, characterSpeakerNames, [
+        ...characterSpeakerNames,
         voiceQuery,
       ].join('\n'), 20_000)
       const selectedVoiceEvidence = selectSpeechVoiceEvidence(speech, voiceEvidence, relevantSourceEvidence, voiceQuery)
