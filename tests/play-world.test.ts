@@ -29,6 +29,7 @@ import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,
   createStoryCharacterId,
+  createStoryFactId,
   createStoryNodeId,
   createStoryOutputId,
   createStorySourceId,
@@ -931,12 +932,26 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   const created = store.create({ format: 2, name: '场地' })
   const first = createStoryCharacterId()
   const second = createStoryCharacterId()
+  const knownFactId = createStoryFactId()
   const withCharacters = store.save({
     ...editable(created),
     characters: [
-      { ...character(first, '甲'), voiceAliases: [' 博麗霊夢 ', '霊夢', '博麗霊夢', ''] },
+      {
+        ...character(first, '甲'),
+        voiceAliases: [' 博麗霊夢 ', '霊夢', '博麗霊夢', ''],
+        state: { location: '棋盘第四格', condition: '精神良好', objective: '率先到达终点', notes: '保留本局动态' },
+      },
       character(second, '乙'),
     ],
+    facts: [{
+      id: knownFactId,
+      text: '灵梦知道魔理沙的棋子仍在基地。',
+      status: 'asserted',
+      audience: 'director',
+      knowledgeMode: 'override',
+      knownBy: [first],
+      source: { kind: 'manual' },
+    }],
   })
   assert.deepEqual(withCharacters.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   const installed = store.installWorld(withCharacters.id, {
@@ -977,14 +992,31 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   })
   assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
   assert.deepEqual(bound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
-  const detached = store.bindCharacterActor(bound.id, {
+  const rebound = store.bindCharacterActor(bound.id, {
     format: 0,
     revision: bound.revision,
     characterId: first,
+    actor: { kind: 'actor', id: 'actor:reimu' },
+  }, {
+    name: '博丽灵梦（更新）',
+    voiceAliases: ['更新后的卡片署名'],
+    profile: character(first, '博丽灵梦', '资源中心更新后的角色卡描述。').profile,
+  })
+  assert.equal(rebound.characters[0]?.name, '博丽灵梦（更新）')
+  assert.equal(rebound.characters[0]?.profile.description, '资源中心更新后的角色卡描述。')
+  assert.deepEqual(rebound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
+  assert.deepEqual(rebound.characters[0]?.state, bound.characters[0]?.state)
+  assert.deepEqual(rebound.facts, bound.facts)
+  assert.deepEqual(rebound.events, bound.events)
+  assert.deepEqual(rebound.world, bound.world)
+  const detached = store.bindCharacterActor(rebound.id, {
+    format: 0,
+    revision: rebound.revision,
+    characterId: first,
   })
   assert.equal(detached.characters[0]?.actor, undefined)
-  assert.equal(detached.characters[0]?.name, '博丽灵梦')
-  assert.equal(detached.characters[0]?.profile.description, '博丽神社的巫女。')
+  assert.equal(detached.characters[0]?.name, '博丽灵梦（更新）')
+  assert.equal(detached.characters[0]?.profile.description, '资源中心更新后的角色卡描述。')
   assert.deepEqual(detached.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   assert.deepEqual(store.get(detached.id).characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
   assert.deepEqual(detached.world, installed.world)
