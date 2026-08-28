@@ -162,6 +162,13 @@
 .story-play-turn strong { font-size: 13px; }
 .story-play-turn-actions { align-items: center; display: flex; gap: 6px; grid-column: 2; grid-row: 1 / 3; }
 .story-die { align-items: center; background: #fff; border-radius: 9px; color: #202126; display: flex; font-size: 22px; font-weight: 800; height: 42px; justify-content: center; width: 42px; }
+.story-play-evidence { align-items: center; background: color-mix(in srgb, var(--story-accent) 4%, var(--studio-panel)); border: 1px solid var(--studio-border); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin: 0 auto 14px; max-width: 1120px; padding: 7px 9px; }
+.story-play-evidence-items,
+.story-play-evidence-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
+.story-play-evidence-chip { align-items: baseline; background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 999px; display: inline-flex; gap: 5px; padding: 5px 8px; }
+.story-play-evidence-chip small { color: var(--studio-muted); font-size: 8px; }
+.story-play-evidence-chip strong { color: #d5963a; font-size: 9px; }
+.story-play-evidence-chip[data-ready='true'] strong { color: var(--story-accent); }
 .story-play-notice { background: color-mix(in srgb, #e4ae43 12%, var(--studio-panel)); border: 1px solid color-mix(in srgb, #e4ae43 35%, var(--studio-border)); border-radius: 9px; font-size: 10px; margin: 0 auto 14px; max-width: 1120px; padding: 8px 10px; }
 .story-play-session-action { align-items: end; background: color-mix(in srgb, var(--story-accent) 8%, var(--studio-panel)); border: 1px solid color-mix(in srgb, var(--story-accent) 26%, var(--studio-border)); border-radius: 12px; display: grid; font-size: 10px; gap: 12px; grid-template-columns: minmax(180px, .65fr) minmax(260px, 1.35fr) auto; margin: 0 auto 14px; max-width: 1120px; padding: 12px; }
 .story-play-session-copy { display: grid; gap: 4px; }
@@ -784,6 +791,8 @@
   .story-play-view { padding: 18px 12px 42px; }
   .story-play-heading { align-items: stretch; flex-direction: column; }
   .story-play-turn { width: 100%; }
+  .story-play-evidence { align-items: stretch; }
+  .story-play-evidence-actions { flex-basis: 100%; }
   .story-flying-layout { grid-template-columns: 1fr; }
   .story-flying-board { min-width: 0; }
   .story-play-session-action { align-items: stretch; grid-template-columns: 1fr; }
