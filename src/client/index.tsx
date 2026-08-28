@@ -25,6 +25,7 @@ import {
   Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
+  AGENT_RP_PLAY_WORLD_VIEW_SLOT,
   AGENT_RP_ST_EXTENSION_SERVICE,
   AGENT_RP_WORKBENCH_SECTION_SLOT,
 } from '../client-extension-v0.ts'
@@ -2796,10 +2797,10 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
 }
 
 type SidebarRoleplayDestinationProps = PropsRuntime<'sidebar.destinations'>
-  & PropsRenderSlots<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>
+  & PropsRenderSlots<typeof AGENT_RP_WORKBENCH_SECTION_SLOT | typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>
   & SidebarRoleplayWorkbenchProps
 type SidebarRoleplayFooterActionProps = PropsRuntime<'sidebar.footer.action'>
-  & PropsRenderSlots<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>
+  & PropsRenderSlots<typeof AGENT_RP_WORKBENCH_SECTION_SLOT | typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>
   & SidebarRoleplayWorkbenchProps
 
 function RoleplayDestinationIcon({ size }: { readonly size: number }) {
@@ -3207,6 +3208,11 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
+      renderPlayWorldView={(moduleId, owner, fallback) => renderSlot(
+        AGENT_RP_PLAY_WORLD_VIEW_SLOT,
+        owner,
+        { entryKey: moduleId, fallback },
+      )}
       {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
       {...(currentRoleplaySession ? {} : {
         launchTargets: storySessionWorkspaces,
@@ -13617,13 +13623,19 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({
     name: 'sidebar.destinations', id: 'agent-rp-workbench', order: 20,
-    children: { [AGENT_RP_WORKBENCH_SECTION_SLOT]: { kind: 'list', scope: 'root' } },
+    children: {
+      [AGENT_RP_WORKBENCH_SECTION_SLOT]: { kind: 'list', scope: 'root' },
+      [AGENT_RP_PLAY_WORLD_VIEW_SLOT]: { kind: 'keyed', scope: 'root' },
+    },
   }, props => <SidebarRoleplayDestination {...props} {...sidebarRoleplayWorkbenchProps} />))
   ctx.slots.inject('sidebar.footer.action', () => {
     if (ctx.slots.spec('sidebar.destinations') !== undefined) return () => {}
     return ctx.slots.register({
       name: 'sidebar.footer.action', id: 'agent-rp-workbench', order: 20,
-      children: { [AGENT_RP_WORKBENCH_SECTION_SLOT]: { kind: 'list', scope: 'root' } },
+      children: {
+        [AGENT_RP_WORKBENCH_SECTION_SLOT]: { kind: 'list', scope: 'root' },
+        [AGENT_RP_PLAY_WORLD_VIEW_SLOT]: { kind: 'keyed', scope: 'root' },
+      },
     }, props => <SidebarRoleplayFooterAction {...props} {...sidebarRoleplayWorkbenchProps} />)
   })
   ctx.slots.inject(AGENT_RP_WORKBENCH_SECTION_SLOT, () => ctx.slots.register({

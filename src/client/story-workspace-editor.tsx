@@ -25,6 +25,7 @@ import {
 } from 'react'
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
 import type { CharacterLibraryImportResult } from '../character-library-protocol.ts'
+import type { AgentRpPlayWorldViewOwnerProps } from '../client-extension-v0.ts'
 import type { AgentRpStoryTurnProgress, AgentRpStoryTurnStage } from '../projection-types.ts'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
@@ -99,6 +100,11 @@ interface StoryWorkspaceEditorProps {
   readonly launchUnavailableReason?: string
   readonly onStartSession?: (hostWorkspaceId: string, workspaceId: string, request: string) => Promise<void>
   readonly onContinueSession?: (sessionId: string, workspaceId: string, request: string) => Promise<void>
+  readonly renderPlayWorldView?: (
+    moduleId: string,
+    props: AgentRpPlayWorldViewOwnerProps,
+    fallback: React.ReactNode,
+  ) => React.ReactNode
   readonly onClose: () => void
 }
 
@@ -1867,7 +1873,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onConfigureCast, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1877,6 +1883,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly launchTargets: readonly { readonly id: string; readonly title: string }[]
   readonly launchTargetId: string | undefined
   readonly launchUnavailableReason: string | undefined
+  readonly renderPlayWorldView: StoryWorkspaceEditorProps['renderPlayWorldView']
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onConfigureCast: (() => void) | undefined
@@ -1888,6 +1895,21 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   const characterName = turn === null
     ? '没有待执行行动'
     : workspace.characters.find(character => character.id === turn.characterId)?.name ?? turn.characterId
+  const genericWorldView = <><section className="story-world-actions"><header><strong>{turn === null ? '当前没有待执行动作' : turn.instruction}</strong>
+    <span>可用行动由当前世界规则给出；选择后会立即结算并记录为世界事件。</span></header>
+    {turn !== null && <div>{turn.actions.map(action => <button className="story-world-action" type="button" key={action.id}
+      disabled={busy || dirty} onClick={() => { onAction(action.id) }}><strong>{action.label}</strong><span>{action.description}</span></button>)}</div>}
+  </section><WorldEventList events={workspace.world?.events ?? []} /></>
+  const renderedWorldView = workspace.world === undefined || renderPlayWorldView === undefined
+    ? genericWorldView
+    : renderPlayWorldView(workspace.world.moduleId, {
+      world: workspace.world,
+      characters: playWorldParticipants(workspace).map(character => ({ id: character.id, name: character.name })),
+      turn,
+      busy,
+      dirty,
+      dispatchAction: onAction,
+    }, genericWorldView)
   return <div className="story-play-view">
     <div className="story-play-heading"><div><span>世界游玩 · {module?.category === 'simulation' ? '模拟' : '游戏'}</span>
       <h1>{workspace.world?.title}</h1><p>{module?.summary ?? '这个世界由已安装模块维护权威状态与合法动作。'}</p></div>
@@ -1907,12 +1929,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
       onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession} />
     {sessionAction === undefined && launchUnavailableReason !== undefined && <div className="story-play-notice">{launchUnavailableReason}</div>}
     {dirty && <div className="story-play-notice">先保存人物或故事修改，再推进世界。</div>}
-    <section className="story-world-actions"><header><strong>{turn === null ? '当前没有待执行动作' : turn.instruction}</strong>
-      <span>可用行动由当前世界规则给出；选择后会立即结算并记录为世界事件。</span></header>
-      {turn !== null && <div>{turn.actions.map(action => <button className="story-world-action" type="button" key={action.id}
-        disabled={busy || dirty} onClick={() => { onAction(action.id) }}><strong>{action.label}</strong><span>{action.description}</span></button>)}</div>}
-    </section>
-    <WorldEventList events={workspace.world?.events ?? []} />
+    {renderedWorldView}
   </div>
 }
 
@@ -2164,7 +2181,7 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenSources, onRestart, onAction }: {
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, launchTargets, launchTargetId, launchUnavailableReason, renderPlayWorldView, onLaunchTargetChange, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onOpenSources, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2176,6 +2193,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly launchTargets: readonly { readonly id: string; readonly title: string }[]
   readonly launchTargetId: string | undefined
   readonly launchUnavailableReason: string | undefined
+  readonly renderPlayWorldView: StoryWorkspaceEditorProps['renderPlayWorldView']
   readonly onLaunchTargetChange: (id: string) => void
   readonly onAdvanceSession: (request: string) => void
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
@@ -2223,12 +2241,13 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} launchTargets={launchTargets}
     launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
+    renderPlayWorldView={renderPlayWorldView}
     onLaunchTargetChange={onLaunchTargetChange} onAdvanceSession={onAdvanceSession}
     onConfigureCast={configureCast} onOpenSources={onOpenSources} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
-export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, storyTurn, launchTargets = [], defaultLaunchTargetId, launchUnavailableReason, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
+export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, storyTurn, launchTargets = [], defaultLaunchTargetId, launchUnavailableReason, renderPlayWorldView, onStartSession, onContinueSession, onClose }: StoryWorkspaceEditorProps) {
   const [items, setItems] = useState<readonly StoryWorkspaceSummary[]>([])
   const [playWorlds, setPlayWorlds] = useState<readonly PlayWorldResourceDescriptor[]>([])
   const [actorResources, setActorResources] = useState<readonly RoleplayResourceDescriptor[]>([])
@@ -2763,6 +2782,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         ? 'continue'
         : launchTargetId !== undefined && onStartSession !== undefined ? 'start' : undefined}
       launchTargets={launchTargets} launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
+      renderPlayWorldView={renderPlayWorldView}
       onLaunchTargetChange={setLaunchTargetId}
       onAdvanceSession={advanceSession}
       onImportActor={importWorldActor} onInstall={installWorld} onUpdateCast={saveWorldCast}

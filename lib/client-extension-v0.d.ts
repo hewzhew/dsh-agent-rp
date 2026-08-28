@@ -1,9 +1,42 @@
 import { PropsRuntime } from "@deepseek-ai/dsh-client-ui-slots";
-
+/** One authoritative event emitted by an executable world. */
+interface PlayWorldEvent {
+  readonly id: string;
+  readonly sequence: number;
+  readonly type: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly actorId?: string;
+}
+/** Durable module-owned state attached to one play space. */
+interface PlayWorldSnapshot {
+  readonly format: 0;
+  readonly instanceId: string;
+  readonly moduleId: string;
+  readonly moduleVersion: number;
+  readonly title: string;
+  readonly state: unknown;
+  readonly events: readonly PlayWorldEvent[];
+}
+/** One browser-safe legal choice whose executable payload remains inside the Host module. */
+interface PlayWorldActionDescriptor {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+}
+/** Current Host-advertised turn projected without module-owned action payloads. */
+interface PlayWorldTurnProjection {
+  readonly cycleId: string;
+  readonly characterId: string;
+  readonly instruction: string;
+  readonly actions: readonly PlayWorldActionDescriptor[];
+}
 /** The API version encoded by the `@hewzhew/dsh-agent-rp/client-extension/v0` export. */
 declare const AGENT_RP_CLIENT_EXTENSION_API_VERSION: 0;
 /** Ordered external sections rendered inside the Agent RP sidebar workbench. */
 declare const AGENT_RP_WORKBENCH_SECTION_SLOT: "agent-rp.workbench.section";
+/** Module-id-keyed browser view rendered inside an installed executable world. */
+declare const AGENT_RP_PLAY_WORLD_VIEW_SLOT: "agent-rp.play-world.view";
 /** Client Cordis service used by independent plugins to install ST extension bundles. */
 declare const AGENT_RP_ST_EXTENSION_SERVICE: "agentRpStExtensions";
 /** One installed ST extension contributed by a trusted DSH client plugin. */
@@ -40,6 +73,21 @@ interface AgentRpWorkbenchSectionOwnerProps {
   /** Close the Agent RP workbench after the extension opens its own surface. */
   readonly closeWorkbench: () => void;
 }
+/** Public identity for one character participating in an executable world. */
+interface AgentRpPlayWorldViewCharacter {
+  readonly id: string;
+  readonly name: string;
+}
+/** Browser-safe state and actions supplied to one module-owned world view. */
+interface AgentRpPlayWorldViewOwnerProps {
+  readonly world: PlayWorldSnapshot;
+  readonly characters: readonly AgentRpPlayWorldViewCharacter[];
+  readonly turn: PlayWorldTurnProjection | null;
+  readonly busy: boolean;
+  readonly dirty: boolean;
+  /** Dispatch one action id from the current Host-projected legal turn. */
+  readonly dispatchAction: (actionId: string) => void;
+}
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Trusted client plugins can add complete task rows without receiving Agent RP private state. */
@@ -48,8 +96,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'root';
       owner: AgentRpWorkbenchSectionOwnerProps;
     };
+    /** Trusted client plugins can render the module-owned body of an installed world. */
+    'agent-rp.play-world.view': {
+      kind: 'keyed';
+      scope: 'root';
+      owner: AgentRpPlayWorldViewOwnerProps;
+    };
   }
 }
 /** Props received by a registered Agent RP workbench section component. */
 type AgentRpWorkbenchSectionProps = PropsRuntime<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>;
-export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps };
+/** Props received by a client view registered under its Host world module id. */
+type AgentRpPlayWorldViewProps = PropsRuntime<typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>;
+export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_PLAY_WORLD_VIEW_SLOT, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpPlayWorldViewCharacter, AgentRpPlayWorldViewOwnerProps, AgentRpPlayWorldViewProps, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps };
