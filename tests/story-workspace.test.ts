@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { searchStoryWorkspaceSources } from '../src/story-research.ts'
-import { splitStorySourcePassages } from '../src/story-source.ts'
+import { splitStorySourcePassages, storySourcePassageSections } from '../src/story-source.ts'
 import {
   acceptStorySuggestionBatch,
   rejectStorySuggestionBatch,
@@ -912,6 +912,25 @@ test('projects common Chinese TXT chapters and single-line paragraphs', () => {
   ])
 })
 
+test('projects flat wiki headings without changing stable passage locators', () => {
+  const passages = splitStorySourcePassages({
+    id: createStorySourceId(),
+    name: '网页原著',
+    kind: 'original',
+    enabled: true,
+    content: '体验版[编辑]\n开场说明。\n博丽灵梦 vs. 雾雨魔理沙 (Stage 3)[编辑]\n对话总览。\n这一节说明两人的分歧。',
+  })
+
+  assert.deepEqual(passages.map(passage => passage.locator), ['第 1 段', '第 2 段', '第 3 段', '第 4 段', '第 5 段'])
+  assert.deepEqual(storySourcePassageSections(passages), [
+    '体验版',
+    '体验版',
+    '博丽灵梦 vs. 雾雨魔理沙 (Stage 3)',
+    '博丽灵梦 vs. 雾雨魔理沙 (Stage 3)',
+    '博丽灵梦 vs. 雾雨魔理沙 (Stage 3)',
+  ])
+})
+
 test('retrieves the most relevant bounded original excerpts before model research', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-search-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -959,12 +978,27 @@ test('retrieves the most relevant bounded original excerpts before model researc
       kind: 'web',
       enabled: true,
       content: '仅查询不会成为本地证据的紫色彗星。',
+    }, {
+      id: createStorySourceId(),
+      name: '网页原著',
+      kind: 'original',
+      enabled: true,
+      content: '体验版[编辑]\n开场说明。\n博丽灵梦 vs. 雾雨魔理沙 (Stage 3)[编辑]\n对话总览。\n这一节说明两人的分歧。',
     }],
   })
   const expanded = searchStoryWorkspaceSources(contextWorkspace, '钟楼暗号', 500)
   assert.match(expanded, /守门人先熄灭门灯/u)
   assert.match(expanded, /钟楼暗号只在午夜出现/u)
   assert.match(expanded, /随后北门会短暂开启/u)
+  const byChapter = searchStoryWorkspaceSources(contextWorkspace, '第七章', 500)
+  assert.match(byChapter, /钟楼章节/u)
+  assert.match(byChapter, /第七章 · 第 1 段/u)
+  assert.match(byChapter, /守门人先熄灭门灯/u)
+  const bySourceName = searchStoryWorkspaceSources(contextWorkspace, '第二卷', 500)
+  assert.match(bySourceName, /第二卷/u)
+  assert.match(bySourceName, /雪原尽头的车站/u)
+  const byProjectedWebSection = searchStoryWorkspaceSources(contextWorkspace, 'Stage 3', 500)
+  assert.match(byProjectedWebSection, /这一节说明两人的分歧/u)
   assert.equal(searchStoryWorkspaceSources(contextWorkspace, '紫色彗星', 500), '')
 
   const crowdedWorkspace = store.save({
