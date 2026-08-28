@@ -629,6 +629,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const marisa = character(marisaId, '雾雨魔理沙')
   const configured = store.save({
     ...editable(created),
+    pipeline: { ...created.pipeline, voiceDraftReasoning: 'quality' },
     characters: [
       {
         ...reimu,
@@ -668,6 +669,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
             efforts: [
               { id: 'none', name: 'None' },
               { id: 'minimal', name: 'Minimal' },
+              { id: 'low', name: 'Low' },
               { id: 'high', name: 'High' },
             ],
             defaultEffort: 'high',

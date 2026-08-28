@@ -60,7 +60,12 @@ function workspace(): StoryWorkspaceSnapshot {
     revision: 3,
     createdAt: 1,
     updatedAt: 2,
-    pipeline: { maxParallel: 2, researchMaxPasses: 2, workerModel: { provider: 'worker-fixture', model: 'worker-model' } },
+    pipeline: {
+      maxParallel: 2,
+      researchMaxPasses: 2,
+      voiceDraftReasoning: 'routine',
+      workerModel: { provider: 'worker-fixture', model: 'worker-model' },
+    },
     graph: {
       activeNodeId,
       nodes: [
@@ -513,12 +518,12 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 3)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 3)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 8)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 6)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
-    .every(request => request.dispatch.reasoningEffort === 'high'), true)
+    .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
     .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
@@ -794,7 +799,7 @@ test('materializes continuity from the actually visible reply instead of the pre
     id: created.id,
     revision: 0,
     name: '实际正文沉淀',
-    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2, voiceDraftReasoning: 'routine' },
     graph: {
       activeNodeId: nodeId,
       nodes: [{

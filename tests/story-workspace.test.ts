@@ -66,13 +66,18 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   const nodeCitationId = createStoryCitationId()
   const factCitationId = createStoryCitationId()
 
-  assert.deepEqual(created.pipeline, { maxParallel: 4, researchMaxPasses: 2 })
+  assert.deepEqual(created.pipeline, { maxParallel: 4, researchMaxPasses: 2, voiceDraftReasoning: 'routine' })
   const saved = store.save({
     format: 2,
     id: created.id,
     revision: created.revision,
     name: '长夜',
-    pipeline: { maxParallel: 3, researchMaxPasses: 3, workerModel: { provider: 'fast', model: 'story' } },
+    pipeline: {
+      maxParallel: 3,
+      researchMaxPasses: 3,
+      voiceDraftReasoning: 'quality',
+      workerModel: { provider: 'fast', model: 'story' },
+    },
     graph: {
       activeNodeId: nodeId,
       nodes: [{
@@ -141,6 +146,7 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
   assert.deepEqual(saved.pipeline, {
     maxParallel: 3,
     researchMaxPasses: 3,
+    voiceDraftReasoning: 'quality',
     workerModel: { provider: 'fast', model: 'story' },
   })
   assert.equal(saved.outputs[0]?.characterId, characterId)
@@ -182,6 +188,10 @@ test('persists typed story objects and rejects stale whole-workspace writes', (c
     ...editable(saved),
     pipeline: { ...saved.pipeline, researchMaxPasses: 5 },
   }), /故事研究轮数应为 1 至 4/u)
+  assert.throws(() => store.save({
+    ...editable(saved),
+    pipeline: { ...saved.pipeline, voiceDraftReasoning: 'extreme' as never },
+  }), /对白起草推理策略无效/u)
   assert.throws(() => store.save({ ...editable(saved), revision: 0, name: '过期编辑' }), /当前 revision 为 1/u)
 })
 
@@ -221,7 +231,11 @@ test('migrates one format 0 workspace into the typed story model and removes obs
 
   assert.equal(migrated.format, 2)
   assert.equal(migrated.revision, 5)
-  assert.deepEqual(migrated.pipeline, { maxParallel: 2, researchMaxPasses: 2 })
+  assert.deepEqual(migrated.pipeline, {
+    maxParallel: 2,
+    researchMaxPasses: 2,
+    voiceDraftReasoning: 'routine',
+  })
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'arc')?.content, '第一幕在车站重逢。')
   assert.equal(migrated.graph.nodes.find(node => node.kind === 'secret')?.content, '旧车票将在终章回收。')
   assert.equal(migrated.graph.nodes.find(node => node.lifecycle === 'suggested')?.content, '让列车提前进站。')
@@ -262,7 +276,7 @@ test('migrates format 1 clusters and fact visibility into format 2 inheritance',
     revision: 3,
     createdAt: 10,
     updatedAt: 20,
-    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2, voiceDraftReasoning: 'routine' },
     graph: {
       activeNodeId: sceneId,
       nodes: [
@@ -840,7 +854,7 @@ test('retrieves the most relevant bounded original excerpts before model researc
   const created = store.create({ format: 2, name: '原著检索' })
   const workspace = store.save({
     ...editable(created),
-    pipeline: { maxParallel: 2, researchMaxPasses: 2 },
+    pipeline: { maxParallel: 2, researchMaxPasses: 2, voiceDraftReasoning: 'routine' },
     sources: [
       {
         id: createStorySourceId(),

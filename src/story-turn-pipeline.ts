@@ -2750,10 +2750,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '<prior_approved_dialogue>', priorDialogue === '' ? '（无）' : priorDialogue, '</prior_approved_dialogue>',
       ].join('\n')
       const subject = `${character.id}:${String(speechIndex + 1)}`
+      const voiceDraftReasoning = input.workspace.pipeline.voiceDraftReasoning
       const voice = await runStage(input, 'voice', generateOptions(
         input,
         reasoning,
-        'quality',
+        voiceDraftReasoning,
         VOICE_DRAFT_SYSTEM,
         commonBody,
         2_048,
@@ -2799,7 +2800,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const retry = await runStage(input, 'voice', generateOptions(
           input,
           reasoning,
-          'quality',
+          voiceDraftReasoning,
           '你仍是 character_context 中同一个人物自己的对白 Worker，正在进行唯一一次退回重写。严格审校已经拒绝 rejected_candidates，说明候选没有形成能立刻接在上一轮后的自然话轮：可能是 seed 映射不成立、把后台语义完整解释了一遍、留白字段又被换句话塞回对白、候选彼此只是改写，或使用了不属于此人物与当前场景的素材。不要解释、改写、倒装或缩短旧句。重新选择一条真实 [目标人物] seed 作为主要接话机制；其他 seed 只能旁证同一种机制，不能拼接多条原句的结构。[对话上下文] 仍只供理解。每个非空候选逐字复制 speech_plan 的 move，用 mechanics 简述主要 seed 支持的接话动作，并用 leftImplicit 明确一项由听者从刚才提问中自行补全、不会说出口的内容。对白只保留完成当前动作不可缺少的一点，不负责证明完整逻辑；若没有可安全省略的内容，返回空字符串、空 seedLineIds、空 mechanics 和空 leftImplicit。每一项 reference 必须逐字复制 required_reference。格式为 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"speech_plan 中既定动作","seedLineIds":["主要目标人物 seed ID","可选旁证 seed ID"],"mechanics":"主要 seed 支持的接话机制","leftImplicit":"听者自行补全而未说出口的内容","dialogue":"“全新候选”或空字符串"}]}，最多三项。不要使用 Markdown 围栏。',
           [
             commonBody,

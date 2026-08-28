@@ -48,12 +48,17 @@ export interface StoryWorkerModelRoute {
   readonly model: string
 }
 
+/** Portable reasoning policy for initial and retry dialogue drafts. */
+export type StoryVoiceDraftReasoning = 'routine' | 'quality'
+
 /** Execution settings that preserve stage order while parallelizing peers. */
 export interface StoryPipelineSettings {
   /** Maximum number of same-stage character or output Workers. */
   readonly maxParallel: number
   /** Maximum research Worker passes, including the initial local-evidence pass. */
   readonly researchMaxPasses: number
+  /** Reasoning policy shared by initial and retry dialogue drafts. */
+  readonly voiceDraftReasoning: StoryVoiceDraftReasoning
   readonly workerModel?: StoryWorkerModelRoute
 }
 

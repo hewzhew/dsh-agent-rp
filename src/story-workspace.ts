@@ -44,6 +44,7 @@ import type {
   StoryOutput,
   StoryOutputKind,
   StoryPipelineSettings,
+  StoryVoiceDraftReasoning,
   StoryResearchItem,
   StorySource,
   StorySourceOrigin,
@@ -83,7 +84,12 @@ const FACT_STATUSES = new Set<StoryFactStatus>(['asserted', 'uncertain', 'refute
 const KNOWLEDGE_MODES = new Set<StoryKnowledgePolicy['mode']>(['inherit', 'none', 'participants', 'characters'])
 const OUTPUT_KINDS = new Set<StoryOutputKind>(['prose', 'character', 'history'])
 const SOURCE_KINDS = new Set<StorySourceKind>(['original', 'reference', 'research', 'web'])
-const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = { maxParallel: 4, researchMaxPasses: 2 }
+const VOICE_DRAFT_REASONING = new Set<StoryVoiceDraftReasoning>(['routine', 'quality'])
+const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = {
+  maxParallel: 4,
+  researchMaxPasses: 2,
+  voiceDraftReasoning: 'routine',
+}
 const DEFAULT_PLAY_WORLD_REGISTRY = createDefaultPlayWorldRegistry()
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
@@ -298,16 +304,27 @@ function normalizePipeline(value: unknown): StoryPipelineSettings {
   if (value === undefined) return DEFAULT_STORY_PIPELINE
   if (!isRecord(value)) throw new Error('故事流水线设置不是对象')
   const researchMaxPasses = value.researchMaxPasses === undefined ? DEFAULT_STORY_PIPELINE.researchMaxPasses : value.researchMaxPasses
+  const voiceDraftReasoning = value.voiceDraftReasoning === undefined
+    ? DEFAULT_STORY_PIPELINE.voiceDraftReasoning
+    : value.voiceDraftReasoning
   if (!Number.isSafeInteger(value.maxParallel) || (value.maxParallel as number) < 1
     || (value.maxParallel as number) > 8) {
     throw new Error('故事流水线并发数应为 1 至 8')
   }
   if (!Number.isSafeInteger(researchMaxPasses) || (researchMaxPasses as number) < 1
     || (researchMaxPasses as number) > 4) throw new Error('故事研究轮数应为 1 至 4')
-  if (Object.keys(value).some(key => key !== 'maxParallel' && key !== 'researchMaxPasses' && key !== 'workerModel')) {
+  if (!VOICE_DRAFT_REASONING.has(voiceDraftReasoning as StoryVoiceDraftReasoning)) {
+    throw new Error('对白起草推理策略无效')
+  }
+  if (Object.keys(value).some(key => key !== 'maxParallel' && key !== 'researchMaxPasses'
+    && key !== 'voiceDraftReasoning' && key !== 'workerModel')) {
     throw new Error('故事流水线设置字段无效')
   }
-  const normalized = { maxParallel: value.maxParallel as number, researchMaxPasses: researchMaxPasses as number }
+  const normalized = {
+    maxParallel: value.maxParallel as number,
+    researchMaxPasses: researchMaxPasses as number,
+    voiceDraftReasoning: voiceDraftReasoning as StoryVoiceDraftReasoning,
+  }
   if (value.workerModel === undefined) return normalized
   if (!isRecord(value.workerModel)
     || Object.keys(value.workerModel).some(key => key !== 'provider' && key !== 'model')) {
