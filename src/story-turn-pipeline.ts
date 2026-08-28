@@ -525,8 +525,8 @@ function mergeFactChanges(
 ): readonly StoryFactChange[] {
   const merged = new Map<string, StoryFactChange>()
   for (const fact of [...owned, ...inferred]) {
-    const knownBy = [...new Set(fact.knownBy)].sort()
-    const key = `${knownBy.join('\0')}\0${fact.text}`
+    const knownBy = [...new Set(fact.knownBy)]
+    const key = `${[...knownBy].sort().join('\0')}\0${fact.text}`
     if (!merged.has(key)) merged.set(key, { text: fact.text, knownBy })
   }
   return [...merged.values()]
@@ -938,6 +938,25 @@ function groundDirectorSpeechPlans(
         reference: `speech:${section.sectionId}:${String(index + 1)}`,
       })),
     })),
+  }
+}
+
+function groundWorldDirectorBeats(
+  decision: StoryDirectorDecision,
+  sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  characterDecisions: readonly StoryCharacterDecisionRecord[],
+  worldNarrative: string,
+): StoryDirectorDecision {
+  if (worldNarrative === '') return decision
+  const outputById = new Map(sections.map(section => [section.id, section]))
+  const hasPublicReaction = characterDecisions.some(record => record.decision.action !== '')
+  return {
+    sections: decision.sections.map(section => {
+      const output = outputById.get(section.sectionId)
+      return output?.kind === 'character' || (output?.kind === 'prose' && !hasPublicReaction)
+        ? { ...section, beats: [] }
+        : section
+    }),
   }
 }
 
@@ -3178,7 +3197,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const fallback = directorFallback(input, playerInput, researchText, characterDecisionText, worldOutcome, worldNarrative)
   let directorDecision = hostDirectorAssignment === undefined
     ? undefined
-    : groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions)
+    : groundWorldDirectorBeats(
+        groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions),
+        enabledSections,
+        characterDecisions,
+        worldNarrative,
+      )
   if (hostDirectorAssignment === undefined) {
     const directorReasoningMode: StoryStageReasoningMode = worldNarrative !== ''
       && characterDecisions.every(record => record.decision.action === '' && record.decision.insights.length === 0)
@@ -3212,11 +3236,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     ), resultEventSeqs)
     if (director.text !== undefined) {
       try {
-        directorDecision = groundDirectorSpeechPlans(parseDirectorDecision(
-          director.text,
+        directorDecision = groundWorldDirectorBeats(
+          groundDirectorSpeechPlans(parseDirectorDecision(
+            director.text,
+            enabledSections,
+            enabledCharacters,
+          ), enabledSections, characterDecisions),
           enabledSections,
-          enabledCharacters,
-        ), enabledSections, characterDecisions)
+          characterDecisions,
+          worldNarrative,
+        )
       } catch {
         directorDecision = undefined
       }

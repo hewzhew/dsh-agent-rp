@@ -1338,6 +1338,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(JSON.stringify(sanaeRequest?.dispatch), /让魔理沙留意结果/u)
   assert.deepEqual(result.worldEventSequences, [1, 2, 3])
   assert.equal(result.hostOnlyWorldDraft, undefined)
+  assert.doesNotMatch(result.directorBrief, /表现刚发生的掷骰结果/u)
   assert.match(result.finalDraft, /## 对局正文\s+棋局开始：[\s\S]*博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
   assert.equal(result.finalDraft.match(/博丽灵梦没有可移动的飞机，本回合结束。/gu)?.length, 1)
   assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
