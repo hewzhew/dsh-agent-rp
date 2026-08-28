@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ImportedTavernHelperScript } from '../src/import/types.ts'
 import { agentRpProjectionDefinition } from '../src/projection.ts'
 import {
@@ -21,7 +21,10 @@ const script = {
 } satisfies ImportedTavernHelperScript
 
 test('projects the initial Session without loading the React client entry', () => {
-  const projection = agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init())
+  const projectionSession = Session.create(SessionId('snapshot-session'))
+  const projection = agentRpProjectionDefinition.wire.view(
+    agentRpProjectionDefinition.init(projectionSession.header),
+  )
   const page = tavernPageSnapshot(projection, SessionId('snapshot-session'))
   const snapshot = tavernScriptSnapshot(
     projection,

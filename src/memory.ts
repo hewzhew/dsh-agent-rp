@@ -487,7 +487,6 @@ export function appendAgentRpMemorySeed(
       sourceSessionId,
       memories: memories.map(memory => ({ kind: memory.kind, subject: memory.subject, text: memory.text })),
     },
-    ignorable: true,
   }]
   return Object.freeze(Session.create(SessionId('agent-rp-memory-seed-validation'), events).events.slice(0, events.length))
 }

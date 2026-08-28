@@ -13,7 +13,7 @@ import {
 } from './roleplay-turn-settlement.ts'
 import { resolveSessionRoleplayRuntime } from './session-roleplay-runtime.ts'
 import type { RoleplayRuntimeExtensionRegistry } from './roleplay-runtime-extension.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import type { ResolvedToolGuidanceConfig } from './roleplay-tool-guidance.ts'
 
 function replayBoundary(session: Session, events: readonly SessionEvent[]): Session {

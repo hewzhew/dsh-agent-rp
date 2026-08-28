@@ -6,7 +6,7 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId, type ImageAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
-import LlmRuntime, { CallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type JsonValue } from '@deepseek-ai/dsh-session'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -88,7 +88,7 @@ function appendCall(session: Session, callId: string, name: string, args: unknow
   return session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name,
     arguments: JSON.stringify(args),
   }).seq
@@ -105,7 +105,7 @@ function appendResult(
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content,
       isError: false,
     }),
@@ -155,7 +155,7 @@ test('stages one explicit same-turn durable artifact and replays its provenance'
   })
 
   const result = await ctx.tools.execute({
-    callId: CallId('stage-1'),
+    callId: ToolCallId('stage-1'),
     name: ROLEPLAY_ARTIFACT_STAGE_TOOL,
     arguments: { artifactId: String(IMAGE.attachmentId), caption: '  雨落在钟楼外。  ' },
     agent,
@@ -201,7 +201,7 @@ test('accepts Thetail publish_roleplay_image calls over legacy native image resu
   })
 
   const result = await ctx.tools.execute({
-    callId: CallId('publish-1'),
+    callId: ToolCallId('publish-1'),
     name: ROLEPLAY_ARTIFACT_PUBLISH_TOOL,
     arguments: { caption: '  雨落在钟楼外。  ' },
     agent,
@@ -232,7 +232,7 @@ test('accepts Thetail publish_roleplay_image calls over legacy native image resu
 
   appendCall(session, 'publish-duplicate', ROLEPLAY_ARTIFACT_PUBLISH_TOOL, {})
   const duplicate = await ctx.tools.execute({
-    callId: CallId('publish-duplicate'),
+    callId: ToolCallId('publish-duplicate'),
     name: ROLEPLAY_ARTIFACT_PUBLISH_TOOL,
     arguments: {},
     agent,
@@ -282,7 +282,7 @@ test('publishes a real workspace image through the compatibility tool without ac
   const { session, agent } = openSession('publish-workspace', workspace)
   appendCall(session, 'publish-outside', ROLEPLAY_ARTIFACT_PUBLISH_TOOL, { path: join(root, 'outside.png') })
   const outside = await ctx.tools.execute({
-    callId: CallId('publish-outside'),
+    callId: ToolCallId('publish-outside'),
     name: ROLEPLAY_ARTIFACT_PUBLISH_TOOL,
     arguments: { path: join(root, 'outside.png') },
     agent,
@@ -297,7 +297,7 @@ test('publishes a real workspace image through the compatibility tool without ac
   })
 
   const result = await ctx.tools.execute({
-    callId: CallId('publish-path'),
+    callId: ToolCallId('publish-path'),
     name: ROLEPLAY_ARTIFACT_PUBLISH_TOOL,
     arguments: { path: 'scene.png' },
     agent,
@@ -319,7 +319,7 @@ test('rejects paths, old-turn ids, and unrecorded artifacts instead of guessing'
   const { session, agent } = openSession('reject-artifact')
   appendCall(session, 'stage-path', ROLEPLAY_ARTIFACT_STAGE_TOOL, { artifactId: 'C:\\scene.png' })
   const pathResult = await ctx.tools.execute({
-    callId: CallId('stage-path'),
+    callId: ToolCallId('stage-path'),
     name: ROLEPLAY_ARTIFACT_STAGE_TOOL,
     arguments: { artifactId: 'C:\\scene.png' },
     agent,
@@ -329,7 +329,7 @@ test('rejects paths, old-turn ids, and unrecorded artifacts instead of guessing'
 
   appendCall(session, 'stage-missing', ROLEPLAY_ARTIFACT_STAGE_TOOL, { artifactId: 'sha256:missing' })
   const missing = await ctx.tools.execute({
-    callId: CallId('stage-missing'),
+    callId: ToolCallId('stage-missing'),
     name: ROLEPLAY_ARTIFACT_STAGE_TOOL,
     arguments: { artifactId: 'sha256:missing' },
     agent,
@@ -407,19 +407,19 @@ test('replaces the full roleplay prompt with a narrow artifact handoff after vis
     message: createAssistantMessage({
       source: { provider: 'fixture', model: 'fixture' },
       content: [{ type: 'text', text: '钟楼的雨声淹没了最后一句话。' }, {
-        type: 'tool-call', id: CallId('handoff-image'), name: 'fixture_generate_image', arguments: '{}',
+        type: 'tool-call', id: ToolCallId('handoff-image'), name: 'fixture_generate_image', arguments: '{}',
       }],
     }),
   }, { surfaceOp: 'append', sourceEventSeqs: [] })
   session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId('handoff-image'),
+    callId: ToolCallId('handoff-image'),
     name: 'fixture_generate_image',
     arguments: '{}',
   })
   const result = await root.tools.execute({
-    callId: CallId('handoff-image'),
+    callId: ToolCallId('handoff-image'),
     name: 'fixture_generate_image',
     arguments: {},
     agent,

@@ -30,9 +30,6 @@ import {
   initializeTavernHelperState,
   parseTavernHelperMutationRequest,
 } from '../src/tavern-helper.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 function cardWithEntries(entries: readonly object[]) {
   return parseCharacterCardJson(JSON.stringify({

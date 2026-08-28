@@ -99,7 +99,7 @@ test('permanently deletes only an archived Character Card unused by stable Sessi
   library.replaceText(imported.id, '门还没锁', '门没有锁')
   library.archive(imported.id)
   events = [{
-    type: 'agent-rp/character-card-seed', seq: 0, time: 1_800_000_000_000, ignorable: true,
+    type: 'agent-rp/character-card-seed', seq: 0, time: 1_800_000_000_000,
     data: {
       format: 0,
       source: { characterLibraryId: imported.id },

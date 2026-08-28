@@ -24,9 +24,6 @@ import {
   createStorySourceId,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   return {

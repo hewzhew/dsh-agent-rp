@@ -26,7 +26,10 @@ for (const file of [
   const source = readFileSync(new URL(file, import.meta.url), 'utf8')
   if (file === '../lib/index.js') hostSource = source
   const specifiers = [
-    ...source.matchAll(/\bfrom\s+["']([^"']+)["']/gu),
+    // Generated static imports/exports occupy complete lines. Anchoring keeps
+    // documentation examples inside bundled dependency comments out of the
+    // published dependency graph.
+    ...source.matchAll(/^[ \t]*(?:import|export)\s+(?:[^'"\r\n]*?\s+from\s+)?["']([^"']+)["']/gmu),
     ...source.matchAll(/\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gu),
   ].map(match => match[1])
 

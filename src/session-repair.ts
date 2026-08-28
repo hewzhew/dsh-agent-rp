@@ -1,17 +1,17 @@
-/** Explicit, backup-first repair for legacy Agent RP events in one DSH JSONL artifact. */
+/** Backup-first removal of legacy Agent RP envelope fields from one DSH JSONL artifact. */
 
 import { randomUUID } from 'node:crypto'
 import { lstat, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { constants, zstdCompressSync, zstdDecompressSync, type ZstdOptions } from 'node:zlib'
-import { AGENT_RP_SESSION_EVENT_TYPES } from './session-event-compat.ts'
+import { AGENT_RP_SESSION_EVENT_TYPES } from './session-event-registration.ts'
 
 const ZSTD_MAGIC = 0xFD2FB528
 const CHECKSUM_OPTIONS: ZstdOptions = {
   params: { [constants.ZSTD_c_checksumFlag]: 1 },
 }
 
-/** Known private Agent RP event types that are safe to admit during legacy repair. */
+/** Known private Agent RP event types whose legacy envelopes may be converted. */
 export const LEGACY_AGENT_RP_EVENT_TYPES: ReadonlySet<string> = new Set([
   ...AGENT_RP_SESSION_EVENT_TYPES,
 ] as const)
@@ -202,17 +202,18 @@ function patchPlaintext(input: Buffer): PlaintextPatch {
         throw new Error(`拒绝修复带对话表面操作的事件 ${JSON.stringify(type)}`)
       }
       if (record.ignorable === true) {
-        alreadySafeEvents += 1
-        chunks.push(line, Buffer.from('\n'))
+        repairedEvents += 1
+        const { ignorable: _legacyIgnorable, ...current } = record
+        chunks.push(Buffer.from(`${JSON.stringify(current)}\n`, 'utf8'))
       } else {
         if (record.ignorable !== undefined) {
           throw new Error(`事件 ${JSON.stringify(type)} 带有非法的 ignorable 标记`)
         }
-        repairedEvents += 1
-        chunks.push(Buffer.from(`${JSON.stringify({ ...record, ignorable: true })}\n`, 'utf8'))
+        alreadySafeEvents += 1
+        chunks.push(line, Buffer.from('\n'))
       }
     } else {
-      if (typeof type === 'string' && type.startsWith('agent-rp/') && record.ignorable !== true) unknown.add(type)
+      if (typeof type === 'string' && type.startsWith('agent-rp/')) unknown.add(type)
       chunks.push(line, Buffer.from('\n'))
     }
     start = newline + 1

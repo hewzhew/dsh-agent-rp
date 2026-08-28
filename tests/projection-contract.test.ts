@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { agentRpProjectionDefinition, createAgentRpProjectionDefinition } from '../src/projection.ts'
 
 test('serves the same Agent RP view through current and newer DSH projection contracts', () => {
-  const state = agentRpProjectionDefinition.init()
+  const state = agentRpProjectionDefinition.init(Session.create(SessionId('projection-contract')).header)
   const currentHostView = agentRpProjectionDefinition.schema.parse(
     agentRpProjectionDefinition.view(state),
   )
@@ -15,21 +16,16 @@ test('serves the same Agent RP view through current and newer DSH projection con
   assert.equal(agentRpProjectionDefinition.preload, false)
 })
 
-test('projects the selected turn mode from the live Host capability instead of a package-local Session class', () => {
-  const supported = createAgentRpProjectionDefinition(undefined, () => true)
-  const unsupported = createAgentRpProjectionDefinition(undefined, () => false)
-  const selected = supported.apply(supported.init(), {
+test('projects the selected turn mode through the required Session event capability', () => {
+  const definition = createAgentRpProjectionDefinition()
+  const selected = definition.apply(definition.init(Session.create(SessionId('projection-turn-mode')).header), {
     type: 'agent-rp/turn-mode',
     seq: 0,
     time: 1,
-    ignorable: true,
     data: { format: 0, mode: 'agent', source: 'default' },
   })
-  const supportedView = supported.wire.view(selected)
-  const unsupportedView = unsupported.wire.view(selected)
+  const view = definition.wire.view(selected)
 
-  assert.deepEqual(supportedView.hostCapabilities, { sessionEvents: true })
-  assert.equal(supportedView.turnMode, 'agent')
-  assert.deepEqual(unsupportedView.hostCapabilities, { sessionEvents: false })
-  assert.equal(unsupportedView.turnMode, 'conversation')
+  assert.deepEqual(view.hostCapabilities, { sessionEvents: true })
+  assert.equal(view.turnMode, 'agent')
 })

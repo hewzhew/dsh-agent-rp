@@ -1,10 +1,9 @@
 /** Durable Chat projection for a Session launched from one play space. */
 
 import type {
-  ChatConversationViewNode,
   ConversationNodeDefinition,
-} from '@deepseek-ai/dsh-client-runtime/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { STORY_WORKSPACES_PATH } from '../story-workspace-protocol.ts'
 
 /** Stable payload rendered by the play-space launch Chat card. */
@@ -19,7 +18,7 @@ export interface StoryWorkspaceLaunchSummary {
   readonly characterCount: number
 }
 
-declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
+declare module '@deepseek-ai/dsh-client-ui-chat/client' {
   interface ChatNodeDataMap {
     /** Session-level entry point for the play space selected at launch. */
     'agent-rp-story-workspace-launch': StoryWorkspaceLaunchChatData

@@ -96,7 +96,6 @@ export function appendRoleplayExperienceSelection(
     seq: events.length,
     time: Date.now(),
     data,
-    ignorable: true,
   }])
 }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  availableModelCatalog,
   resolveStateVerificationReasoningChoices,
   updateStateVerificationSettings,
   type AvailableModelCatalog,
@@ -33,6 +34,24 @@ const catalog = {
     }],
   }],
 } satisfies AvailableModelCatalog
+
+test('combines the alpha Host catalog with the durable next-request selection', () => {
+  const host = {
+    default: { provider: 'default', model: 'default' },
+    routableProviders: ['opencode-go'],
+    groups: catalog.groups,
+    failures: [],
+  }
+  assert.deepEqual(availableModelCatalog(host, {
+    lastUsed: { provider: 'opencode-go', model: 'old' },
+    next: catalog.current,
+  }), catalog)
+  assert.deepEqual(availableModelCatalog(host, { lastUsed: null, next: null }), {
+    current: host.default,
+    groups: catalog.groups,
+  })
+  assert.throws(() => availableModelCatalog(host, undefined), /模型选择投影/u)
+})
 
 test('derives selectable efforts from the effective state verification model', () => {
   assert.deepEqual(resolveStateVerificationReasoningChoices(catalog, null, 'max'), {

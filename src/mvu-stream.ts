@@ -27,7 +27,6 @@ import {
   normalizeMvuSupplement,
 } from './mvu.ts'
 import type { RoleplayTurnPlan } from './roleplay-turn-plan.ts'
-import { supportsAgentRpSessionEvents } from './session-event-compat.ts'
 
 export interface PreparedMvuResponseRepair {
   readonly engine: 'mvu-v0'
@@ -159,7 +158,6 @@ export function installMvuStreamCompletion(
     if (plan === undefined) return next()
     const prepared = preparedMvuResponseRepair(plan)
     if (prepared === undefined) return next()
-    if (!supportsAgentRpSessionEvents(agent.session)) return next()
     const current = prepared.current
     const mvuRules = prepared.updateInstructions
     const choiceRules = prepared.choiceInstructions

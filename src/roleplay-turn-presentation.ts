@@ -5,7 +5,7 @@ import type {
   BoundRoleplayTurnPlan,
   RoleplayTurnPlanReference,
 } from './roleplay-turn-settlement.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   normalizeRoleplayTurnPresentation as importedNormalizePresentation,
 } from './roleplay-turn-presentation-state.ts'

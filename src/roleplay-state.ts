@@ -6,7 +6,7 @@ import {
   type Session,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Native lifecycle module that owns all source-neutral Roleplay state namespaces. */
 export const ROLEPLAY_STATE_MODULE_ID = 'roleplay:state'

@@ -235,7 +235,6 @@ export function roleplayLibraryResourceProviders(libraries: {
             format: 0 as const,
             persona: { id: persona.id, name: persona.name, description: persona.description },
           },
-          ignorable: true,
         }],
       }
     },

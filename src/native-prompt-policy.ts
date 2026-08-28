@@ -167,7 +167,6 @@ export function nativePromptPolicyResourceProvider(): RoleplayResourceProvider {
           seq: input.events.length,
           time: Date.now(),
           data: structuredClone(policy),
-          ignorable: true,
         }],
       }
     },

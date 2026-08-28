@@ -45,20 +45,14 @@ import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
 import { inspectLorebook } from '../src/import/lorebook.ts'
 
-interface CapturedIgnorableEvent {
-  readonly type: string
-  readonly seq: number
-  readonly data: Readonly<Record<string, unknown>>
-  readonly ignorable: true
-}
-
-function captureIgnorableEvents(session: Session): CapturedIgnorableEvent[] {
-  const events: CapturedIgnorableEvent[] = []
-  Object.defineProperty(session, 'appendIgnorable', {
+function captureAgentRpEvents(session: Session): SessionEvent[] {
+  const events: SessionEvent[] = []
+  const append = session.append.bind(session) as (...args: unknown[]) => SessionEvent
+  Object.defineProperty(session, 'append', {
     configurable: true,
-    value(type: string, data: Readonly<Record<string, unknown>>) {
-      const event = Object.freeze({ type, seq: session.seq + events.length, time: 1, data, ignorable: true as const })
-      events.push(event)
+    value(...args: unknown[]) {
+      const event = append(...args)
+      if (event.type.startsWith('agent-rp/')) events.push(event)
       return event
     },
   })
@@ -66,7 +60,7 @@ function captureIgnorableEvents(session: Session): CapturedIgnorableEvent[] {
 }
 
 function auxiliaryEvent(type: string, seq: number, data: unknown): SessionEvent {
-  return { type, seq, time: seq + 1, data, ignorable: true } as unknown as SessionEvent
+  return { type, seq, time: seq + 1, data } as unknown as SessionEvent
 }
 
 function auxiliaryRequestData(requestId: string): Readonly<Record<string, unknown>> {
@@ -100,7 +94,7 @@ test('projects model reasoning without exposing it as visible transcript text', 
       ],
     }),
   }, { surfaceOp: 'append' })
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
 
   assert.deepEqual(state.surface, [{
@@ -169,7 +163,7 @@ test('resolves OpenAI-compatible custom generation endpoints without retaining q
 
 test('forwards one approved custom generation without retaining chat history at depth zero', async () => {
   const session = Session.create(SessionId('custom-generation'))
-  const auditEvents = captureIgnorableEvents(session)
+  const auditEvents = captureAgentRpEvents(session)
   session.append('user/message', createUserMessage({
     source: { kind: 'user' }, content: [{ type: 'text', text: '不应发送的历史' }],
   }), { surfaceOp: 'append' })
@@ -277,7 +271,7 @@ test('forwards one approved custom generation without retaining chat history at 
 
 test('logs the exact Host model request before auxiliary dispatch', async () => {
   const session = Session.create(SessionId('host-generation'))
-  const auditEvents = captureIgnorableEvents(session)
+  const auditEvents = captureAgentRpEvents(session)
   const agent = {
     session,
     options: { provider: 'fixture-provider', model: 'fixture-model', maxTokens: 456 },
@@ -319,7 +313,13 @@ test('logs the exact Host model request before auxiliary dispatch', async () => 
   assert.equal(dispatched?.maxTokens, 123)
   assert.equal(dispatched?.temperature, 0.25)
   assert.equal(auditEvents.length, 2)
-  assert.deepEqual(auditEvents[0]?.data.dispatch, {
+  const requestEvent = auditEvents[0]
+  const resultEvent = auditEvents[1]
+  if (requestEvent?.type !== 'agent-rp/tavern-generation-request'
+    || resultEvent?.type !== 'agent-rp/tavern-generation-result') {
+    assert.fail('missing Tavern generation audit pair')
+  }
+  assert.deepEqual(requestEvent.data.dispatch, {
     kind: 'host-model',
     provider: 'fixture-provider',
     model: 'fixture-model',
@@ -328,7 +328,7 @@ test('logs the exact Host model request before auxiliary dispatch', async () => 
     temperature: 0.25,
     maxTokens: 123,
   })
-  assert.deepEqual(auditEvents[1]?.data.result, { kind: 'success', text: 'Host 辅助结果' })
+  assert.deepEqual(resultEvent.data.result, { kind: 'success', text: 'Host 辅助结果' })
 })
 
 test('rejects unsafe custom generation headers before contacting the model', async () => {
@@ -361,7 +361,7 @@ test('rejects unsafe custom generation headers before contacting the model', asy
 
 test('rejects auxiliary model text beyond the capability character limit', async () => {
   const session = Session.create(SessionId('oversized-generation-text'))
-  const auditEvents = captureIgnorableEvents(session)
+  const auditEvents = captureAgentRpEvents(session)
   const agent = {
     session,
     options: { model: 'fallback-model' },
@@ -384,7 +384,11 @@ test('rejects auxiliary model text beyond the capability character limit', async
       mode: 'raw',
       config: { user_input: '生成', custom_api: { apiurl: 'https://example.com/v1', model: 'custom-model' } },
     }), /模型返回文本过长/u)
-    assert.deepEqual(auditEvents[1]?.data.result, { kind: 'failure', failure: 'invalid-response' })
+    const resultEvent = auditEvents[1]
+    if (resultEvent?.type !== 'agent-rp/tavern-generation-result') {
+      assert.fail('missing Tavern generation failure audit')
+    }
+    assert.deepEqual(resultEvent.data.result, { kind: 'failure', failure: 'invalid-response' })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -417,7 +421,7 @@ test('rejects a complete prompt preview beyond its capability result limit', asy
 
 test('cancels an active custom generation when its browser request closes', async () => {
   const session = Session.create(SessionId('cancel-custom-generation'))
-  const auditEvents = captureIgnorableEvents(session)
+  const auditEvents = captureAgentRpEvents(session)
   const agent = {
     session,
     options: { model: 'fallback-model' },
@@ -456,7 +460,11 @@ test('cancels an active custom generation when its browser request closes', asyn
     controller.abort()
     await assert.rejects(running, /已取消或超时/u)
     assert.equal(auditEvents.length, 2)
-    assert.deepEqual(auditEvents[1]?.data.result, { kind: 'failure', failure: 'aborted' })
+    const resultEvent = auditEvents[1]
+    if (resultEvent?.type !== 'agent-rp/tavern-generation-result') {
+      assert.fail('missing Tavern generation cancellation audit')
+    }
+    assert.deepEqual(resultEvent.data.result, { kind: 'failure', failure: 'aborted' })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -482,7 +490,7 @@ test('summarizes successful, failed, and pending auxiliary generations without c
   const summary = summarizeTavernAuxiliaryGenerations(events)
   assert.deepEqual(summary, { requests: 3, succeeded: 1, failed: 1, pending: 1, malformed: 0 })
   assert.doesNotMatch(JSON.stringify(summary), /private|prompt|result/u)
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(Session.create(SessionId('auxiliary-projection')).header)
   for (const event of events) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(state).auxiliaryGenerations, summary)
 })
@@ -612,7 +620,7 @@ test('keeps inactive causal command attachments replayable without selecting the
   assert.equal(readTavernHelperStateSnapshot(session.events), undefined)
   assert.deepEqual(readTavernHelperStateSnapshotAt(session.events, 1), { eventSeq: 1, state })
 
-  let projected = agentRpProjectionDefinition.init()
+  let projected = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.equal(projected.tavern, undefined)
 })
@@ -645,11 +653,12 @@ test('persists a causal script mutation through command/done on the published Ho
   })
 
   const result = executeTavernHelperMutation({ agent: { session } as Agent, rawInput })
-  assert.equal(result.sourceEventSeq, undefined)
-  assert.match(result.text ?? '', /^agent-rp-tavern-helper-attachment-v0:/u)
+  assert.equal(typeof result.sourceEventSeq, 'number')
+  assert.equal(result.text, undefined)
+  assert.equal(session.events[result.sourceEventSeq!]?.type, 'agent-rp/tavern-state-attachment')
   session.append('command/done', { commandId, ...result })
 
-  assert.equal(session.events.some(event => event.type === 'agent-rp/tavern-state-attachment'), false)
+  assert.equal(session.events.some(event => event.type === 'agent-rp/tavern-state-attachment'), true)
   assert.deepEqual(readTavernHelperStateSnapshot(session.events)?.state.scopes.chat, { mood: 'calm' })
   const reopened = Session.create(SessionId('published-tavern-command-replay'), session.events)
   assert.deepEqual(readTavernHelperStateSnapshot(reopened.events), readTavernHelperStateSnapshot(session.events))
@@ -710,12 +719,14 @@ test('keeps script-owned message annotations across reloads and reply-version se
       messages: [{ message_id: 1, value: annotation }],
     }),
   })
-  assert.match(persisted.text ?? '', /^agent-rp-tavern-message-annotations-v0:/u)
+  assert.equal(typeof persisted.sourceEventSeq, 'number')
+  assert.equal(persisted.text, undefined)
+  assert.equal(session.events[persisted.sourceEventSeq!]?.type, 'agent-rp/tavern-message-annotation')
   session.append('command/done', { commandId: annotationCommand, ...persisted })
   assert.deepEqual(Object.values(readTavernMessageAnnotations(session.events)).map(record => record.value), [annotation])
 
   const project = (source: Session) => {
-    let state = agentRpProjectionDefinition.init()
+    let state = agentRpProjectionDefinition.init(source.header)
     for (const event of source.events) state = agentRpProjectionDefinition.apply(state, event)
     return agentRpProjectionDefinition.wire.view(state)
   }

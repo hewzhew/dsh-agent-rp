@@ -1,7 +1,7 @@
 /** Durable per-Session choice between compatibility dialogue and native Agent turns. */
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Compatibility dialogue preserves author-defined output formats; Agent turns use runtime actions. */
 export type RoleplayTurnMode = 'conversation' | 'agent'

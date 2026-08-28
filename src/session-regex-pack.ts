@@ -48,7 +48,6 @@ export function appendSessionRegexPack(
     seq: events.length,
     time: Date.now(),
     data: snapshot,
-    ignorable: true,
   }])
 }
 

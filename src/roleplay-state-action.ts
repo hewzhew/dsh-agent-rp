@@ -392,7 +392,7 @@ export function settleSessionRoleplayStateActions(input: {
     return { session: sessionThrough(input.session, closing.seq), resultEventSeqs, outcome: 'idle' }
   }
   const laterRequired = input.session.events.some(event => event.seq > closing.seq
-    && event.type !== 'session/end-seed' && event.ignorable !== true)
+    && event.type !== 'session/end-seed')
   if (laterRequired) throw new Error('Roleplay state actions cannot be inserted after a later required Session event')
   const base = input.base
   if (base === undefined) throw new Error('Roleplay state action target is unavailable')

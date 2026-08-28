@@ -8,7 +8,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { StoryCharacter, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
-import { appendAgentRpSessionEvent } from '../src/session-event-compat.ts'
+import { appendAgentRpSessionEvent } from '../src/session-event-append.ts'
 import {
   compileStoryCharacterContext,
   createStoryCharacterId,
@@ -17,9 +17,6 @@ import {
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
-import { installIgnorableSessionEventFixture } from './session-event-fixture.ts'
-
-installIgnorableSessionEventFixture()
 
 const aliceId = 'character-00000000-0000-4000-8000-000000000001'
 const bobId = 'character-00000000-0000-4000-8000-000000000002'
@@ -698,7 +695,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
-  assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-') || event.ignorable === true), true)
+  assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
+    || !('ignorable' in event)), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
   assert.equal(calls, 14)

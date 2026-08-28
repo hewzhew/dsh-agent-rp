@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -53,7 +53,6 @@ import { installAgentRpMemoryHttp } from './memory-http.ts'
 import { installAgentRpCommandHttp } from './agent-rp-command-http.ts'
 import { parseCharacterCardJson, parseCharacterCardJsonBytes, parseCharacterCardValue } from './import/character-card.ts'
 import { parseCharx } from './import/charx.ts'
-import { createCharacterCardSessionSeed } from './import/character-card-seed.ts'
 import { readCharacterCardPng } from './import/png.ts'
 import {
   isCharxCharacterCardAttachment,
@@ -70,13 +69,9 @@ import {
   WORLD_INFO_IMPORT_DEGRADATIONS,
 } from './import/types.ts'
 import { parseWorldInfoJsonBytes } from './import/world-info.ts'
-import { parseSillyTavernChatBytes } from './import/sillytavern-chat.ts'
 import { parseSillyTavernPresetBytes, presetJson } from './import/sillytavern-preset.ts'
-import { createSillyTavernMigrationSeed } from './import/sillytavern-migration-seed.ts'
 import {
-  createSillyTavernChatSeed,
   readSillyTavernChatIdentity,
-  resolveSillyTavernChatIdentity,
 } from './import/sillytavern-chat-seed.ts'
 import {
   isJsonWorldInfoAttachment,
@@ -84,7 +79,6 @@ import {
   type WorldInfoImportMeta,
 } from './import/session-world-info.ts'
 import {
-  createPresetSessionSeed,
   preparePresetImportResult,
   type PresetImportMeta,
 } from './import/session-preset.ts'
@@ -110,13 +104,8 @@ import { CharacterLibrary } from './character-library.ts'
 import { CharacterWorldBindingStore } from './character-world-binding-store.ts'
 import { executeCharacterLibraryCommand } from './character-library-command.ts'
 import { installCharacterLibraryHttp } from './character-library-http.ts'
-import {
-  CHARACTER_LIBRARY_SESSION_PREFIX,
-  type CharacterLibrarySessionRequest,
-} from './character-library-protocol.ts'
 import { installPersonaLibraryHttp } from './persona-library-http.ts'
 import { PersonaLibrary } from './persona-library.ts'
-import { parseSessionPersona } from './session-persona.ts'
 import { executePersonaCommand } from './persona-command.ts'
 import { executeSillyTavernChatCommand } from './sillytavern-chat-command.ts'
 import { installSillyTavernChatHttp } from './sillytavern-chat-http.ts'
@@ -164,7 +153,7 @@ import {
   compileSessionRoleplayTurnPresentationUpdate,
 } from './session-roleplay-turn-presentation.ts'
 import { executeRoleplayStateCommand } from './roleplay-state-command.ts'
-import { supportsAgentRpSessionEvents } from './session-event-compat.ts'
+import { registerAgentRpSessionEvents } from './session-event-registration.ts'
 import { ensureDefaultRoleplayTurnMode } from './roleplay-turn-mode.ts'
 import { executeRoleplayTurnModeCommand } from './roleplay-turn-mode-command.ts'
 import {
@@ -413,39 +402,6 @@ export type {
 } from './embedded-identity-protocol.ts'
 export const inject = ['attachments', 'commands', 'credentials', 'llm', 'sessions', 'systemPrompt', 'tools']
 
-interface PromptAttachmentGateway {
-  registerPromptAttachmentConsumer?(
-    name: string,
-    consumer: (offer: {
-      readonly agent: Agent
-      readonly content: ReadonlyArray<
-        | { readonly type: 'text'; readonly text: string }
-        | { readonly type: 'image'; readonly mediaType: string; readonly name?: string }
-        | { readonly type: 'file'; readonly name: string; readonly mediaType?: string }
-      >
-    }) => { readonly text: string } | undefined,
-  ): () => void
-  registerPromptSessionImporter?(
-    name: string,
-    importer: {
-      recognize(offer: {
-        readonly agent: Agent
-        readonly content: ReadonlyArray<
-          | { readonly type: 'text'; readonly text: string }
-          | { readonly type: 'image'; readonly mediaType: string; readonly name?: string }
-          | { readonly type: 'file'; readonly name: string; readonly mediaType?: string }
-        >
-      }): boolean
-      import(input: {
-        readonly source: Agent
-        readonly text: string
-        readonly attachments: readonly PromptImportAttachment[]
-        readFile(ref: FileAttachmentRef, signal?: AbortSignal): Promise<Uint8Array>
-      }, signal?: AbortSignal): Promise<{ readonly seed: readonly SessionEvent[]; readonly title?: string }>
-    },
-  ): () => void
-}
-
 interface HumanCommandGateway {
   register(definition: {
     readonly name: string
@@ -473,10 +429,6 @@ interface FileAttachmentReader {
   ): Promise<{ readonly ref: ImageAttachmentRef; readonly data: Uint8Array }>
 }
 
-type PromptImportAttachment = CharacterCardAttachmentRef | FileAttachmentRef
-
-type PromptAttachmentPart = Parameters<Parameters<NonNullable<PromptAttachmentGateway['registerPromptAttachmentConsumer']>>[1]>[0]['content'][number]
-
 function decodeCharacterCardAttachment(
   attachment: CharacterCardAttachmentRef,
   data: Uint8Array,
@@ -491,127 +443,6 @@ function decodeCharacterCardAttachment(
   return {
     card: parseCharacterCardJson(payload.json),
     transport: { transport: 'png', metadataKeyword: payload.keyword },
-  }
-}
-
-function isCharacterCardOffer(part: PromptAttachmentPart): boolean {
-  return part.type === 'image'
-    ? part.mediaType === 'image/png'
-    : part.type === 'file' && /\.(?:json|charx)$/iu.test(part.name)
-}
-
-function isWorldInfoRequest(text: string): boolean {
-  return /(?:世界书|世界信息|world\s*info|lorebook)/iu.test(text) && /(?:导入|加载|使用|接入)/u.test(text)
-}
-
-function isPresetRequest(text: string): boolean {
-  return /(?:预设|preset)/iu.test(text) && /(?:导入|加载|使用|接入)/u.test(text)
-}
-
-/** Recognize one preset attachment before opening a model turn. */
-export function isSillyTavernPresetOffer(
-  agentRpActive: boolean,
-  content: readonly PromptAttachmentPart[],
-): boolean {
-  if (!agentRpActive) return false
-  const text = content.filter(part => part.type === 'text').map(part => part.text).join('\n')
-  const attachments = content.filter(part => part.type !== 'text')
-  return isPresetRequest(text)
-    && attachments.length === 1
-    && attachments[0]?.type === 'file'
-    && /\.json$/iu.test(attachments[0].name)
-}
-
-/** Recognize one explicit Character Card import without exposing attachment bytes to the model. */
-export function claimAgentRpPrompt(
-  agentRpActive: boolean,
-  content: readonly PromptAttachmentPart[],
-): { readonly text: string } | undefined {
-  if (!agentRpActive) return undefined
-  const attachments = content.filter(part => part.type !== 'text')
-  const text = content.filter(part => part.type === 'text').map(part => part.text).join('\n')
-  if (isWorldInfoRequest(text)) {
-    const files = attachments.filter(part => part.type === 'file' && /\.json$/iu.test(part.name))
-    return files.length === 1 ? { text } : undefined
-  }
-  if (isPresetRequest(text)) {
-    const files = attachments.filter(part => part.type === 'file' && /\.json$/iu.test(part.name))
-    return files.length === 1 ? { text } : undefined
-  }
-  const cards = attachments.filter(isCharacterCardOffer)
-  if (cards.length !== 1 || !/(?:角色卡|character\s*card|导入|接管|切换角色)/iu.test(text)) return undefined
-  return { text }
-}
-
-/** Recognize one standalone SillyTavern JSONL chat upload. */
-export function isSillyTavernChatOffer(
-  agentRpActive: boolean,
-  content: readonly PromptAttachmentPart[],
-): boolean {
-  if (!agentRpActive) return false
-  const attachments = content.filter(part => part.type !== 'text')
-  return attachments.length === 1
-    && attachments[0]?.type === 'file'
-    && /\.jsonl$/iu.test(attachments[0].name)
-}
-
-/** Recognize one Character Card and one JSONL chat submitted together. */
-export function isSillyTavernMigrationOffer(
-  agentRpActive: boolean,
-  content: readonly PromptAttachmentPart[],
-): boolean {
-  if (!agentRpActive) return false
-  const attachments = content.filter(part => part.type !== 'text')
-  return attachments.length === 2
-    && attachments.filter(isCharacterCardOffer).length === 1
-    && attachments.filter(part => part.type === 'file' && /\.jsonl$/iu.test(part.name)).length === 1
-}
-
-/** Recognize one explicitly selected standalone Character Card import. */
-export function isCharacterCardSessionOffer(
-  agentRpActive: boolean,
-  content: readonly PromptAttachmentPart[],
-): boolean {
-  if (!agentRpActive) return false
-  const text = content.filter(part => part.type === 'text').map(part => part.text).join('\n')
-  const attachments = content.filter(part => part.type !== 'text')
-  return parseCharacterCardSessionRequest(text) !== undefined
-    && attachments.length === 1
-    && attachments[0] !== undefined
-    && isCharacterCardOffer(attachments[0])
-}
-
-/** Parse a legacy direct import or an explicit character-library launch. */
-export function parseCharacterCardSessionRequest(text: string): CharacterLibrarySessionRequest | undefined {
-  const source = text.trim()
-  if (source === '请导入这张角色卡') return { format: 0, greetingIndex: 0 }
-  if (!source.startsWith(`${CHARACTER_LIBRARY_SESSION_PREFIX}\n`)) return undefined
-  let value: unknown
-  try {
-    value = JSON.parse(source.slice(CHARACTER_LIBRARY_SESSION_PREFIX.length + 1))
-  } catch {
-    return undefined
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const record = value as Record<string, unknown>
-  const keys = Object.keys(record)
-  if (record.format !== 0 || typeof record.greetingIndex !== 'number'
-    || !Number.isSafeInteger(record.greetingIndex) || record.greetingIndex < 0
-    || (record.userName !== undefined && (typeof record.userName !== 'string'
-      || record.userName.trim() === '' || record.userName.trim().length > 120))
-    || keys.some(key => key !== 'format' && key !== 'greetingIndex' && key !== 'userName' && key !== 'persona')) return undefined
-  let persona
-  try {
-    persona = record.persona === undefined ? undefined : parseSessionPersona(record.persona)
-  } catch {
-    return undefined
-  }
-  if (persona !== undefined && typeof record.userName === 'string' && record.userName.trim() !== persona.name) return undefined
-  return {
-    format: 0,
-    greetingIndex: record.greetingIndex,
-    ...(persona === undefined && typeof record.userName === 'string' ? { userName: record.userName.trim() } : {}),
-    ...(persona === undefined ? {} : { persona }),
   }
 }
 
@@ -759,7 +590,6 @@ export function installAgentRp(
   ctx.effect(() => () => {
     settlementRuntimeActive = false
   }, 'agent-rp: turn settlement lifetime')
-  const gateway = ctx.get('apiProxy') as PromptAttachmentGateway | undefined
   const commands = (ctx as Context & { commands: HumanCommandGateway }).commands
   const setRememberAvailable = (agent: Agent, available: boolean): void => {
     rememberIntentByAgent.set(agent, available)
@@ -1012,118 +842,6 @@ export function installAgentRp(
     recordInput: false,
     handler: invocation => executeWorldInfoLibraryCommand(worldInfoLibrary, invocation),
   })
-  const registerAttachmentConsumer = gateway?.registerPromptAttachmentConsumer?.bind(gateway)
-  if (registerAttachmentConsumer !== undefined) ctx.effect(() => registerAttachmentConsumer(
-    'dsh-agent-rp',
-    ({ agent, content }) => claimAgentRpPrompt(agentsByScope.get(agent) === agent, content),
-  ), 'agent-rp: prompt attachment consumer')
-  const registerSessionImporter = gateway?.registerPromptSessionImporter?.bind(gateway)
-  if (registerSessionImporter !== undefined) ctx.effect(() => registerSessionImporter('dsh-agent-rp:sillytavern-migration', {
-    recognize: ({ agent, content }) => isSillyTavernMigrationOffer(agentsByScope.get(agent) === agent, content),
-    async import(input, signal) {
-      const cardAttachment = input.attachments.find(attachment =>
-        isJsonCharacterCardAttachment(attachment) || isPngCharacterCardAttachment(attachment)
-        || isCharxCharacterCardAttachment(attachment))
-      const chatAttachment = input.attachments.find((attachment): attachment is FileAttachmentRef =>
-        'kind' in attachment && attachment.kind === 'file' && /\.jsonl$/iu.test(attachment.name))
-      if (cardAttachment === undefined || chatAttachment === undefined) {
-        throw new Error('SillyTavern migration requires one Character Card PNG, JSON, or CHARX and one chat JSONL')
-      }
-      const reader = ctx.attachments as unknown as FileAttachmentReader
-      const [storedCard, chatBytes] = await Promise.all([
-        isJsonCharacterCardAttachment(cardAttachment) || isCharxCharacterCardAttachment(cardAttachment)
-          ? input.readFile(cardAttachment, signal).then(data => ({ ref: cardAttachment, data }))
-          : reader.readImage(cardAttachment, signal),
-        input.readFile(chatAttachment, signal),
-      ])
-      const { card, transport } = decodeCharacterCardAttachment(storedCard.ref, storedCard.data)
-      const libraryEntry = characterLibrary.import({
-        data: storedCard.data,
-        ...(storedCard.ref.name === undefined ? {} : { filename: storedCard.ref.name }),
-        ...(storedCard.ref.mediaType === undefined ? {} : { mediaType: storedCard.ref.mediaType }),
-        card,
-        transport,
-      })
-      const chat = parseSillyTavernChatBytes(chatBytes)
-      return {
-        seed: createSillyTavernMigrationSeed(card, storedCard.ref, transport, chat, chatAttachment, libraryEntry.id),
-        title: card.nickname?.trim() || card.name,
-      }
-    },
-  }), 'agent-rp: SillyTavern migration importer')
-  if (registerSessionImporter !== undefined) ctx.effect(() => registerSessionImporter('dsh-agent-rp:sillytavern-chat', {
-    recognize: ({ agent, content }) => isSillyTavernChatOffer(agentsByScope.get(agent) === agent, content),
-    async import(input, signal) {
-      if (input.attachments.length !== 1) throw new Error('SillyTavern chat import requires exactly one file')
-      const attachment = input.attachments[0]
-      if (attachment === undefined || !('kind' in attachment) || attachment.kind !== 'file'
-        || !/\.jsonl$/iu.test(attachment.name)) {
-        throw new Error('SillyTavern chat import requires one .jsonl file')
-      }
-      const chat = parseSillyTavernChatBytes(await input.readFile(attachment, signal))
-      const title = resolveSillyTavernChatIdentity(chat).characterName
-      return {
-        seed: createSillyTavernChatSeed(chat, attachment),
-        ...(title === undefined || title === '' ? {} : { title }),
-      }
-    },
-  }), 'agent-rp: SillyTavern chat importer')
-  if (registerSessionImporter !== undefined) ctx.effect(() => registerSessionImporter('dsh-agent-rp:character-card', {
-    recognize: ({ agent, content }) => isCharacterCardSessionOffer(agentsByScope.get(agent) === agent, content),
-    async import(input, signal) {
-      if (input.attachments.length !== 1) throw new Error('Character Card import requires exactly one file')
-      const attachment = input.attachments[0]
-      if (attachment === undefined
-        || (!isJsonCharacterCardAttachment(attachment) && !isPngCharacterCardAttachment(attachment)
-          && !isCharxCharacterCardAttachment(attachment))) {
-        throw new Error('Character Card import requires one PNG, JSON, or CHARX card')
-      }
-      const reader = ctx.attachments as unknown as FileAttachmentReader
-      const stored = isJsonCharacterCardAttachment(attachment) || isCharxCharacterCardAttachment(attachment)
-        ? { ref: attachment, data: await input.readFile(attachment, signal) }
-        : await reader.readImage(attachment, signal)
-      const { card, transport } = decodeCharacterCardAttachment(stored.ref, stored.data)
-      const request = parseCharacterCardSessionRequest(input.text)
-      if (request === undefined) throw new Error('Character Card import request is invalid')
-      const greetings = [card.firstMessage, ...card.alternateGreetings]
-      const selectedGreeting = greetings[request.greetingIndex]
-      if (selectedGreeting === undefined) {
-        throw new Error(`角色卡没有第 ${request.greetingIndex + 1} 条开场白`)
-      }
-      const libraryEntry = characterLibrary.import({
-        data: stored.data,
-        ...(stored.ref.name === undefined ? {} : { filename: stored.ref.name }),
-        ...(stored.ref.mediaType === undefined ? {} : { mediaType: stored.ref.mediaType }),
-        card,
-        transport,
-      })
-      const userName = request.persona?.name ?? request.userName
-      const greeting = substituteCardMacros(selectedGreeting, card, userName)
-      return {
-        seed: createCharacterCardSessionSeed(
-          card, stored.ref, request.greetingIndex, greeting, transport, userName, request.persona, libraryEntry.id,
-        ),
-        title: card.nickname?.trim() || card.name,
-      }
-    },
-  }), 'agent-rp: Character Card importer')
-  if (registerSessionImporter !== undefined) ctx.effect(() => registerSessionImporter('dsh-agent-rp:sillytavern-preset', {
-    recognize: ({ agent, content }) => isSillyTavernPresetOffer(agentsByScope.get(agent) === agent, content),
-    async import(input, signal) {
-      if (input.attachments.length !== 1) throw new Error('SillyTavern preset import requires exactly one file')
-      const attachment = input.attachments[0]
-      if (attachment === undefined || !('kind' in attachment) || attachment.kind !== 'file'
-        || !/\.json$/iu.test(attachment.name)) {
-        throw new Error('SillyTavern preset import requires one JSON file')
-      }
-      const preset = parseSillyTavernPresetBytes(await input.readFile(attachment, signal), attachment.name)
-      const libraryEntry = presetLibrary.import(preset)
-      return {
-        seed: createPresetSessionSeed(input.source.session.events, libraryEntry.preset, attachment, libraryEntry.id),
-        title: readActiveSessionCharacter(input.source.session.events)?.result.name ?? preset.name,
-      }
-    },
-  }), 'agent-rp: SillyTavern preset importer')
   const roleplayPersonaText = (agent: Agent): string => {
     if (turnCoordinator.currentActLane(agent) === 'artifact-handoff') {
       return ROLEPLAY_ARTIFACT_HANDOFF_PROMPT
@@ -1251,25 +969,22 @@ export function installAgentRp(
     const sessionIds = new Set([String(agent.id), String(agent.session.id)])
     worldbookCharacterDisposers.set(agent, [...sessionIds].map(sessionId =>
       worldbookCharacters?.register(sessionId, resolveCharacter) ?? (() => {})))
-    if (supportsAgentRpSessionEvents(agent.session)) {
-      queueMicrotask(() => {
-        if (!settlementRuntimeActive || agentsByScope.get(agent) !== agent) return
-        try {
-          recoverSessionRoleplayTurns({
-            session: agent.session,
-            deployment: config,
-            templateEngineAvailable: options.ejsTemplateEngine !== undefined,
-            ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
-          })
-        } catch (error: unknown) {
-          ctx.logger.warn(`agent-rp: turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      })
-    }
+    queueMicrotask(() => {
+      if (!settlementRuntimeActive || agentsByScope.get(agent) !== agent) return
+      try {
+        recoverSessionRoleplayTurns({
+          session: agent.session,
+          deployment: config,
+          templateEngineAvailable: options.ejsTemplateEngine !== undefined,
+          ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
+        })
+      } catch (error: unknown) {
+        ctx.logger.warn(`agent-rp: turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })
   })
   ctx.on('agent/session-start', ({ agent, source }) => {
-    if (agentsByScope.get(agent) === agent && (source === 'startup' || source === 'clear')
-      && supportsAgentRpSessionEvents(agent.session)) {
+    if (agentsByScope.get(agent) === agent && (source === 'startup' || source === 'clear')) {
       ensureDefaultRoleplayTurnMode(agent.session, 'agent')
     }
   })
@@ -1403,7 +1118,7 @@ export function installAgentRp(
         step,
       }))
       : undefined
-    if (activePlan !== undefined && supportsAgentRpSessionEvents(agent.session)) {
+    if (activePlan !== undefined) {
       appendSessionRoleplayTurnPlan(agent.session, turn, step, activePlan)
     }
     const config = await next()
@@ -1430,7 +1145,7 @@ export function installAgentRp(
     }
   })
   ctx.on('agent/turn-stopping', async ({ agent, turn, signal }) => {
-    if (agentsByScope.get(agent) !== agent || !supportsAgentRpSessionEvents(agent.session)) return
+    if (agentsByScope.get(agent) !== agent) return
     const plans = turnCoordinator.plansForTurn(agent, turn)
     const latest = plans.at(-1)
     if (latest?.plan.act.strategy !== 'agent') return
@@ -1472,7 +1187,6 @@ export function installAgentRp(
     storyBriefByAgent.delete(agent)
     setStateActionAvailable(agent, false)
     turnCoordinator.completeTurn(agent, event.data.turn)
-    if (!supportsAgentRpSessionEvents(session)) return
     queueMicrotask(() => {
       if (!settlementRuntimeActive) return
       try {
@@ -1729,6 +1443,7 @@ async function loadEjsTemplateEngine(ctx: Context): Promise<EjsTemplateEngine | 
  * @param config - character configuration for this profile.
  */
 export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> {
+  registerAgentRpSessionEvents(ctx)
   const resolved = resolveConfig(config)
   if (resolved.mode === 'host') {
     const stExtensionGeneration = new StExtensionGenerationCoordinator()
@@ -1779,7 +1494,15 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     ctx.provide(ROLEPLAY_RESOURCE_CATALOG_KEY, resourceCatalog)
     let mountedServer: AgentRpHttpServer | undefined
     const mountHost = (serviceName: 'httpServer' | 'webServer'): void => {
-      ctx.inject([serviceName, 'credentials', 'agents', 'llm', 'systemPrompt'], webCtx => {
+      ctx.inject([
+        serviceName,
+        'credentials',
+        'agents',
+        'llm',
+        'sessionController',
+        'sessionProjections',
+        'systemPrompt',
+      ], webCtx => {
         const server = webCtx.get(serviceName) as AgentRpHttpServer
         if (mountedServer !== undefined) return
         mountedServer = server
@@ -1838,11 +1561,7 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
     mountHost('httpServer')
     mountHost('webServer')
     ctx.inject(['sessionProjections'], projectionCtx => {
-      const agents = ctx.get('agents') as Context['agents'] | undefined
-      projectionCtx.sessionProjections.register(createAgentRpProjectionDefinition(
-        ejsTemplateEngine,
-        () => agents?.list().some(agent => supportsAgentRpSessionEvents(agent.session)) ?? false,
-      ))
+      projectionCtx.sessionProjections.register(createAgentRpProjectionDefinition(ejsTemplateEngine))
     })
     installBundledAgentRpPreset()
     return

@@ -17,7 +17,7 @@ Agent RP 为受信 DSH 插件分别发布 Host 与浏览器扩展面。扩展插
 `@hewzhew/dsh-agent-rp/client-extension/v0` 声明 `agent-rp.workbench.section` 列表 Slot。它位于侧栏的 Agent RP 工作台，现代 `sidebar.destinations` 与旧版 `sidebar.footer.action` 入口共用同一个声明。外部插件必须通过 `ctx.slots.inject()` 等待 Agent RP 声明 Slot，不能依赖客户端 bundle 的下载或执行顺序。
 
 ```ts
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import {
   AGENT_RP_WORKBENCH_SECTION_SLOT,
   type AgentRpWorkbenchSectionProps,
@@ -50,7 +50,7 @@ export function apply(ctx: ClientContext): void {
 功能分支中的 `agentRpStExtensions` 客户端服务接收独立插件已经打包完成的 ESM 与可选 CSS。注册发生在插件的浏览器 `apply()` 中；把服务键加入 `inject` 后，Cordis 会等待 Agent RP 提供浏览器注册表，调用方的 effect 则负责在插件卸载时撤销扩展。
 
 ```ts
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import {
   AGENT_RP_ST_EXTENSION_SERVICE,
 } from '@hewzhew/dsh-agent-rp/client-extension/v0'
@@ -83,6 +83,6 @@ export function apply(ctx: ClientContext): void {
 
 ## 当前分发边界
 
-仓库目前没有发布 npm prerelease。源码协作、同一工作区夹具和本地 `file:` 安装可以使用这两个版本化导出，但不能据此承诺普通用户已经能从 DSH 插件目录安装或自动升级。正式包名、所有权与可信发布仍由单独的分发工作决定。
+Agent RP prerelease 已发布这两个版本化导出，但本迁移分支必须与同一条 DSH alpha 源码配套。官方 `0.1.2-alpha.1` 是提供给插件作者迁移的 GitHub 源码预览，并未发布为 npm 包；普通安装继续使用当前可分发版本，源码协作则克隆该 tag、建立本地 workspace 链接，并运行 `pnpm run check:dsh-alpha-source` 验证外部 SessionEvent 注册能力。只有未来可分发的 DSH 版本实际发布并通过安装验收后，才能更新普通安装链。
 
 每次构建都会用一份仓库外观的消费夹具从发布后的 `client-extension/v0` 注册条目；`pnpm run check:published-imports` 同时验证运行时导出、依赖声明和这份独立 TypeScript 消费路径。

@@ -150,7 +150,7 @@ test('materializes five independent resources into one exact replayable characte
     regexPacks: [{ kind: 'regex', id: regexPackId }],
   })
   assert.deepEqual(readSessionRegexPacks(replay.events).map(pack => pack.id), [value.regexPack.id])
-  let projectionState = agentRpProjectionDefinition.init()
+  let projectionState = agentRpProjectionDefinition.init(replay.header)
   for (const event of replay.events) projectionState = agentRpProjectionDefinition.apply(projectionState, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(projectionState).regexPacks.map(pack => ({
     id: pack.id,

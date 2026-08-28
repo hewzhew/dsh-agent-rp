@@ -10,7 +10,7 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,

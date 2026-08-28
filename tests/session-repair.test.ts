@@ -21,13 +21,15 @@ test('repairs only known legacy events in a chosen multi-frame session and keeps
   const directory = await mkdtemp(join(tmpdir(), 'agent-rp-session-repair-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const path = join(directory, 'session.jsonl.zstd')
+  const header = { type: 'session', version: 0, id: 'fixture', createdAt: 1, delegationDepth: 0 }
+  const events = [
+    { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+    { type: 'agent-rp/turn-settlement', seq: 1, time: 2, data: { format: 0 } },
+    { type: 'agent-rp/state', seq: 2, time: 3, data: { format: 0 }, ignorable: true },
+  ]
   const original = Buffer.concat([
-    frame({ type: 'session', version: 0, id: 'fixture', createdAt: 1, delegationDepth: 0 }),
-    frame([
-      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
-      { type: 'agent-rp/turn-settlement', seq: 1, time: 2, data: { format: 0 } },
-      { type: 'agent-rp/state', seq: 2, time: 3, data: { format: 0 }, ignorable: true },
-    ]),
+    frame(header),
+    frame(events),
   ])
   await writeFile(path, original)
 
@@ -42,9 +44,37 @@ test('repairs only known legacy events in a chosen multi-frame session and keeps
   assert.equal(repaired.repairedEvents, 1)
   assert.ok(repaired.backupPath)
   assert.deepEqual(await readFile(repaired.backupPath), original)
+  assert.deepEqual(await readFile(path), Buffer.concat([
+    frame(header),
+    frame(events.map(event => event.type === 'agent-rp/state'
+      ? { type: event.type, seq: event.seq, time: event.time, data: event.data }
+      : event)),
+  ]))
   const verified = await repairAgentRpSessionFile(path)
   assert.equal(verified.repairedEvents, 0)
   assert.equal(verified.alreadySafeEvents, 2)
+})
+
+test('removes only the legacy field from plaintext JSONL records', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-rp-session-repair-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const path = join(directory, 'session.jsonl')
+  const header = { type: 'session', version: 0, id: 'plain-fixture', createdAt: 1, delegationDepth: 0 }
+  const legacy = {
+    type: 'agent-rp/turn-mode', seq: 0, time: 2,
+    data: { format: 0, mode: 'agent', source: 'default' }, ignorable: true,
+  }
+  await writeFile(path, `${JSON.stringify(header)}\n${JSON.stringify(legacy)}\n`)
+
+  const repaired = await repairAgentRpSessionFile(path, { apply: true })
+
+  assert.equal(repaired.repairedEvents, 1)
+  const [storedHeader, storedEvent] = (await readFile(path, 'utf8')).trimEnd().split('\n')
+    .map(line => JSON.parse(line) as unknown)
+  assert.deepEqual(storedHeader, header)
+  assert.deepEqual(storedEvent, {
+    type: legacy.type, seq: legacy.seq, time: legacy.time, data: legacy.data,
+  })
 })
 
 test('refuses unknown Agent RP events without changing the file', async (t) => {
@@ -53,7 +83,7 @@ test('refuses unknown Agent RP events without changing the file', async (t) => {
   const path = join(directory, 'session.jsonl')
   const original = Buffer.from([
     JSON.stringify({ type: 'session', version: 0, id: 'fixture', createdAt: 1, delegationDepth: 0 }),
-    JSON.stringify({ type: 'agent-rp/future-required-state', seq: 0, time: 1, data: {} }),
+    JSON.stringify({ type: 'agent-rp/future-required-state', seq: 0, time: 1, data: {}, ignorable: true }),
     '',
   ].join('\n'))
   await writeFile(path, original)
@@ -72,7 +102,7 @@ test('locates one encoded Session id and refuses ambiguous or misplaced artifact
   const firstPath = join(firstDirectory, 'session.jsonl.zstd')
   const original = Buffer.concat([
     frame({ type: 'session', version: 0, id: sessionId, createdAt: 1, delegationDepth: 0 }),
-    frame({ type: 'agent-rp/turn-settlement', seq: 0, time: 2, data: { format: 0 } }),
+    frame({ type: 'agent-rp/turn-settlement', seq: 0, time: 2, data: { format: 0 }, ignorable: true }),
   ])
   await writeFile(firstPath, original)
 

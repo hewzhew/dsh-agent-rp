@@ -182,7 +182,6 @@ export function createPresetSessionSeed(
       preset,
       ...(libraryId === undefined ? {} : { libraryId }),
     },
-    ignorable: true,
   }]
 }
 

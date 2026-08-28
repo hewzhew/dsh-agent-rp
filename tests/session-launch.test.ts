@@ -82,13 +82,18 @@ async function launchExperienceWithWorkspaces(
   let createdSession: Session | undefined
   let attachedSessionId: SessionId | undefined
   let renamedTitle: string | undefined
+  let resolvedSourceId: SessionId | undefined
+  let createdAgentOptions: unknown
+  let selectedModel: unknown
   const agents = {
-    get: (id: SessionId) => id === sourceId ? sourceAgent : undefined,
+    get: () => undefined,
     create: async (options: {
       readonly sessionId: SessionId
       readonly seed: readonly import('@deepseek-ai/dsh-session').SessionEvent[]
+      readonly agentOptions: unknown
       readonly meta: { readonly cwd?: string; readonly agentPreset?: string }
     }) => {
+      createdAgentOptions = options.agentOptions
       createdSession = Session.create(options.sessionId, options.seed, {
         version: 0,
         id: options.sessionId,
@@ -104,11 +109,26 @@ async function launchExperienceWithWorkspaces(
   const ctx = {
     get: (name: string): unknown => {
       if (name === 'agents') return agents
-      if (name === 'apiProxy') return {
-        sessions: {
-          models: async () => ({ result: { ok: true, value: { current: { provider: 'fixture', model: 'fixture' } } } }),
-          selectModel: async () => ({ result: { ok: true, value: {} } }),
+      if (name === 'sessionController') return {
+        resolveAgent: async (id: SessionId) => {
+          resolvedSourceId = id
+          return { agent: sourceAgent }
         },
+        modelCatalog: async () => ({ default: { provider: 'default', model: 'default' } }),
+        selectModel: async (selection: unknown) => {
+          selectedModel = selection
+          return { selected: selection }
+        },
+      }
+      if (name === 'sessionProjections') return {
+        snapshot: () => ({
+          values: {
+            modelSelection: {
+              lastUsed: { provider: 'fixture', model: 'old' },
+              next: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' },
+            },
+          },
+        }),
       }
       if (name === 'agentPresets') return {
         resolve: async () => ({ id: 'agent-rp', trust: 'user' }),
@@ -155,7 +175,15 @@ async function launchExperienceWithWorkspaces(
     worlds: [{ kind: 'world', id: worldInfoLibraryRoleplayResourceId(worldInfo.id) }],
   }, resources)
 
-  return { result, createdSession, attachedSessionId, renamedTitle }
+  return {
+    result,
+    createdSession,
+    attachedSessionId,
+    renamedTitle,
+    resolvedSourceId,
+    createdAgentOptions,
+    selectedModel,
+  }
 }
 
 test('prepares a library character before the Agent is constructed', (context) => {
@@ -320,11 +348,29 @@ test('starts a replayable roleplay Session from standalone World Info without fa
 })
 
 test('publishes a source-neutral World Info experience into the source Workspace', async context => {
-  const { result, createdSession, attachedSessionId, renamedTitle } = await launchExperienceWithWorkspaces(context, [{
+  const {
+    result,
+    createdSession,
+    attachedSessionId,
+    renamedTitle,
+    resolvedSourceId,
+    createdAgentOptions,
+    selectedModel,
+  } = await launchExperienceWithWorkspaces(context, [{
     id: 'workspace-fixture',
     path: `${FIXTURE_WORKSPACE_PATH}/`,
   }])
 
+  assert.equal(resolvedSourceId, SessionId('world-info-source'))
+  assert.deepEqual(createdAgentOptions, {
+    provider: 'fixture', model: 'fixture',
+  })
+  assert.deepEqual(selectedModel, {
+    sessionId: result.sessionId,
+    provider: 'fixture',
+    model: 'fixture',
+    reasoningEffort: 'high',
+  })
   assert.equal(attachedSessionId, result.sessionId)
   assert.equal(renamedTitle, '海城')
   assert.equal(createdSession?.events.some(event => event.type === 'turn/start'), true)

@@ -64,7 +64,6 @@ import {
   type RoleplayStateSnapshot,
 } from './roleplay-state.ts'
 import { parseRoleplayTurnModeRecord, type RoleplayTurnMode } from './roleplay-turn-mode.ts'
-import { hostSupportsAgentRpSessionEvents } from './session-event-compat.ts'
 import {
   applyTavernMessageAnnotationEvent,
   indexTavernMessageAnnotations,
@@ -707,7 +706,6 @@ type AgentRpProjectionDefinition = ProjectionDefinition<'agentRp', AgentRpProjec
 /** Build one projection definition with an optional isolated EJS evaluator. */
 export function createAgentRpProjectionDefinition(
   ejsTemplateEngine?: EjsTemplateEngine,
-  sessionEventsAvailable: () => boolean = hostSupportsAgentRpSessionEvents,
 ): AgentRpProjectionDefinition {
   const definition: ProjectionDefinition<'agentRp', AgentRpProjectionState> & {
     readonly wire: NonNullable<ProjectionDefinition<'agentRp', AgentRpProjectionState>['wire']>
@@ -1235,7 +1233,6 @@ export function createAgentRpProjectionDefinition(
   wire: {
   viewSchema: projectionSchema as NonNullable<ProjectionDefinition<'agentRp', AgentRpProjectionState>['wire']>['viewSchema'],
   view: state => {
-    const sessionEvents = sessionEventsAvailable()
     const worldInfo = worldInfoProjection(state, ejsTemplateEngine)
     const auxiliaryGenerations = summarizeTavernAuxiliaryGenerationReplay(state.auxiliaryGenerations)
     const tavernMessageAnnotations = indexTavernMessageAnnotations(state.tavernMessageAnnotations)
@@ -1245,8 +1242,8 @@ export function createAgentRpProjectionDefinition(
     const hiddenTavernMessages = state.tavern?.hiddenPrefix ?? []
     return {
       ...state.character,
-      hostCapabilities: { sessionEvents },
-      turnMode: sessionEvents ? state.turnMode : 'conversation',
+      hostCapabilities: { sessionEvents: true },
+      turnMode: state.turnMode,
       nativeStates: state.nativeStates.map(stateValue => ({
         id: stateValue.id,
         revision: stateValue.revision,

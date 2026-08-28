@@ -45,7 +45,7 @@ function invoke(agent: Agent, library: PresetLibrary, request: object): void {
 }
 
 function projected(agent: Agent) {
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(agent.session.header)
   for (const event of agent.session.events) state = agentRpProjectionDefinition.apply(state, event)
   return agentRpProjectionDefinition.wire.view(state)
 }
@@ -183,7 +183,7 @@ test('adopts an older session preset into the library without replacing its edit
   const library = new PresetLibrary({ root })
   const imported = preset()
   const oldAgent = { session: Session.create(SessionId('pre-library'), [{
-    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: Date.now(), ignorable: true,
+    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: Date.now(),
     data: {
       format: 0,
       source: { attachmentConsumer: 'dsh-agent-rp', attachments: [{
@@ -234,7 +234,7 @@ test('ignores unrelated command text and rejects malformed marked results', () =
 test('projects the Host-recorded request instead of reconstructing an inspection guess', () => {
   const imported = preset()
   const agent = { session: Session.create(SessionId('request-inspection'), [{
-    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: 1, ignorable: true,
+    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: 1,
     data: {
       format: 0,
       source: { attachmentConsumer: 'dsh-agent-rp', attachments: [{

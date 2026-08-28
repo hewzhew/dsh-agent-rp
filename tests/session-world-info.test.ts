@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { CallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type JsonValue } from '@deepseek-ai/dsh-session'
 import { parseWorldInfoJson } from '../src/import/world-info.ts'
 import {
@@ -43,7 +43,7 @@ function appendImport(session: Session, callId: string, attachmentId = 'sha256:w
   const call = session.append('tool/call', {
     turn: 1,
     step: 1,
-    callId: CallId(callId),
+    callId: ToolCallId(callId),
     name: 'import_world_info',
     arguments: '{}',
   })
@@ -54,7 +54,7 @@ function appendImport(session: Session, callId: string, attachmentId = 'sha256:w
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId(callId),
+      callId: ToolCallId(callId),
       content: [{ type: 'text', text: `已导入世界书 ${value.name}` }],
       isError: false,
     }),

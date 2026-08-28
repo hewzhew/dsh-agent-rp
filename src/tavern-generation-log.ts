@@ -2,7 +2,7 @@
 
 import type { Message } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Exact dispatchable request recorded before a Host-routed auxiliary model call. */
 export interface TavernHostGenerationDispatch {
@@ -91,7 +91,7 @@ export const EMPTY_TAVERN_AUXILIARY_GENERATION_REPLAY: TavernAuxiliaryGeneration
 export function appendTavernAuxiliaryGenerationRequest(
   session: Session,
   record: TavernAuxiliaryGenerationRequestRecord,
-): SessionEvent<'agent-rp/tavern-generation-request'> & { readonly ignorable: true } {
+): SessionEvent<'agent-rp/tavern-generation-request'> {
   return appendAgentRpSessionEvent(session, 'agent-rp/tavern-generation-request', record)
 }
 
@@ -99,7 +99,7 @@ export function appendTavernAuxiliaryGenerationRequest(
 export function appendTavernAuxiliaryGenerationResult(
   session: Session,
   record: TavernAuxiliaryGenerationResultRecord,
-): SessionEvent<'agent-rp/tavern-generation-result'> & { readonly ignorable: true } {
+): SessionEvent<'agent-rp/tavern-generation-result'> {
   return appendAgentRpSessionEvent(session, 'agent-rp/tavern-generation-result', record)
 }
 

@@ -40,7 +40,6 @@ function worldInfoLibrarySeedEvent(
     seq,
     time,
     data,
-    ignorable: true,
   }
 }
 
@@ -98,7 +97,6 @@ export function createWorldInfoLibrarySessionSeed(
       seq: events.length,
       time,
       data: { format: 0, persona },
-      ignorable: true,
     })
   }
   // Public DSH currently defines a reusable blank Session as one with no

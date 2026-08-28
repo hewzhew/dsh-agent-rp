@@ -1,14 +1,18 @@
 /** Roleplay browser shell and native SillyTavern migration affordances. */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type { ModelSelectionProjection } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
-import type {
-  ClientContext, SessionId, SessionSummary, WorkspaceView,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { JsonValue, SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionSummary } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { CommandRowProps, IConversation, TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { CommandRowProps, TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
@@ -350,6 +354,7 @@ import {
   type AgentRpSettings, type ImageGenerationProfile, type ImageGenerationSettings,
 } from '../workspace-settings.ts'
 import {
+  availableModelCatalog,
   resolveStateVerificationReasoningChoices,
   updateStateVerificationSettings,
   type AvailableModelCatalog,
@@ -547,18 +552,6 @@ interface DraftRuntimeAttachment extends DraftAttachmentLike {
   readonly file: File
 }
 
-interface ClientModelGateway {
-  readonly api: {
-    readonly sessions: {
-      models(request: { readonly sessionId: SessionId }): Promise<{
-        readonly result:
-        | { readonly ok: true; readonly value: AvailableModelCatalog }
-        | { readonly ok: false; readonly error: { readonly message: string } }
-      }>
-    }
-  }
-}
-
 interface PreparedChatMigration {
   readonly importId: string
   /** Runtime permission owner: retained card id when present, otherwise the imported chat identity. */
@@ -640,6 +633,7 @@ type GenerationTailProps = TurnTailOwnerProps & {
   ) => Promise<void>
   readonly rewriteTurn: (sessionId: SessionId, turn: number, draft: string) => Promise<void>
   readonly runImageGeneration: RunImageGeneration
+  readonly useChat: PropsRuntime<'conversation.composer.dock'>['useChat']
   readonly useProjection: PropsRuntime<'conversation.composer.dock'>['useProjection']
   readonly useSession: PropsRuntime<'conversation.composer.dock'>['useSession']
 }
@@ -1132,20 +1126,20 @@ function RewriteTurnDialog({ initialText, busy, error, onClose, onRewrite }: {
 
 function GenerationTail({
   runGeneration, rewriteTurn, runImageGeneration, seq: replySeq,
-  sessionId, turn, useProjection, useSession,
+  sessionId, turn, useChat, useProjection, useSession,
 }: GenerationTailProps) {
   const projection = useProjection('agentRp') as AgentRpProjection | undefined
   const running = useSession(snapshot => snapshot.running)
-  const replyText = useSession(snapshot => {
-    const node = snapshot.chat.legacy.nodes.find(candidate => candidate.kind === 'assistant' && candidate.seq === replySeq)
+  const replyText = useChat(snapshot => {
+    const node = snapshot.legacy.nodes.find(candidate => candidate.kind === 'assistant' && candidate.seq === replySeq)
     return node?.kind === 'assistant' ? node.blocks
       .filter((block): block is Extract<typeof block, { readonly kind: 'text' }> => block.kind === 'text')
       .map(block => block.text)
       .join('\n') : ''
   })
-  const editableUserText = useSession(snapshot => {
+  const editableUserText = useChat(snapshot => {
     if (turn.start === undefined || turn.end === undefined) return undefined
-    const node = snapshot.chat.legacy.nodes.find(candidate => candidate.kind === 'user'
+    const node = snapshot.legacy.nodes.find(candidate => candidate.kind === 'user'
       && candidate.seq > turn.start!.seq && candidate.seq < turn.end!.seq)
     if (node?.kind !== 'user' || node.content.length === 0 || node.content.some(block => block.type !== 'text')) return undefined
     return node.content.map(block => block.type === 'text' ? block.text : '').join('\n')
@@ -1324,7 +1318,7 @@ function roleplaySummary(
   summary: SessionSummary | undefined,
   projection: AgentRpProjection | undefined,
 ): AgentRpProjection | undefined {
-  if (!isAgentRpCapabilityPresetId(summary?.agentPreset)) return undefined
+  if (summary === undefined || !isAgentRpCapabilityPresetId(sessionAgentPreset(summary))) return undefined
   if (projection !== undefined) {
     // Client HMR can briefly pair a newer UI with the previous Host projection.
     // Keep that rolling upgrade usable until the Host process is restarted.
@@ -1371,6 +1365,11 @@ function roleplaySummary(
     generations: [],
     source: 'preset' as const,
   }
+}
+
+function sessionAgentPreset(summary: SessionSummary | undefined): string | undefined {
+  const value = summary?.projectionValues?.agentPreset
+  return typeof value === 'string' ? value : undefined
 }
 
 function roleplayDisplayName(summary: SessionSummary | undefined, projection: AgentRpProjection): string {
@@ -2923,7 +2922,7 @@ function SidebarRoleplayDestination({
     setStoryWorkspaceOpen(true)
   }
   const openCurrentSessionTools = (): void => {
-    if (currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)) return
+    if (currentSessionId === undefined || !isAgentRpCapabilityPresetId(sessionAgentPreset(currentSession))) return
     closeWorkbench()
     window.dispatchEvent(new CustomEvent(openRoleplaySessionToolsEvent, { detail: String(currentSessionId) }))
   }
@@ -3014,7 +3013,7 @@ function SidebarRoleplayDestination({
           {accessError !== undefined && <p role="alert" style={{
             color: 'var(--dsw-alias-state-danger, #d64d5f)', fontSize: '11px', margin: '7px 2px 0',
           }}>{accessError}</p>}
-          {isAgentRpCapabilityPresetId(currentSession?.agentPreset) && <button type="button"
+          {isAgentRpCapabilityPresetId(sessionAgentPreset(currentSession)) && <button type="button"
             data-agent-rp-action="open-session-tools" onClick={openCurrentSessionTools} style={{
               alignItems: 'center', background: `color-mix(in srgb, ${color} 10%, transparent)`,
               border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`, borderRadius: '12px',
@@ -3167,7 +3166,7 @@ function SidebarRoleplayDestination({
         launchSourceSessionId: String(currentSessionId),
         onStartSession: (sourceSessionId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId, request),
       } : {})}
-      {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)
+      {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(sessionAgentPreset(currentSession))
         ? {}
         : {
             sessionId: String(currentSessionId),
@@ -4523,7 +4522,7 @@ function RoleplayHeader({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px', marginTop: '20px' }}>
           {projection.userName !== undefined && <span style={chipStyle}>你是 {projection.userName}</span>}
           <span style={chipStyle}>回合 · {projection.turnMode === 'agent' ? 'Agent 分阶段' : '兼容对话'}</span>
-          {summary?.agentPreset !== undefined && <span style={chipStyle}>Agent 能力 · {summary.agentPreset}</span>}
+          {sessionAgentPreset(summary) !== undefined && <span style={chipStyle}>Agent 能力 · {sessionAgentPreset(summary)}</span>}
           {projection.importedMessageCount > 0 && <span style={chipStyle}>{projection.importedMessageCount} 条历史消息</span>}
           {projection.worldInfoCount > 0 && <span style={chipStyle}>{projection.worldInfoCount} 条世界书设定</span>}
           {characterRegexScripts.length > 0 && <span style={chipStyle}>角色卡正则 · {characterRegexScripts.length} 条</span>}
@@ -4580,7 +4579,7 @@ function RoleplayHeader({
         <DetailSection title="当前场景" text={projection.scenario} />
         <DetailSection title="Agent 回合诊断" text={[
           `回合策略：${projection.turnMode === 'agent' ? '正文完成后独立结算状态' : '兼容正文内的旧式状态更新'}`,
-          `Agent 能力预设：${summary?.agentPreset ?? '未记录'}`,
+          `Agent 能力预设：${sessionAgentPreset(summary) ?? '未记录'}`,
           projection.lastRequest === undefined
             ? '最近一次模型请求：尚无记录'
             : `最近一次模型工具：${projection.lastRequest.toolNames.length === 0 ? '无' : projection.lastRequest.toolNames.join('、')}`,
@@ -11284,12 +11283,12 @@ function roleplayComposerDockComponent(
   runPresetConfiguration: RunPresetConfiguration,
 ): (props: ComposerDockProps) => JSX.Element | null {
   return function RoleplayComposerDock({
-    inputActions, sessionId, useProjection, useSessions, useSession,
+    inputActions, sessionId, useChat, useProjection, useSessions, useSession,
   }: ComposerDockProps) {
   const summary = useSessions(state => state.byId[sessionId])
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
-  const chat = useSession(state => state.chat)
+  const chat = useChat(state => state)
   const viewMode = useRoleplayViewMode(sessionId)
   const [drawOpen, setDrawOpen] = useState(false)
   const [displayOverrides, setDisplayOverrides] = useState<ReadonlyMap<number, string>>(() => new Map())
@@ -11319,7 +11318,7 @@ function roleplayComposerDockComponent(
   const characterDetail = useMemo(() => storedCharacterDetail === undefined ? undefined
     : withAgentRpSessionCardPermissions(storedCharacterDetail, sessionResourcePermissions),
   [sessionResourcePermissions, storedCharacterDetail])
-  const roleplayExpected = isAgentRpCapabilityPresetId(summary?.agentPreset)
+  const roleplayExpected = isAgentRpCapabilityPresetId(sessionAgentPreset(summary))
   const turnHealthRevision = [
     projection?.lastRequest?.eventSeq,
     projection?.presentation?.settlementSeq,
@@ -12507,11 +12506,11 @@ function importHintComponent(
       : jsonKind === 'world-info' ? '请导入这本世界书'
         : jsonKind === 'preset' ? '请导入这份预设' : undefined
     useEffect(() => {
-      if (isAgentRpCapabilityPresetId(summary?.agentPreset) && input.draft.trim() === '' && inferredDraft !== undefined) {
+      if (isAgentRpCapabilityPresetId(sessionAgentPreset(summary)) && input.draft.trim() === '' && inferredDraft !== undefined) {
         inputActions.setDraft(inferredDraft)
       }
-    }, [inferredDraft, input.draft, inputActions, summary?.agentPreset])
-    if (!isAgentRpCapabilityPresetId(summary?.agentPreset)) return null
+    }, [inferredDraft, input.draft, inputActions, summary?.projectionValues?.agentPreset])
+    if (!isAgentRpCapabilityPresetId(sessionAgentPreset(summary))) return null
     if (selected === undefined) return null
     const blank = input.draft.trim() === ''
     const chat = selected.kind === 'chat'
@@ -12624,7 +12623,7 @@ function SessionLaunchNoticeToast({ source }: { readonly source: SessionLaunchNo
 }
 
 /** Client services required by the Roleplay shell. */
-export const inject = ['connection', 'conversationEvents', 'slots', 'sessions', 'workspaces']
+export const inject = ['remote', 'remote.session', 'uiConversation', 'slots', 'sessions', 'workspaces']
 
 /** Register the Agent RP header, composer presentation, and import affordance. */
 export function apply(ctx: ClientContext): void {
@@ -12675,15 +12674,21 @@ export function apply(ctx: ClientContext): void {
     subscribe: listener => ctx.workspaces.list.subscribe(listener),
   }
   const loadAvatar = avatarLoader(ctx)
-  const loadModelCapabilities = async (sessionId: SessionId): Promise<CurrentModelCapabilities> => {
-    const connection = ctx.get('connection') as ClientModelGateway | undefined
-    if (connection === undefined) throw new Error('当前客户端无法读取模型能力')
-    const { result } = await connection.api.sessions.models({ sessionId })
+  const readModelCatalog = async (sessionId: SessionId): Promise<AvailableModelCatalog> => {
+    const binding = ctx.sessions.binding(sessionId)
+    if (binding === undefined) throw new Error('当前角色会话不可用')
+    const result = await ctx.remote.session.modelCatalog()
     if (!result.ok) throw new Error(result.error.message)
-    const provider = result.value.groups.find(group => group.id === result.value.current.provider)
-    const model = provider?.models.find(entry => entry.id === result.value.current.model)
+    const selection = binding.session.projections.faceOf('modelSelection').getSnapshot() as unknown as
+      ModelSelectionProjection | undefined
+    return availableModelCatalog(result.value, selection)
+  }
+  const loadModelCapabilities = async (sessionId: SessionId): Promise<CurrentModelCapabilities> => {
+    const catalog = await readModelCatalog(sessionId)
+    const provider = catalog.groups.find(group => group.id === catalog.current.provider)
+    const model = provider?.models.find(entry => entry.id === catalog.current.model)
     return {
-      current: result.value.current,
+      current: catalog.current,
       ...(provider === undefined ? {} : { providerName: provider.name }),
       ...(model === undefined ? {} : {
         modelName: model.name,
@@ -12694,11 +12699,7 @@ export function apply(ctx: ClientContext): void {
   const loadWorkerModelCatalog = async (): Promise<AvailableModelCatalog> => {
     const sessionId = ctx.sessions.list.getSnapshot().current
     if (sessionId === undefined) throw new Error('请先选择一个会话，以读取已配置的模型')
-    const connection = ctx.get('connection') as ClientModelGateway | undefined
-    if (connection === undefined) throw new Error('当前客户端无法读取模型列表')
-    const { result } = await connection.api.sessions.models({ sessionId })
-    if (!result.ok) throw new Error(result.error.message)
-    return result.value
+    return readModelCatalog(sessionId)
   }
   const renameSession = async (sessionId: SessionId, title: string): Promise<void> => {
     const scope = ctx.sessions.scope(sessionId)

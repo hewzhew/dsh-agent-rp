@@ -4,7 +4,7 @@ import { snapshotJsonValue, type JsonValue, type Session, type SessionEvent } fr
 import type { ImportedCharacterFrontend, ImportedTavernHelperScript } from './import/types.ts'
 import { AGENT_RP_CAPABILITIES } from './extension-capability.ts'
 import type { RoleplayTurnSettlementContribution } from './roleplay-runtime.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import { decodeGenerationCommandResult } from './generation-command-result.ts'
 import type { TavernMessageAnnotationOwner, TavernMessageAnnotationValue } from './tavern-message-annotation.ts'
 import {

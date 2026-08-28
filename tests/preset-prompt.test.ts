@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createMessage,
   createToolResultMessage,
@@ -253,7 +253,7 @@ test('keeps changing state after stable world context across continuous turns an
   assert.equal(firstDifference(thirdUnchanged, thirdChanged), thirdChanged.length - 1)
   assert.equal(textOf(thirdChanged.at(-2)), longWorld)
 
-  const callId = CallId('continuous-turn-tool')
+  const callId = ToolCallId('continuous-turn-tool')
   const call = createAssistantMessage({
     source: { provider: 'fixture', model: 'fixture' },
     content: [{ type: 'tool-call', id: callId, name: 'inspect_board', arguments: '{}' }],
@@ -533,7 +533,7 @@ test('inserts in-chat modules by depth, descending priority, and role', () => {
 })
 
 test('keeps a continuous chain of completed tool transactions at the request tail', () => {
-  const firstCallId = CallId('failed-image')
+  const firstCallId = ToolCallId('failed-image')
   const firstAssistant = createAssistantMessage({
     source: { provider: 'fixture', model: 'fixture' },
     content: [
@@ -546,7 +546,7 @@ test('keeps a continuous chain of completed tool transactions at the request tai
     content: [{ type: 'text', text: 'Error: 图片服务没有配置' }],
     isError: true,
   })
-  const secondCallId = CallId('repeated-image')
+  const secondCallId = ToolCallId('repeated-image')
   const secondAssistant = createAssistantMessage({
     source: { provider: 'fixture', model: 'fixture' },
     content: [

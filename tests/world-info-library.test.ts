@@ -66,7 +66,7 @@ test('imports Host-owned World Info through a private command without a model tu
   session.append('command/done', { commandId: repeatedCommandId, ...repeated })
   assert.equal(readActiveSessionWorldInfos(session.events).length, 1)
 
-  let state = agentRpProjectionDefinition.init()
+  let state = agentRpProjectionDefinition.init(session.header)
   for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
   const projected = agentRpProjectionDefinition.wire.view(state)
   assert.equal(projected.worldInfo.books[0]?.name, '海城')

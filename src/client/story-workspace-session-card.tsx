@@ -2,6 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { useEffect, useState, type CSSProperties } from 'react'
 import {
   readStoryWorkspaceLaunchSummary,
@@ -74,7 +75,7 @@ export function installStoryWorkspaceSessionCard(
   navigation: StoryWorkspaceNavigation,
 ): void {
   ctx.effect(
-    () => ctx.conversationEvents.register(storyWorkspaceLaunchDefinition),
+    () => ctx.uiConversation.events.register(storyWorkspaceLaunchDefinition),
     'agent-rp: project play-space Session launches',
   )
   ctx.effect(() => {

@@ -13,7 +13,7 @@ import {
   type RoleplayTurnSettlementContribution,
 } from './roleplay-runtime.ts'
 import type { RoleplayTurnInputKey, RoleplayTurnPlan } from './roleplay-turn-plan.ts'
-import { appendAgentRpSessionEvent } from './session-event-compat.ts'
+import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   readRoleplayStateActionIntent,
   renderLegacyRoleplayStateActionGuidance,
