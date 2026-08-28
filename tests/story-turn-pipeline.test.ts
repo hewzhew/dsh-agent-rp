@@ -376,12 +376,28 @@ test('omits character outputs when their isolated character decision is unavaila
     }],
     sources: [],
   }
+  let characterCalls = 0
   const fake = {
     sessions: { flush: async () => true },
     llm: {
       stream(options: { readonly system?: string }) {
         const system = options.system ?? ''
         if (system.includes('指定人物认知')) {
+          characterCalls += 1
+          if (characterCalls === 2) {
+            return (async function* () {
+              yield { type: 'finish', reason: { kind: 'stop' } }
+            })()
+          }
+          if (characterCalls === 3) {
+            const text = JSON.stringify({ observation: '', action: '', speech: null, insights: [] })
+            return (async function* () {
+              yield { type: 'block-start', index: 0, blockType: 'text' }
+              yield { type: 'text-delta', index: 0, text }
+              yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+              yield { type: 'finish', reason: { kind: 'stop' } }
+            })()
+          }
           return (async function* () {
             throw new Error('fixture character failure')
           })()
@@ -418,7 +434,31 @@ test('omits character outputs when their isolated character decision is unavaila
   })
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
 
-  assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [aliceId, bobId])
+  assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [aliceId, bobId, bobId])
+  const characterFailures = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.result.kind === 'failure'
+    && stageRequests.some(request => request.requestId === event.data.requestId && request.stage === 'character')
+    ? [event.data.result]
+    : [])
+  assert.deepEqual(characterFailures, [
+    {
+      kind: 'failure',
+      failure: 'provider',
+      detail: { code: 'STORY_STAGE_STREAM_FAILED', message: 'fixture character failure' },
+    },
+    {
+      kind: 'failure',
+      failure: 'unknown',
+      detail: {
+        code: 'STORY_WORKER_EMPTY_OUTPUT',
+        message: '故事 Worker 以 stop 结束但没有返回文本（推理块 0，其他块 0）',
+      },
+    },
+  ])
+  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.result.kind === 'success'
+    && stageRequests.some(request => request.requestId === event.data.requestId
+      && request.stage === 'character' && request.subjectId === bobId)), true)
   assert.equal(stageRequests.some(request => request.stage === 'section'), false)
   assert.deepEqual(result.finalSections, [])
 })
@@ -765,9 +805,13 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterBodies[0]!, /阿梨知道徽章/u)
   assert.match(historyBodies[0]!, /阿梨知道徽章/u)
   assert.match(historyBodies[0]!, /两人都看见雨停/u)
+  assert.match(historyBodies[0]!, new RegExp(`story:event:${historyEventId}`, 'u'))
+  assert.doesNotMatch(historyBodies[0]!, new RegExp(`story:event:${bobHistoryEventId}`, 'u'))
   assert.doesNotMatch(historyBodies[0]!, /柏舟藏起了车票|只有柏舟看见站牌背面反光/u)
   assert.match(historyBodies[1]!, /柏舟藏起了车票/u)
   assert.match(historyBodies[1]!, /只有柏舟看见站牌背面反光/u)
+  assert.match(historyBodies[1]!, new RegExp(`story:event:${historyEventId}`, 'u'))
+  assert.match(historyBodies[1]!, new RegExp(`story:event:${bobHistoryEventId}`, 'u'))
   assert.doesNotMatch(historyBodies[1]!, /阿梨知道徽章/u)
   assert.match(characterBodies[0]!, /<retrieved_history>[\s\S]*两人都看见雨停/u)
   assert.doesNotMatch(characterBodies[0]!, /只有柏舟看见站牌背面反光/u)

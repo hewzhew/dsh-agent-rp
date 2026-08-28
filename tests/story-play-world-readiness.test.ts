@@ -73,6 +73,7 @@ test('reports real readiness only for the installed flying-chess cast', () => {
 
   assert.deepEqual(storyPlayWorldParticipants(workspace).map(item => item.id), ['reimu', 'marisa'])
   const readiness = inspectStoryPlayWorldReadiness(workspace)
+  assert.equal(readiness.enabledProseOutputCount, 0)
   assert.equal(readiness.originalSourceCount, 1)
   assert.deepEqual(readiness.missingActors.map(item => item.id), ['marisa'])
   assert.deepEqual(readiness.missingDialogue.map(item => item.id), ['reimu'])
@@ -105,4 +106,30 @@ test('does not count disabled or non-original sources as voice evidence', () => 
   const readiness = inspectStoryPlayWorldReadiness(workspace)
   assert.equal(readiness.originalSourceCount, 0)
   assert.deepEqual(readiness.missingSourceVoice.map(item => item.id), ['reimu'])
+})
+
+test('requires an enabled prose output before a world can write a turn', () => {
+  const workspace = {
+    format: 2,
+    id: 'story-output-readiness',
+    name: 'Output readiness',
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    pipeline: { maxParallel: 4, researchMaxPasses: 2, voiceDraftReasoning: 'routine' },
+    graph: { nodes: [], edges: [] },
+    characters: [],
+    facts: [],
+    events: [],
+    outputs: [
+      { id: 'disabled-prose', name: '关闭正文', kind: 'prose', enabled: false, instructions: '' },
+      { id: 'history', name: '棋局记录', kind: 'history', enabled: true, instructions: '' },
+      { id: 'prose', name: '正文', kind: 'prose', enabled: true, instructions: '' },
+    ],
+    sources: [],
+    citations: [],
+    researchInbox: [],
+  } satisfies StoryWorkspaceSnapshot
+
+  assert.equal(inspectStoryPlayWorldReadiness(workspace).enabledProseOutputCount, 1)
 })

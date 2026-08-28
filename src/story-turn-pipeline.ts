@@ -6,7 +6,12 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   BlockAssembler,
   createUserMessage,
+  EMPTY_RESPONSE_CODE,
+  errorChain,
+  isHarnessError,
+  LlmError,
   type GenerateOptions,
+  type LlmFailure,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
@@ -84,7 +89,19 @@ export interface StoryTurnStageResultRecord {
   readonly requestSeq: number
   readonly result:
     | { readonly kind: 'success'; readonly text: string }
-    | { readonly kind: 'failure'; readonly failure: RoleplayActModelFailureKind }
+    | {
+        readonly kind: 'failure'
+        readonly failure: RoleplayActModelFailureKind
+        readonly detail?: StoryTurnStageFailureDetail
+      }
+}
+
+/** Bounded diagnostics retained without the Worker prompt, response, or provider request id. */
+export interface StoryTurnStageFailureDetail {
+  readonly code: string
+  readonly message: string
+  readonly status?: number
+  readonly providerRetryAfterMs?: number
 }
 
 /** One Host-owned final section retained after the editor Worker finishes. */
@@ -234,6 +251,7 @@ declare module '@deepseek-ai/dsh-session' {
 interface StageOutput {
   readonly text?: string
   readonly resultEventSeq: number
+  readonly retryable?: boolean
 }
 
 type StoryStageReasoningMode = 'structural' | 'routine' | 'quality'
@@ -260,7 +278,7 @@ interface StoryResearchRun {
 
 interface StoryCharacterHistoryEvidence {
   readonly reference: string
-  readonly kind: 'fact'
+  readonly kind: 'event' | 'fact'
   readonly label: string
   readonly text: string
 }
@@ -484,6 +502,21 @@ function privateInsightFacts(sections: readonly StoryTurnFinalSection[]): readon
     && section.privateInsights !== undefined
     ? section.privateInsights.map(insight => ({ text: insight.text, knownBy: [section.characterId!] }))
     : [])
+}
+
+function approvedPublicDialogueFacts(
+  dialogues: readonly StoryTurnPublicDialogue[],
+  participants: readonly StoryWorkspaceSnapshot['characters'][number][],
+  visibleReply: string,
+): readonly StoryFactChange[] {
+  const knownBy = participants.map(character => character.id)
+  const characterNameById = new Map(participants.map(character => [character.id, character.name]))
+  return dialogues.flatMap(dialogue => {
+    const characterName = characterNameById.get(dialogue.characterId)
+    return characterName === undefined || !visibleReply.includes(dialogue.dialogue) || knownBy.length === 0
+      ? []
+      : [{ text: `${characterName}说：${dialogue.dialogue}`, knownBy }]
+  })
 }
 
 function mergeFactChanges(
@@ -1501,7 +1534,10 @@ function parseContinuityUpdate(
     .filter(character => !worldTurn || character.source.kind === 'character')
     .map(character => character.change)
   if (new Set(characters.map(change => change.characterId)).size !== characters.length) throw new Error('人物状态变更重复')
-  const parsedFacts = changes.facts.slice(0, 32).map((value, index): StoryFactChange => {
+  const parsedFacts = changes.facts.slice(0, 32).map((value, index): {
+    readonly change: StoryFactChange
+    readonly source: StoryTurnFinalSection
+  } => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`事实变更[${String(index)}]不是对象`)
     }
@@ -1517,13 +1553,11 @@ function parseContinuityUpdate(
       ? source.characterId === undefined ? [] : [source.characterId]
       : [...new Set(fact.knownBy as string[])]
     if (factText === '' || knownBy.length === 0) throw new Error(`事实变更[${String(index)}]不能为空`)
-    return {
-      text: factText,
-      knownBy,
-    }
+    return { source, change: { text: factText, knownBy } }
   })
   const factGroups = new Map<string, Set<string>>()
-  for (const fact of parsedFacts) {
+  for (const { change: fact, source } of parsedFacts) {
+    if (worldTurn && source.kind !== 'character') continue
     const knownBy = factGroups.get(fact.text) ?? new Set<string>()
     for (const characterId of fact.knownBy) knownBy.add(characterId)
     factGroups.set(fact.text, knownBy)
@@ -1545,7 +1579,10 @@ function parseContinuityUpdate(
   })
   const proposalRefs = new Set(nodeRecords.map(node => node.ref as string))
   if (proposalRefs.size !== nodeRecords.length) throw new Error('候选节点 ref 重复')
-  const nodes = nodeRecords.map((node, index): StoryNodeSuggestion => {
+  const parsedNodes = nodeRecords.map((node, index): {
+    readonly node: StoryNodeSuggestion
+    readonly source: StoryTurnFinalSection
+  } => {
     const source = sourceSection(node.sourceSectionId, `候选节点[${String(index)}]`)
     const title = boundedString(node.title, `候选节点[${String(index)}].title`, 120)
     if (title === '') throw new Error(`候选节点[${String(index)}]标题为空`)
@@ -1554,20 +1591,24 @@ function parseContinuityUpdate(
       : parseSuggestionEndpoint(node.parent, `候选节点[${String(index)}].parent`, nodeIds, proposalRefs)
     if (parent?.kind === 'proposal' && parent.ref === node.ref) throw new Error(`候选节点[${String(index)}]不能以自身为父级`)
     return {
-      ref: node.ref as string,
-      kind: node.kind as StoryNodeSuggestion['kind'],
-      ...(parent === undefined ? {} : { parent }),
-      title,
-      summary: boundedString(node.summary, `候选节点[${String(index)}].summary`, 280),
-      content: boundedString(node.content, `候选节点[${String(index)}].content`, 32 * 1_024),
-      participantIds: [...new Set(node.participantIds as string[])],
-      knowledge: source.kind === 'character'
-        ? { mode: 'characters', characterIds: source.characterId === undefined ? [] : [source.characterId] }
-        : parseSuggestionKnowledge(node.knowledge, `候选节点[${String(index)}].knowledge`, characterIds),
+      source,
+      node: {
+        ref: node.ref as string,
+        kind: node.kind as StoryNodeSuggestion['kind'],
+        ...(parent === undefined ? {} : { parent }),
+        title,
+        summary: boundedString(node.summary, `候选节点[${String(index)}].summary`, 280),
+        content: boundedString(node.content, `候选节点[${String(index)}].content`, 32 * 1_024),
+        participantIds: [...new Set(node.participantIds as string[])],
+        knowledge: source.kind === 'character'
+          ? { mode: 'characters', characterIds: source.characterId === undefined ? [] : [source.characterId] }
+          : parseSuggestionKnowledge(node.knowledge, `候选节点[${String(index)}].knowledge`, characterIds),
+      },
     }
   })
-  const nodeByRef = new Map(nodes.map(node => [node.ref, node]))
-  for (const node of nodes) {
+  const allNodes = parsedNodes.map(record => record.node)
+  const nodeByRef = new Map(allNodes.map(node => [node.ref, node]))
+  for (const node of allNodes) {
     const visited = new Set<string>([node.ref])
     let parent = node.parent
     while (parent?.kind === 'proposal') {
@@ -1576,7 +1617,7 @@ function parseContinuityUpdate(
       parent = nodeByRef.get(parent.ref)?.parent
     }
   }
-  const edges = changes.edges.slice(0, 24).map((value, index): StoryEdgeSuggestion => {
+  const parsedEdges = changes.edges.slice(0, 24).map((value, index): StoryEdgeSuggestion => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`候选关系[${String(index)}]不是对象`)
     }
@@ -1610,8 +1651,48 @@ function parseContinuityUpdate(
       label: boundedString(edge.label, `候选关系[${String(index)}].label`, 240),
     }
   })
-  const edgeKeys = edges.map(edge => `${edge.kind}:${suggestionEndpointKey(edge.source)}:${suggestionEndpointKey(edge.target)}`)
+  const edgeKeys = parsedEdges.map(edge => `${edge.kind}:${suggestionEndpointKey(edge.source)}:${suggestionEndpointKey(edge.target)}`)
   if (new Set(edgeKeys).size !== edgeKeys.length) throw new Error('候选关系重复')
+  const acceptedProposalRefs = new Set(worldTurn
+    ? parsedNodes.flatMap(record => record.source.kind === 'character' ? [record.node.ref] : [])
+    : allNodes.map(node => node.ref))
+  if (worldTurn) {
+    const adjacentProposals = new Map<string, Set<string>>()
+    for (const edge of parsedEdges) {
+      const endpoints = [edge.source, edge.target]
+      const proposals = endpoints.flatMap(endpoint => endpoint.kind === 'proposal' ? [endpoint.ref] : [])
+      if (proposals.length === 1 && endpoints.some(endpoint => endpoint.kind === 'node')) {
+        acceptedProposalRefs.add(proposals[0]!)
+      } else if (proposals.length === 2) {
+        for (const [left, right] of [[proposals[0]!, proposals[1]!], [proposals[1]!, proposals[0]!]] as const) {
+          const adjacent = adjacentProposals.get(left) ?? new Set<string>()
+          adjacent.add(right)
+          adjacentProposals.set(left, adjacent)
+        }
+      }
+    }
+    const queue = [...acceptedProposalRefs]
+    for (let index = 0; index < queue.length; index += 1) {
+      for (const adjacent of adjacentProposals.get(queue[index]!) ?? []) {
+        if (acceptedProposalRefs.has(adjacent)) continue
+        acceptedProposalRefs.add(adjacent)
+        queue.push(adjacent)
+      }
+    }
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const node of allNodes) {
+        if (!acceptedProposalRefs.has(node.ref) || node.parent?.kind !== 'proposal'
+          || acceptedProposalRefs.has(node.parent.ref)) continue
+        acceptedProposalRefs.add(node.parent.ref)
+        changed = true
+      }
+    }
+  }
+  const nodes = allNodes.filter(node => acceptedProposalRefs.has(node.ref))
+  const edges = parsedEdges.filter(edge => [edge.source, edge.target].every(endpoint =>
+    endpoint.kind === 'node' || acceptedProposalRefs.has(endpoint.ref)))
   return {
     history,
     changes: { characters, facts, nodes, edges },
@@ -2193,7 +2274,68 @@ function generateOptions(
   }
 }
 
-async function runStage(
+const MAX_STORY_STAGE_TEXT_LENGTH = 256 * 1_024
+const MAX_STORY_STAGE_FAILURE_CODE_LENGTH = 128
+const MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH = 2_000
+
+type StoryStageExecutionPhase = 'flush' | 'stream' | 'assemble'
+
+class StoryStageOutputError extends Error {
+  constructor(readonly code: 'STORY_WORKER_EMPTY_OUTPUT' | 'STORY_WORKER_OUTPUT_TOO_LARGE', message: string) {
+    super(message)
+    this.name = 'StoryStageOutputError'
+  }
+}
+
+function boundedStoryStageFailureText(value: string, max: number): string {
+  const text = value.trim()
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
+}
+
+function storyStageProviderFailureDetail(failure: LlmFailure): StoryTurnStageFailureDetail {
+  return {
+    code: boundedStoryStageFailureText(failure.code, MAX_STORY_STAGE_FAILURE_CODE_LENGTH) || 'UNKNOWN',
+    message: boundedStoryStageFailureText(failure.message, MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH) || '模型请求失败',
+    ...(failure.status === undefined ? {} : { status: failure.status }),
+    ...(failure.providerRetryAfterMs === undefined ? {} : {
+      providerRetryAfterMs: failure.providerRetryAfterMs,
+    }),
+  }
+}
+
+function storyStageThrownFailureDetail(
+  reason: unknown,
+  phase: StoryStageExecutionPhase,
+): StoryTurnStageFailureDetail {
+  if (reason instanceof LlmError) return storyStageProviderFailureDetail(reason.failure)
+  const code = reason instanceof StoryStageOutputError
+    ? reason.code
+    : isHarnessError(reason)
+      ? reason.code
+      : phase === 'flush'
+        ? 'STORY_STAGE_FLUSH_FAILED'
+        : phase === 'stream'
+          ? 'STORY_STAGE_STREAM_FAILED'
+          : 'STORY_STAGE_ASSEMBLY_FAILED'
+  return {
+    code: boundedStoryStageFailureText(code, MAX_STORY_STAGE_FAILURE_CODE_LENGTH),
+    message: boundedStoryStageFailureText(errorChain(reason), MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH)
+      || '故事流水线阶段失败',
+  }
+}
+
+function storyStageThrownFailureKind(
+  reason: unknown,
+  phase: StoryStageExecutionPhase,
+  signal: AbortSignal,
+): RoleplayActModelFailureKind {
+  const classified = roleplayActModelFailure(reason)
+  if (signal.aborted || classified === 'aborted') return 'aborted'
+  if (phase === 'stream' || reason instanceof LlmError) return 'provider'
+  return classified
+}
+
+async function runStageAttempt(
   input: RunStoryTurnPipelineInput,
   stage: StoryTurnStage,
   request: GenerateOptions,
@@ -2213,22 +2355,46 @@ async function runStage(
     ...(subjectId === undefined ? {} : { subjectId }),
     dispatch: roleplayActModelDispatch(request),
   })
+  let phase: StoryStageExecutionPhase = 'flush'
   try {
     await input.ctx.sessions.flush(input.agent.session)
+    phase = 'stream'
     const assembler = new BlockAssembler()
     for await (const chunk of input.ctx.llm.stream(request)) assembler.push(chunk)
     if (assembler.finish.kind === 'error' || assembler.finish.kind === 'aborted') {
+      const detail = storyStageProviderFailureDetail(assembler.finish.failure)
       const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-result', {
         format: 0,
         requestId,
         requestSeq: requestEvent.seq,
-        result: { kind: 'failure', failure: assembler.finish.kind === 'aborted' ? 'aborted' : 'provider' },
+        result: {
+          kind: 'failure',
+          failure: assembler.finish.kind === 'aborted' ? 'aborted' : 'provider',
+          detail,
+        },
       })
       resultEventSeqs.push(resultEvent.seq)
-      return { resultEventSeq: resultEvent.seq }
+      return {
+        resultEventSeq: resultEvent.seq,
+        ...(assembler.finish.kind === 'aborted' || detail.code !== EMPTY_RESPONSE_CODE
+          ? {}
+          : { retryable: true }),
+      }
     }
-    const text = assembler.blocks().flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim()
-    if (text === '' || text.length > 256 * 1_024) throw new Error('故事 Worker 返回了不可用文本')
+    phase = 'assemble'
+    const blocks = assembler.blocks()
+    const text = blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim()
+    if (text === '') {
+      const reasoningBlocks = blocks.filter(block => block.type === 'reasoning').length
+      const otherBlocks = blocks.length - reasoningBlocks
+      throw new StoryStageOutputError(
+        'STORY_WORKER_EMPTY_OUTPUT',
+        `故事 Worker 以 ${assembler.finish.kind} 结束但没有返回文本（推理块 ${String(reasoningBlocks)}，其他块 ${String(otherBlocks)}）`,
+      )
+    }
+    if (text.length > MAX_STORY_STAGE_TEXT_LENGTH) {
+      throw new StoryStageOutputError('STORY_WORKER_OUTPUT_TOO_LARGE', '故事 Worker 返回的文本超过安全上限')
+    }
     const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-result', {
       format: 0,
       requestId,
@@ -2240,15 +2406,39 @@ async function runStage(
   } catch (error: unknown) {
     const existing = input.agent.session.events.find(event => event.type === 'agent-rp/story-stage-result'
       && event.data.requestSeq === requestEvent.seq)
+    const failure = storyStageThrownFailureKind(error, phase, input.signal)
+    const detail = storyStageThrownFailureDetail(error, phase)
     const resultEvent = existing ?? appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-result', {
       format: 0,
       requestId,
       requestSeq: requestEvent.seq,
-      result: { kind: 'failure', failure: roleplayActModelFailure(error) },
+      result: {
+        kind: 'failure',
+        failure,
+        detail,
+      },
     })
     resultEventSeqs.push(resultEvent.seq)
-    return { resultEventSeq: resultEvent.seq }
+    return {
+      resultEventSeq: resultEvent.seq,
+      ...(failure !== 'aborted' && (detail.code === 'STORY_WORKER_EMPTY_OUTPUT'
+        || detail.code === EMPTY_RESPONSE_CODE)
+        ? { retryable: true }
+        : {}),
+    }
   }
+}
+
+async function runStage(
+  input: RunStoryTurnPipelineInput,
+  stage: StoryTurnStage,
+  request: GenerateOptions,
+  resultEventSeqs: number[],
+  subjectId?: string,
+): Promise<StageOutput> {
+  const first = await runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
+  if (first.retryable !== true) return first
+  return runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
 }
 
 const MAX_WORLD_ACTIONS_PER_STORY_TURN = 8
@@ -2586,7 +2776,16 @@ function characterHistoryEvidence(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
 ): readonly StoryCharacterHistoryEvidence[] {
-  return boundCharacterHistoryEvidence(workspace.facts
+  const publicEvents = [...workspace.events].reverse().flatMap(event =>
+    event.participantIds.includes(characterId) && event.summary.trim() !== ''
+      ? [{
+          reference: `story:event:${event.id}`,
+          kind: 'event' as const,
+          label: `此人物参与的公开事件 · ${event.title}`,
+          text: event.summary,
+        }]
+      : [])
+  const knownFacts = workspace.facts
     .filter(fact => fact.status !== 'refuted' && storyFactKnownBy(workspace, fact).includes(characterId))
     .map(fact => ({
       reference: `story:fact:${fact.id}`,
@@ -2596,7 +2795,8 @@ function characterHistoryEvidence(
         fact.text,
         fact.source.kind === 'event' ? fact.source.evidence : '',
       ].filter((value, index, values) => value !== '' && values.indexOf(value) === index).join('\n'),
-    })), 48_000)
+    }))
+  return boundCharacterHistoryEvidence([...publicEvents, ...knownFacts], 48_000)
 }
 
 function parseCharacterHistorySelection(
@@ -3357,6 +3557,9 @@ export async function materializeStoryTurn(input: {
     ...storyWorldEventActorIds(workspace, briefEvent.data.worldEventSequences ?? []),
     ...(briefEvent.data.publicDialogues ?? []).map(dialogue => dialogue.characterId),
   ])
+  const publicDialogueFacts = worldOutcome === ''
+    ? []
+    : approvedPublicDialogueFacts(briefEvent.data.publicDialogues ?? [], participants, visibleReply)
   const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
   const stageInput: RunStoryTurnPipelineInput = {
     ctx: input.ctx,
@@ -3413,8 +3616,8 @@ export async function materializeStoryTurn(input: {
         'history.text 只概括公开分区中已经发生、可供导演维持连续性的事件，不记录创作过程，也不得包含 character 私有分区。history.sourceSectionIds 列出实际依据的公开分区；没有公开内容时使用空文本和空数组。',
         'changes 中每一项都必须给出实际依据的 sourceSectionId。changes.characters 只更新正文已经明确改变的人物当前状态；characterId 必须来自 participants，可按需给出 location、condition、objective、notes，未变化的字段不要输出。人物的稳定身份与性格不能通过这里改写。来自 character 分区的状态变更只能指向该分区所属人物。',
         'current_world_outcome 与 world_state 由可执行世界拥有。不得把当前行动人、骰点、棋子位置、结束回合或下一项合法规则动作抄写或推断成 changes.characters；这些变化只由世界模块保存。',
-        'changes.facts 只记录来源分区明确表达的持续事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。character 私有分区产生的事实只能由所属人物知道，Host 会忽略模型为它填写的其他人物。',
-        'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
+        'changes.facts 只记录来源分区明确表达的持续事实；knownBy 是完整知情人物 id 数组。同一事实被多人共同看见时只写一条并列出所有人，不得写入别人的内心、未公开秘密、离场事件或仅由导演知道的内容。character 私有分区产生的事实只能由所属人物知道，Host 会忽略模型为它填写的其他人物。可执行世界的 current_world_outcome、骰点、棋子位置、回合和胜负已经由 Host 作为带参与人物的公开事件保存并可供历史检索；不得把这些字段或其同义改写复制成 changes.facts。获准公开对白也由 Host 精确保存，不要用概括替代。',
+        'changes.nodes 与 changes.edges 是供玩家审查的未来建议，不能混入 history 或已经发生的 facts。可执行世界状态本身不能产生故事节点；只有正文新增了非规则选择、关系变化、尚未解决的问题或伏笔时才能提议节点。公开分区产生的候选节点必须通过 changes.edges 连接到 canonical_nodes 中的正式节点或人物私有候选链，否则 Host 会把它视为孤立的规则快照并丢弃。节点 ref 只在本批建议内使用；parent 与关系端点可引用 canonical_nodes 中的正式 nodeId，或本批节点 ref。parent 表达故事簇层级，不要再生成 contains 关系。',
         '节点 kind 只能是 arc、beat、secret，必须同时给出折叠 summary、content、participantIds 和 knowledge。knowledge.mode 只能是 inherit、none、participants、characters；只有 characters 可以列出 characterIds。来自 character 私有分区的节点会被 Host 强制限制为仅所属人物知道。关系 kind 只能是 precedes、causes、foreshadows，只有 foreshadows 可以携带 foreshadowStatus。所有人物 id 必须来自 participants。',
         '只返回 JSON，例如：{"history":{"text":"雨停了。","sourceSectionIds":["public-section-id"]},"changes":{"characters":[{"sourceSectionId":"private-section-id","characterId":"character-id","objective":"查清徽章来历"}],"facts":[{"sourceSectionId":"public-section-id","text":"雨停了。","knownBy":["character-id"]}],"nodes":[{"sourceSectionId":"private-section-id","ref":"next_scene","kind":"beat","parent":{"kind":"node","nodeId":"node-id"},"title":"下一场","summary":"检查徽章刻痕。","content":"...","participantIds":["character-id"],"knowledge":{"mode":"characters","characterIds":["character-id"]}}],"edges":[{"sourceSectionId":"public-section-id","kind":"causes","source":{"kind":"node","nodeId":"node-id"},"target":{"kind":"proposal","ref":"next_scene"},"label":"..."}]}}。不要使用 Markdown 围栏。',
       ].join('\n'),
@@ -3453,12 +3656,12 @@ export async function materializeStoryTurn(input: {
     }
   }
   const ownedPrivateFacts = privateInsightFacts(visibleSections ?? [])
-  if (ownedPrivateFacts.length > 0) {
+  if (ownedPrivateFacts.length > 0 || publicDialogueFacts.length > 0) {
     update = {
       ...update,
       changes: {
         ...update.changes,
-        facts: mergeFactChanges(ownedPrivateFacts, update.changes.facts),
+        facts: mergeFactChanges([...ownedPrivateFacts, ...publicDialogueFacts], update.changes.facts),
       },
     }
   }

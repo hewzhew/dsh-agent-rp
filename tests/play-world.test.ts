@@ -1254,7 +1254,23 @@ test('keeps the exact world outcome while preserving only private-section charac
                         { sourceSectionId: characterId, characterId: reimuId, objective: '继续当前棋局' },
                         { sourceSectionId: proseId, characterId: marisaId, objective: '准备掷骰' },
                       ],
-                      facts: [], nodes: [], edges: [],
+                      facts: [{
+                        sourceSectionId: proseId,
+                        text: '博丽灵梦掷出 1，四架飞机仍停在基地。',
+                        knownBy: [reimuId, marisaId],
+                      }],
+                      nodes: [{
+                        sourceSectionId: proseId,
+                        ref: 'reimu-still-in-base',
+                        kind: 'beat',
+                        parent: { kind: 'node', nodeId: installed.graph.activeNodeId },
+                        title: '灵梦仍未出基',
+                        summary: '四架飞机仍停在基地。',
+                        content: '等待后续世界回合掷出可出动点数。',
+                        participantIds: [reimuId],
+                        knowledge: { mode: 'participants', characterIds: [] },
+                      }],
+                      edges: [],
                     },
                   })
                 : system.includes('分区的 prose Worker')
