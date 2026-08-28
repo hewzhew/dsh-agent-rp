@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -375,6 +375,81 @@ test('assembles declared world cast slots from actor resources without leaking u
   assert.deepEqual((installed.world?.state as FlyingChessWorldState).playerOrder, [reimuId, marisa.id])
   assert.equal(installed.outputs.some(output => output.characterId === observerId), false)
   assert.deepEqual(new StoryWorkspaceStore({ root, worlds, resources }).get(installed.id), installed)
+})
+
+test('upgrades a legacy cast binding through HTTP without resetting world state or character ids', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-cast-upgrade-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule())
+  const resources = fixtureFlyingChessCastResources()
+  const store = new StoryWorkspaceStore({ root, worlds, resources })
+  const created = store.create({ format: 2, name: '旧阵容升级' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const prepared = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+  })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [{
+      slotId: 'reimu', actor: { kind: 'actor', id: 'actor:reimu' }, characterId: reimuId,
+    }, {
+      slotId: 'marisa', actor: { kind: 'actor', id: 'actor:marisa' }, characterId: marisaId,
+    }],
+  })
+  assert.throws(() => store.updateWorldCast(installed.id, {
+    format: 0,
+    revision: installed.revision,
+    cast: [{
+      slotId: 'reimu', actor: { kind: 'actor', id: 'actor:reimu' }, characterId: marisaId,
+    }, {
+      slotId: 'marisa', actor: { kind: 'actor', id: 'actor:marisa' }, characterId: reimuId,
+    }],
+  }), /必须保留当前槽位中的人物/u)
+  const storyPath = join(root, installed.id, 'story.json')
+  const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as {
+    worldBinding: { cast: unknown[] }
+    characters: { actor?: unknown }[]
+  }
+  stored.worldBinding.cast = []
+  stored.characters = stored.characters.map(({ actor: _actor, ...character }) => character)
+  writeFileSync(storyPath, `${JSON.stringify(stored, null, 2)}\n`)
+  writeFileSync(join(root, installed.id, 'characters', reimuId, 'description.md'), '旧灵梦档案')
+  writeFileSync(join(root, installed.id, 'characters', marisaId, 'description.md'), '旧魔理沙档案')
+  const legacy = store.get(installed.id)
+  const beforeWorld = structuredClone(legacy.world)
+  const beforeEvents = structuredClone(legacy.events)
+  const beforeGraph = structuredClone(legacy.graph)
+  const route = storyWorkspaceRoute(store)
+  const response = await invokeStoryWorkspaceRoute(
+    route,
+    'POST',
+    `/api/agent-rp/story-workspaces/${encodeURIComponent(legacy.id)}/world/cast`,
+    {
+      format: 0,
+      revision: legacy.revision,
+      cast: [{
+        slotId: 'reimu', actor: { kind: 'actor', id: 'actor:reimu' }, characterId: reimuId,
+      }, {
+        slotId: 'marisa', actor: { kind: 'actor', id: 'actor:marisa' }, characterId: marisaId,
+      }],
+    },
+  )
+  assert.equal(response.status, 200)
+  const upgraded = store.get(legacy.id)
+  assert.deepEqual(upgraded.world, beforeWorld)
+  assert.deepEqual(upgraded.events, beforeEvents)
+  assert.deepEqual(upgraded.graph, beforeGraph)
+  assert.deepEqual(upgraded.worldBinding?.cast, [{ slotId: 'reimu', characterId: reimuId }, {
+    slotId: 'marisa', characterId: marisaId,
+  }])
+  assert.equal(upgraded.characters.find(candidate => candidate.id === reimuId)?.profile.description, '博丽灵梦的测试角色卡描述。')
+  assert.equal(upgraded.characters.find(candidate => candidate.id === marisaId)?.profile.description, '雾雨魔理沙的测试角色卡描述。')
+  assert.deepEqual((upgraded.world?.state as FlyingChessWorldState).playerOrder, [reimuId, marisaId])
 })
 
 test('persists resource recipes and keeps their worlds readable while a rule module is unavailable', async (context) => {

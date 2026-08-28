@@ -229,6 +229,17 @@
 .story-world-cast-import .story-studio-button { margin: 0; }
 .story-world-cast-import > small { flex: 1; line-height: 1.45; min-width: 160px; }
 .story-world-cast-error { color: var(--dsw-alias-state-danger, #e26773) !important; }
+.story-world-cast-drawer { display: flex; flex-direction: column; gap: 14px; }
+.story-world-cast-drawer .story-studio-drawer-header { margin-bottom: 0; }
+.story-world-cast-drawer-intro { color: var(--studio-muted); font-size: 11px; line-height: 1.6; margin: 0; }
+.story-world-cast-current { border-block: 1px solid var(--studio-border); display: grid; }
+.story-world-cast-current label { display: grid; gap: 9px; padding-block: 13px; }
+.story-world-cast-current label + label { border-top: 1px solid var(--studio-border); }
+.story-world-cast-current label > span { display: grid; gap: 3px; }
+.story-world-cast-current label small { color: var(--story-accent); font-size: 9px; }
+.story-world-cast-current label strong { font-size: 12px; }
+.story-world-cast-current label em { color: var(--studio-muted); font-size: 9px; font-style: normal; line-height: 1.45; }
+.story-world-cast-current .story-studio-input { margin: 0; }
 .story-studio-canvas { height: 100%; }
 .story-studio-canvas .react-flow__background { background: var(--studio-bg); }
 .story-studio-canvas .react-flow__controls { box-shadow: none; }
