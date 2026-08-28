@@ -20,6 +20,8 @@ import type { RoleplayResourceCatalog } from './roleplay-resource-catalog.ts'
 import {
   PLAY_WORLD_RESOURCES_PATH,
   type PlayWorldActionRequest,
+  type PlayWorldCastSelection,
+  type PlayWorldCastUpdateRequest,
   type PlayWorldInstallRequest,
   type PlayWorldRestartRequest,
   type PlayWorldTurnProjection,
@@ -69,28 +71,42 @@ function parseSaveRequest(value: unknown, id: string): StoryWorkspaceSaveRequest
 function parseWorldInstallRequest(value: unknown): PlayWorldInstallRequest {
   const record = requestRecord(value)
   const resource = record.resource
-  const cast = record.cast
   if (record.format !== 0 || typeof record.revision !== 'number'
     || typeof resource !== 'object' || resource === null || Array.isArray(resource)
     || (resource as { readonly kind?: unknown }).kind !== 'world'
     || typeof (resource as { readonly id?: unknown }).id !== 'string'
     || Object.keys(resource).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
-    || !Array.isArray(cast) || cast.length > 64 || cast.some(selection => {
-      if (typeof selection !== 'object' || selection === null || Array.isArray(selection)) return true
-      const item = selection as Record<string, unknown>
-      const actor = item.actor
-      return typeof item.slotId !== 'string'
-        || typeof actor !== 'object' || actor === null || Array.isArray(actor)
-        || (actor as { readonly kind?: unknown }).kind !== 'actor'
-        || typeof (actor as { readonly id?: unknown }).id !== 'string'
-        || Object.keys(actor).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
-        || item.characterId !== undefined && typeof item.characterId !== 'string'
-        || Object.keys(item).some(key => key !== 'slotId' && key !== 'actor' && key !== 'characterId')
-    })
+    || parseWorldCastSelections(record.cast) === undefined
     || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'resource' && key !== 'cast')) {
     throw new Error('游玩世界安装请求字段无效')
   }
   return record as unknown as PlayWorldInstallRequest
+}
+
+function parseWorldCastSelections(value: unknown): readonly PlayWorldCastSelection[] | undefined {
+  if (!Array.isArray(value) || value.length > 64 || value.some(selection => {
+    if (typeof selection !== 'object' || selection === null || Array.isArray(selection)) return true
+    const item = selection as Record<string, unknown>
+    const actor = item.actor
+    return typeof item.slotId !== 'string'
+      || typeof actor !== 'object' || actor === null || Array.isArray(actor)
+      || (actor as { readonly kind?: unknown }).kind !== 'actor'
+      || typeof (actor as { readonly id?: unknown }).id !== 'string'
+      || Object.keys(actor).some(key => key !== 'kind' && key !== 'id' && key !== 'variant')
+      || item.characterId !== undefined && typeof item.characterId !== 'string'
+      || Object.keys(item).some(key => key !== 'slotId' && key !== 'actor' && key !== 'characterId')
+  })) return undefined
+  return value as unknown as readonly PlayWorldCastSelection[]
+}
+
+function parseWorldCastUpdateRequest(value: unknown): PlayWorldCastUpdateRequest {
+  const record = requestRecord(value)
+  const cast = parseWorldCastSelections(record.cast)
+  if (record.format !== 0 || typeof record.revision !== 'number' || cast === undefined
+    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'cast')) {
+    throw new Error('游玩世界阵容更新请求字段无效')
+  }
+  return { format: 0, revision: record.revision, cast }
 }
 
 function parseWorldRestartRequest(value: unknown): PlayWorldRestartRequest {
@@ -199,6 +215,11 @@ export function installStoryWorkspaceHttp(
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'restart') {
           const workspace = store.restartWorld(segments[0]!, parseWorldRestartRequest(await readJson(request)))
+          json(response, 200, workspaceResponse(store, workspace))
+          return
+        }
+        if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'cast') {
+          const workspace = store.updateWorldCast(segments[0]!, parseWorldCastUpdateRequest(await readJson(request)))
           json(response, 200, workspaceResponse(store, workspace))
           return
         }

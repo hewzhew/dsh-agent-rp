@@ -17,19 +17,26 @@ import {
   createDefaultPlayWorldRegistry,
   projectPlayWorldTurn,
   type PlayWorldContext,
+  type PlayWorldModule,
   type PlayWorldRegistry,
   type PlayWorldWorkspaceScaffold,
 } from './play-world.ts'
 import type {
   PlayWorldActionRequest,
   PlayWorldBinding,
+  PlayWorldCastSelection,
+  PlayWorldCastUpdateRequest,
   PlayWorldInstallRequest,
   PlayWorldResourceDescriptor,
   PlayWorldRestartRequest,
   PlayWorldSnapshot,
   PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
-import { RoleplayResourceCatalog, type RoleplayActorProjection } from './roleplay-resource-catalog.ts'
+import {
+  RoleplayResourceCatalog,
+  type RoleplayActorProjection,
+  type RoleplayWorldProjection,
+} from './roleplay-resource-catalog.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import { flyingChessWorldResourceProvider } from './play-world-resource-provider.ts'
 import type {
@@ -1385,6 +1392,90 @@ function materializePlayWorldWorkspaceScaffold(
   }
 }
 
+function assemblePlayWorldCast(
+  current: StoryWorkspaceSnapshot,
+  recipe: RoleplayWorldProjection,
+  module: PlayWorldModule,
+  resources: RoleplayResourceCatalog,
+  requestedCast: readonly PlayWorldCastSelection[],
+  existingOnly: boolean,
+): { readonly characters: readonly StoryCharacter[]; readonly cast: PlayWorldBinding['cast'] } {
+  if (!Array.isArray(requestedCast) || requestedCast.length > 64) {
+    throw new Error('游玩世界人物槽位选择无效')
+  }
+  const castSelections = requestedCast.map(selection => {
+    if (!isRecord(selection) || Object.keys(selection).some(key => !['slotId', 'actor', 'characterId'].includes(key))) {
+      throw new Error('游玩世界人物槽位选择无效')
+    }
+    const slotId = requiredLabel(selection.slotId, '游玩世界人物槽位 id')
+    if (/\s/u.test(slotId)) throw new Error('游玩世界人物槽位 id 不能包含空白')
+    const actor = normalizeResourceSelection(selection.actor, 'actor', `人物槽位 ${JSON.stringify(slotId)} 的角色资源`)
+    if (selection.characterId !== undefined) assertId(selection.characterId, CHARACTER_ID_PATTERN, '游玩世界既有人物')
+    if (existingOnly && selection.characterId === undefined) {
+      throw new Error(`人物槽位 ${JSON.stringify(slotId)} 必须保留当前场地人物`)
+    }
+    return {
+      slotId,
+      actor,
+      ...(selection.characterId === undefined ? {} : { characterId: selection.characterId as string }),
+    }
+  })
+  if (new Set(castSelections.map(selection => selection.slotId)).size !== castSelections.length
+    || new Set(castSelections.map(selection => JSON.stringify(selection.actor))).size !== castSelections.length
+    || new Set(castSelections.flatMap(selection => selection.characterId === undefined ? [] : [selection.characterId])).size
+      !== castSelections.filter(selection => selection.characterId !== undefined).length) {
+    throw new Error('游玩世界人物槽位选择重复')
+  }
+  const slotById = new Map(recipe.castSlots.map(slot => [slot.id, slot]))
+  if (castSelections.some(selection => !slotById.has(selection.slotId))) {
+    throw new Error('游玩世界人物槽位选择包含未知槽位')
+  }
+  const selectedSlotIds = new Set(castSelections.map(selection => selection.slotId))
+  const missingRequiredSlot = recipe.castSlots.find(slot => slot.required && !selectedSlotIds.has(slot.id))
+  if (missingRequiredSlot !== undefined) {
+    throw new Error(`请为人物槽位 ${JSON.stringify(missingRequiredSlot.name)} 选择角色卡`)
+  }
+  if (recipe.castSlots.length === 0 && castSelections.length > 0
+    || recipe.castSlots.length > 0 && (castSelections.length < module.descriptor.minCharacters
+      || castSelections.length > module.descriptor.maxCharacters)) {
+    throw new Error(`游玩世界需要 ${String(module.descriptor.minCharacters)}–${String(module.descriptor.maxCharacters)} 位人物`)
+  }
+  const usedCharacterIds = new Set<string>()
+  const projectedCast = castSelections.map(selection => {
+    const projection = resources.projectActor(selection.actor)
+    const existing = selection.characterId === undefined
+      ? current.characters.find(character => character.actor !== undefined
+        && JSON.stringify(character.actor) === JSON.stringify(selection.actor)
+        && !usedCharacterIds.has(character.id))
+      : current.characters.find(character => character.id === selection.characterId)
+    if (selection.characterId !== undefined && existing === undefined) {
+      throw new Error(`人物槽位 ${JSON.stringify(selection.slotId)} 指向的既有人物不存在`)
+    }
+    const character: StoryCharacter = existing === undefined
+      ? {
+          id: createStoryCharacterId(),
+          name: projection.name,
+          voiceAliases: [],
+          profile: projection.profile,
+          state: emptyCharacterState(),
+          actor: selection.actor,
+        }
+      : { ...existing, name: projection.name, profile: projection.profile, actor: selection.actor }
+    usedCharacterIds.add(character.id)
+    return { selection, character }
+  })
+  const replacements = new Map(projectedCast.map(item => [item.character.id, item.character]))
+  const characters = current.characters.map(character => replacements.get(character.id) ?? character)
+    .concat(projectedCast.flatMap(item => current.characters.some(character => character.id === item.character.id)
+      ? []
+      : [item.character]))
+  const cast = recipe.castSlots.flatMap(slot => {
+    const selected = projectedCast.find(item => item.selection.slotId === slot.id)
+    return selected === undefined ? [] : [{ slotId: slot.id, characterId: selected.character.id }]
+  })
+  return { characters, cast }
+}
+
 /** Local workspace store whose accepted ids cannot escape its configured root. */
 export class StoryWorkspaceStore {
   readonly root: string
@@ -1524,74 +1615,7 @@ export class StoryWorkspaceStore {
     const resource = normalizeResourceSelection(request.resource, 'world', '游玩世界资源引用')
     const recipe = this.resources.projectWorld(resource)
     const module = this.worlds.get(recipe.moduleId)
-    if (!Array.isArray(request.cast) || request.cast.length > 64) throw new Error('游玩世界人物槽位选择无效')
-    const castSelections = request.cast.map((selection) => {
-      if (!isRecord(selection) || Object.keys(selection).some(key => !['slotId', 'actor', 'characterId'].includes(key))) {
-        throw new Error('游玩世界人物槽位选择无效')
-      }
-      const slotId = requiredLabel(selection.slotId, '游玩世界人物槽位 id')
-      if (/\s/u.test(slotId)) throw new Error('游玩世界人物槽位 id 不能包含空白')
-      const actor = normalizeResourceSelection(selection.actor, 'actor', `人物槽位 ${JSON.stringify(slotId)} 的角色资源`)
-      if (selection.characterId !== undefined) assertId(selection.characterId, CHARACTER_ID_PATTERN, '游玩世界既有人物')
-      return {
-        slotId,
-        actor,
-        ...(selection.characterId === undefined ? {} : { characterId: selection.characterId as string }),
-      }
-    })
-    if (new Set(castSelections.map(selection => selection.slotId)).size !== castSelections.length
-      || new Set(castSelections.map(selection => JSON.stringify(selection.actor))).size !== castSelections.length
-      || new Set(castSelections.flatMap(selection => selection.characterId === undefined ? [] : [selection.characterId])).size
-        !== castSelections.filter(selection => selection.characterId !== undefined).length) {
-      throw new Error('游玩世界人物槽位选择重复')
-    }
-    const slotById = new Map(recipe.castSlots.map(slot => [slot.id, slot]))
-    if (castSelections.some(selection => !slotById.has(selection.slotId))) {
-      throw new Error('游玩世界人物槽位选择包含未知槽位')
-    }
-    const selectedSlotIds = new Set(castSelections.map(selection => selection.slotId))
-    const missingRequiredSlot = recipe.castSlots.find(slot => slot.required && !selectedSlotIds.has(slot.id))
-    if (missingRequiredSlot !== undefined) {
-      throw new Error(`请为人物槽位 ${JSON.stringify(missingRequiredSlot.name)} 选择角色卡`)
-    }
-    if (recipe.castSlots.length === 0 && castSelections.length > 0
-      || recipe.castSlots.length > 0 && (castSelections.length < module.descriptor.minCharacters
-        || castSelections.length > module.descriptor.maxCharacters)) {
-      throw new Error(`游玩世界需要 ${String(module.descriptor.minCharacters)}–${String(module.descriptor.maxCharacters)} 位人物`)
-    }
-    const usedCharacterIds = new Set<string>()
-    const projectedCast = castSelections.map(selection => {
-      const projection = this.resources!.projectActor(selection.actor)
-      const existing = selection.characterId === undefined
-        ? current.characters.find(character => character.actor !== undefined
-          && JSON.stringify(character.actor) === JSON.stringify(selection.actor)
-          && !usedCharacterIds.has(character.id))
-        : current.characters.find(character => character.id === selection.characterId)
-      if (selection.characterId !== undefined && existing === undefined) {
-        throw new Error(`人物槽位 ${JSON.stringify(selection.slotId)} 指向的既有人物不存在`)
-      }
-      const character: StoryCharacter = existing === undefined
-        ? {
-            id: createStoryCharacterId(),
-            name: projection.name,
-            voiceAliases: [],
-            profile: projection.profile,
-            state: emptyCharacterState(),
-            actor: selection.actor,
-          }
-        : { ...existing, name: projection.name, profile: projection.profile, actor: selection.actor }
-      usedCharacterIds.add(character.id)
-      return { selection, character }
-    })
-    const replacements = new Map(projectedCast.map(item => [item.character.id, item.character]))
-    const characters = current.characters.map(character => replacements.get(character.id) ?? character)
-      .concat(projectedCast.flatMap(item => current.characters.some(character => character.id === item.character.id)
-        ? []
-        : [item.character]))
-    const cast = recipe.castSlots.flatMap(slot => {
-      const selected = projectedCast.find(item => item.selection.slotId === slot.id)
-      return selected === undefined ? [] : [{ slotId: slot.id, characterId: selected.character.id }]
-    })
+    const { characters, cast } = assemblePlayWorldCast(current, recipe, module, this.resources, request.cast, false)
     const projectedSources = recipe.sources.map(reference => ({
       reference,
       projection: this.resources!.projectStorySource(reference),
@@ -1642,6 +1666,31 @@ export class StoryWorkspaceStore {
         ...(current.outputs.length === 0 ? { outputs: materialized.outputs } : {}),
       }),
     })
+  }
+
+  /** Bind actor resources to the current cast without resetting module state or world events. */
+  updateWorldCast(id: string, request: PlayWorldCastUpdateRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    if (request.format !== 0 || this.resources === undefined || current.world === undefined
+      || current.worldBinding?.resource === undefined) {
+      throw new Error('当前游玩世界没有可更新的人物配方')
+    }
+    const resource = normalizeResourceSelection(current.worldBinding.resource, 'world', '游玩世界资源引用')
+    const recipe = this.resources.projectWorld(resource)
+    if (recipe.moduleId !== current.world.moduleId || current.worldBinding.moduleId !== current.world.moduleId) {
+      throw new Error('当前游玩世界资源与状态所有者不一致')
+    }
+    const currentCastBySlot = new Map(current.worldBinding.cast.map(binding => [binding.slotId, binding.characterId]))
+    if (currentCastBySlot.size > 0 && (request.cast.length !== currentCastBySlot.size
+      || request.cast.some(selection => selection.characterId !== currentCastBySlot.get(selection.slotId)))) {
+      throw new Error('人物来源更新必须保留当前槽位中的人物')
+    }
+    const module = this.worlds.get(current.world.moduleId)
+    const { characters, cast } = assemblePlayWorldCast(current, recipe, module, this.resources, request.cast, true)
+    const worldBinding: PlayWorldBinding = { ...current.worldBinding, cast }
+    const world = module.normalize(current.world, playWorldContext(characters, worldBinding))
+    return this.commitWorld(current, world, current.worldActionReceipts ?? [], { characters, worldBinding })
   }
 
   /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */

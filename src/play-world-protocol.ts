@@ -79,6 +79,13 @@ export interface PlayWorldInstallRequest {
   readonly cast: readonly PlayWorldCastSelection[]
 }
 
+/** Request to bind actor resources to the current world's existing character identities. */
+export interface PlayWorldCastUpdateRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly cast: readonly PlayWorldCastSelection[]
+}
+
 /** Request to recreate the current executable world and discard this playthrough's derived story state. */
 export interface PlayWorldRestartRequest {
   readonly format: 0

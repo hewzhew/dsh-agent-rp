@@ -369,6 +369,18 @@ async function installPlayWorld(
   return workspaceResult(value, '世界模块安装')
 }
 
+async function updatePlayWorldCast(
+  workspace: StoryWorkspaceSnapshot,
+  cast: readonly PlayWorldCastSelection[],
+): Promise<StoryWorkspaceResult> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/cast`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, cast }),
+  })
+  return workspaceResult(value, '世界人物来源更新')
+}
+
 async function restartPlayWorld(workspace: StoryWorkspaceSnapshot): Promise<StoryWorkspaceResult> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/restart`, {
     method: 'POST',
@@ -1628,7 +1640,7 @@ function WorldEventList({ events }: { readonly events: readonly PlayWorldEvent[]
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, onAdvanceSession, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionAction, onAdvanceSession, onConfigureCast, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -1636,6 +1648,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   readonly dirty: boolean
   readonly sessionAction: 'start' | 'continue' | undefined
   readonly onAdvanceSession: (request: string) => void
+  readonly onConfigureCast: (() => void) | undefined
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1651,6 +1664,8 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
           {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button" type="button"
             disabled={busy || dirty || !legalActionIds.has('roll')} onClick={() => { onAction('roll') }}>亲自掷骰</button>}
           {state.pendingRoll !== undefined && <span className="story-die" aria-label={`骰点 ${state.pendingRoll.value}`}>{state.pendingRoll.value}</span>}
+          {onConfigureCast !== undefined && <button className="story-studio-button" type="button" disabled={busy || dirty}
+            onClick={onConfigureCast}>人物来源</button>}
           <button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
             if (!restartArmed) {
               setRestartArmed(true)
@@ -1702,7 +1717,7 @@ function FlyingChessPlayView({ workspace, state, turn, busy, dirty, sessionActio
   </div>
 }
 
-function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, onAdvanceSession, onRestart, onAction }: {
+function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAction, onAdvanceSession, onConfigureCast, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly module: PlayWorldModuleDescriptor | undefined
   readonly turn: PlayWorldTurnProjection | null
@@ -1710,6 +1725,7 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
   readonly dirty: boolean
   readonly sessionAction: 'start' | 'continue' | undefined
   readonly onAdvanceSession: (request: string) => void
+  readonly onConfigureCast: (() => void) | undefined
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
@@ -1721,7 +1737,8 @@ function GenericPlayWorldView({ workspace, module, turn, busy, dirty, sessionAct
     <div className="story-play-heading"><div><span>世界游玩 · {module?.category === 'simulation' ? '模拟' : '游戏'}</span>
       <h1>{workspace.world?.title}</h1><p>{module?.summary ?? '这个世界由已安装模块维护权威状态与合法动作。'}</p></div>
       <div className="story-play-turn"><small>{turn === null ? '当前状态' : '当前行动'}</small><strong>{characterName}</strong>
-        <div className="story-play-turn-actions"><button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
+        <div className="story-play-turn-actions">{onConfigureCast !== undefined && <button className="story-studio-button" type="button"
+          disabled={busy || dirty} onClick={onConfigureCast}>人物来源</button>}<button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
           if (!restartArmed) {
             setRestartArmed(true)
             return
@@ -1839,7 +1856,158 @@ function PlayWorldInstallerCard({ workspace, world, actorResources, busy, dirty,
   </article>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onImportActor, onInstall, onRestart, onAction }: {
+function initialInstalledCastCharacters(
+  workspace: StoryWorkspaceSnapshot,
+  world: PlayWorldResourceDescriptor,
+): Readonly<Record<string, string>> {
+  const characterById = new Map(workspace.characters.map(character => [character.id, character]))
+  const slotIds = new Set(world.castSlots.map(slot => slot.id))
+  const result: Record<string, string> = {}
+  const usedCharacterIds = new Set<string>()
+  for (const binding of workspace.worldBinding?.cast ?? []) {
+    if (!slotIds.has(binding.slotId) || !characterById.has(binding.characterId) || usedCharacterIds.has(binding.characterId)) continue
+    result[binding.slotId] = binding.characterId
+    usedCharacterIds.add(binding.characterId)
+  }
+  if ((workspace.worldBinding?.cast.length ?? 0) > 0) return result
+  const participantIds = workspace.world !== undefined && isFlyingChessWorldState(workspace.world.state)
+    ? workspace.world.state.playerOrder
+    : workspace.characters.map(character => character.id)
+  const participants = participantIds.flatMap(id => {
+    const character = characterById.get(id)
+    return character === undefined ? [] : [character]
+  })
+  for (const slot of world.castSlots) {
+    const exact = participants.find(character => !usedCharacterIds.has(character.id) && character.name === slot.name)
+    if (exact === undefined) continue
+    result[slot.id] = exact.id
+    usedCharacterIds.add(exact.id)
+  }
+  for (const slot of world.castSlots) {
+    if (result[slot.id] !== undefined) continue
+    const next = participants.find(character => !usedCharacterIds.has(character.id))
+    if (next === undefined) continue
+    result[slot.id] = next.id
+    usedCharacterIds.add(next.id)
+  }
+  return result
+}
+
+function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirty, onImportActor, onUpdate, onClose }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly world: PlayWorldResourceDescriptor
+  readonly actorResources: readonly RoleplayResourceDescriptor[]
+  readonly busy: boolean
+  readonly dirty: boolean
+  readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
+  readonly onUpdate: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
+  readonly onClose: () => void
+}) {
+  const actorFileInputRef = useRef<HTMLInputElement>(null)
+  const [importingActor, setImportingActor] = useState(false)
+  const [importActorError, setImportActorError] = useState<string>()
+  const [characterBySlot] = useState<Readonly<Record<string, string>>>(() => initialInstalledCastCharacters(workspace, world))
+  const [actorBySlot, setActorBySlot] = useState<Readonly<Record<string, string>>>(() => Object.fromEntries(
+    world.castSlots.flatMap(slot => {
+      const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
+      if (character === undefined) return []
+      const actor = actorResources.find(candidate => candidate.id === character.actor?.id)
+        ?? actorResources.find(candidate => candidate.name === character.name)
+      return actor === undefined ? [] : [[slot.id, actor.id]]
+    }),
+  ))
+  const boundParticipantIds = (workspace.worldBinding?.cast ?? []).map(binding => binding.characterId)
+  const participantIds = workspace.world !== undefined && isFlyingChessWorldState(workspace.world.state)
+    ? workspace.world.state.playerOrder
+    : boundParticipantIds.length > 0
+      ? boundParticipantIds
+      : workspace.characters.map(character => character.id)
+  const assignedCharacterIds = new Set(Object.values(characterBySlot))
+  const unassignedParticipant = participantIds.find(id => !assignedCharacterIds.has(id))
+  const assignedSlots = world.castSlots.filter(slot => characterBySlot[slot.id] !== undefined)
+  const selectedActorIds = assignedSlots.flatMap(slot => actorBySlot[slot.id] ?? [])
+  const repeatsActor = new Set(selectedActorIds).size !== selectedActorIds.length
+  const missingRequired = world.castSlots.some(slot => slot.required
+    && (characterBySlot[slot.id] === undefined || actorBySlot[slot.id] === undefined))
+  const missingAssignedActor = assignedSlots.some(slot => actorBySlot[slot.id] === undefined)
+  const ready = !dirty && !missingRequired && !missingAssignedActor && !repeatsActor && unassignedParticipant === undefined
+    && assignedSlots.length >= world.minCharacters && assignedSlots.length <= world.maxCharacters
+  const importActor = (file: File): void => {
+    setImportingActor(true)
+    setImportActorError(undefined)
+    void onImportActor(file).then(({ actor }) => {
+      setActorBySlot(current => {
+        const exact = world.castSlots.find(slot => {
+          const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
+          return character !== undefined && current[slot.id] === undefined && character.name === actor.name
+        })
+        const target = exact ?? world.castSlots.find(slot => characterBySlot[slot.id] !== undefined && current[slot.id] === undefined)
+        return target === undefined ? current : { ...current, [target.id]: actor.id }
+      })
+    }).catch(reason => { setImportActorError(errorMessage(reason)) }).finally(() => { setImportingActor(false) })
+  }
+  const updateCast = (): void => {
+    if (!ready) return
+    const cast = world.castSlots.flatMap(slot => {
+      const characterId = characterBySlot[slot.id]
+      const actorId = actorBySlot[slot.id]
+      return characterId === undefined || actorId === undefined ? [] : [{
+        slotId: slot.id,
+        actor: { kind: 'actor' as const, id: actorId },
+        characterId,
+      }]
+    })
+    void onUpdate(cast).then(updated => { if (updated) onClose() })
+  }
+  return <>
+    <button className="story-studio-drawer-backdrop" type="button" aria-label="关闭人物来源" onClick={onClose} />
+    <aside className="story-studio-drawer story-world-cast-drawer" aria-label="人物来源">
+      <div className="story-studio-drawer-header"><h2>人物来源</h2><button className="story-studio-icon-button" type="button" onClick={onClose}>×</button></div>
+      <p className="story-world-cast-drawer-intro">为当前人物选择资源中心里的角色卡。角色卡档案会更新；棋局位置、回合和事件原样保留。</p>
+      <div className="story-world-cast-current">{world.castSlots.map(slot => {
+        const character = workspace.characters.find(candidate => candidate.id === characterBySlot[slot.id])
+        return <label key={slot.id}>
+          <span><small>{slot.name} · {slot.required ? '必需' : '可选'}</small><strong>{character?.name ?? '没有可沿用的人物'}</strong>
+            <em>{slot.description}</em></span>
+          <select className="story-studio-input" disabled={character === undefined || busy || dirty}
+            value={actorBySlot[slot.id] ?? ''} onChange={event => {
+              const actorId = event.target.value
+              setActorBySlot(current => {
+                const next = { ...current }
+                if (actorId === '') delete next[slot.id]
+                else next[slot.id] = actorId
+                return next
+              })
+            }}>
+            <option value="">选择角色卡</option>
+            {actorResources.map(actor => <option value={actor.id} key={actor.id}
+              disabled={actorBySlot[slot.id] !== actor.id && selectedActorIds.includes(actor.id)}>{actor.name}</option>)}
+          </select>
+        </label>
+      })}</div>
+      <div className="story-world-cast-import">
+        <input ref={actorFileInputRef} hidden type="file" accept=".png,.json,.charx,image/png,application/json,application/zip" onChange={event => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file !== undefined) importActor(file)
+        }} />
+        <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
+          onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入角色卡'}</button>
+        <small>PNG / JSON / CHARX 会保存到资源中心，并优先填入同名人物。</small>
+      </div>
+      {importActorError !== undefined && <small className="story-world-cast-error" role="alert">{importActorError}</small>}
+      {unassignedParticipant !== undefined && <small className="story-world-cast-error">当前参与人物无法全部对应到世界槽位，请先检查世界资源。</small>}
+      {missingRequired && <small>请为每个必需人物选择角色卡。</small>}
+      {missingAssignedActor && !missingRequired && <small>当前参与世界的人物都需要角色卡来源。</small>}
+      {repeatsActor && <small>同一张角色卡不能同时扮演多个世界人物。</small>}
+      <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
+        disabled={!ready || busy || importingActor} onClick={updateCast}>{busy ? '正在更新…' : '更新人物来源'}</button>
+        <button className="story-studio-button" type="button" disabled={busy} onClick={onClose}>取消</button></div>
+    </aside>
+  </>
+}
+
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, busy, dirty, sessionAction, onAdvanceSession, onImportActor, onInstall, onUpdateCast, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -1851,9 +2019,12 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onAdvanceSession: (request: string) => void
   readonly onImportActor: (file: File) => Promise<ImportedWorldActor>
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
+  readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
   readonly onRestart: () => void
   readonly onAction: (actionId: string) => void
 }) {
+  const [castOpen, setCastOpen] = useState(false)
+  useEffect(() => { setCastOpen(false) }, [workspace.id, workspace.world?.moduleId, workspace.worldBinding?.resource?.id])
   if (workspace.world === undefined) {
     return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
       <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
@@ -1873,13 +2044,21 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
     </div></div><div className="story-play-notice">需要安装规则模块：{workspace.world.moduleId}</div>
       <WorldEventList events={workspace.world.events} /></div>
   }
+  const configureCast = installedResource !== undefined && installedResource.castSlots.length > 0
+    ? () => { setCastOpen(true) }
+    : undefined
+  const castDrawer = castOpen && installedResource !== undefined
+    ? <InstalledWorldCastDrawer workspace={workspace} world={installedResource} actorResources={actorResources}
+        busy={busy} dirty={dirty} onImportActor={onImportActor} onUpdate={onUpdateCast} onClose={() => { setCastOpen(false) }} />
+    : undefined
   if (workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID && isFlyingChessWorldState(workspace.world.state)) {
-    return <FlyingChessPlayView workspace={workspace} state={workspace.world.state} turn={turn} busy={busy} dirty={dirty}
-      sessionAction={sessionAction} onAdvanceSession={onAdvanceSession} onRestart={onRestart} onAction={onAction} />
+    return <><FlyingChessPlayView workspace={workspace} state={workspace.world.state} turn={turn} busy={busy} dirty={dirty}
+      sessionAction={sessionAction} onAdvanceSession={onAdvanceSession} onConfigureCast={configureCast}
+      onRestart={onRestart} onAction={onAction} />{castDrawer}</>
   }
-  return <GenericPlayWorldView workspace={workspace} module={installedResource}
+  return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} busy={busy} dirty={dirty} sessionAction={sessionAction} onAdvanceSession={onAdvanceSession}
-    onRestart={onRestart} onAction={onAction} />
+    onConfigureCast={configureCast} onRestart={onRestart} onAction={onAction} />{castDrawer}</>
 }
 
 /** Full-screen play space backed by typed story and executable-world state. */
@@ -2026,6 +2205,26 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setView('world')
       setNotice(`${saved.workspace.world?.title ?? '世界'}已经装入场地`)
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
+  const saveWorldCast = async (cast: readonly PlayWorldCastSelection[]): Promise<boolean> => {
+    if (workspace === undefined || workspace.world === undefined || dirty) return false
+    setSaving(true)
+    setError(undefined)
+    try {
+      const saved = await updatePlayWorldCast(workspace, cast)
+      setWorkspace(saved.workspace)
+      setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
+      setItems(await listWorkspaces())
+      setView('world')
+      setNotice('人物来源已更新，棋局状态与事件保持不变')
+      return true
+    } catch (reason) {
+      setError(errorMessage(reason))
+      return false
+    } finally {
+      setSaving(false)
+    }
   }
   const importWorldActor = async (file: File): Promise<ImportedWorldActor> => {
     setSaving(true)
@@ -2366,7 +2565,8 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         ? 'start'
         : sessionId !== undefined && onContinueSession !== undefined ? 'continue' : undefined}
       onAdvanceSession={advanceSession}
-      onImportActor={importWorldActor} onInstall={installWorld} onRestart={restartWorld} onAction={runWorldAction} />
+      onImportActor={importWorldActor} onInstall={installWorld} onUpdateCast={saveWorldCast}
+      onRestart={restartWorld} onAction={runWorldAction} />
   } else if (view === 'map') {
     main = <StoryMap workspace={workspace} selection={selection} perspectiveId={perspectiveId} update={update} setSelection={setSelection}
       clearPerspective={() => { setPerspectiveId(undefined) }} />
