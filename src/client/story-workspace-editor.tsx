@@ -50,6 +50,8 @@ import {
   STORY_WORKSPACES_PATH,
   type StoryCitation,
   type StoryCharacter,
+  type StoryCharacterActorField,
+  type StoryCharacterActorSyncReport,
   type StoryEdge,
   type StoryEdgeKind,
   type StoryEvent,
@@ -129,6 +131,7 @@ interface StoryWorkspaceResponse {
   readonly webFetchAvailable?: boolean
   readonly webSearchAvailable?: boolean
   readonly sourceImport?: { readonly sourceId?: string; readonly truncated?: boolean }
+  readonly actorSync?: StoryCharacterActorSyncReport
   readonly workspaces?: readonly StoryWorkspaceSummary[]
   readonly error?: string
 }
@@ -144,6 +147,10 @@ interface StoryWorkspaceResult {
   readonly worldModuleAvailable: boolean | null
   readonly webFetchAvailable: boolean
   readonly webSearchAvailable: boolean
+}
+
+interface StoryCharacterActorBindResult extends StoryWorkspaceResult {
+  readonly sync: StoryCharacterActorSyncReport
 }
 
 interface PlayWorldResourcesResponse {
@@ -238,6 +245,28 @@ const sourceKindLabels: Readonly<Record<StorySourceKind, string>> = {
   web: '网络',
 }
 
+const characterActorFields = [
+  'name',
+  'voiceAliases',
+  'description',
+  'personality',
+  'scenario',
+  'exampleDialogue',
+  'systemPrompt',
+  'postHistoryInstructions',
+] as const satisfies readonly StoryCharacterActorField[]
+
+const characterActorFieldLabels: Readonly<Record<StoryCharacterActorField, string>> = {
+  name: '姓名',
+  voiceAliases: '原作署名',
+  description: '人物描述',
+  personality: '性格与行为',
+  scenario: '入场情境',
+  exampleDialogue: '说话样本',
+  systemPrompt: '系统指令',
+  postHistoryInstructions: '历史后指令',
+}
+
 const storyTurnStageLabels: Readonly<Record<AgentRpStoryTurnStage, string>> = {
   'world-action': '推进场地规则',
   cast: '确认本轮人物',
@@ -307,6 +336,36 @@ function factKnownBy(workspace: StoryWorkspaceSnapshot, fact: StoryFact): readon
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
+}
+
+function actorSyncReport(value: unknown): StoryCharacterActorSyncReport {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('人物角色卡同步响应无效')
+  const record = value as Partial<Record<keyof StoryCharacterActorSyncReport, unknown>>
+  const validFields = (fields: unknown): fields is readonly StoryCharacterActorField[] => Array.isArray(fields)
+    && fields.every(field => typeof field === 'string' && characterActorFields.includes(field as StoryCharacterActorField))
+    && new Set(fields).size === fields.length
+  if (record.mode !== 'detached' && record.mode !== 'replaced' && record.mode !== 'refreshed'
+    || typeof record.baselineCreated !== 'boolean'
+    || !validFields(record.updatedFields) || !validFields(record.preservedFields)) {
+    throw new Error('人物角色卡同步响应无效')
+  }
+  return record as unknown as StoryCharacterActorSyncReport
+}
+
+function actorSyncNotice(report: StoryCharacterActorSyncReport): string {
+  if (report.mode === 'detached') return '人物已经改为手写档案；当前设定和本局内容均已保留'
+  if (report.mode === 'replaced') {
+    return '角色卡来源已经更换；人物身份采用新卡，本局动态、认知、事件和世界进度保持不变'
+  }
+  const updated = report.updatedFields.map(field => characterActorFieldLabels[field]).join('、')
+  const preserved = report.preservedFields.map(field => characterActorFieldLabels[field]).join('、')
+  if (report.baselineCreated && preserved !== '') {
+    return `已建立角色卡同步基线；为避免覆盖旧绑定中的本地编辑，保留了${preserved}`
+  }
+  if (updated !== '' && preserved !== '') return `角色卡已更新${updated}；保留本地编辑${preserved}`
+  if (updated !== '') return `角色卡已更新${updated}；本局动态、认知和世界进度保持不变`
+  if (preserved !== '') return `角色卡来源没有可自动更新的字段；保留本地编辑${preserved}`
+  return '角色卡设定已经是最新版本'
 }
 
 async function storyRequest(path = '', init?: RequestInit): Promise<StoryWorkspaceResponse> {
@@ -489,7 +548,7 @@ async function bindStoryCharacterActor(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
   actor?: RoleplayResourceSelection,
-): Promise<StoryWorkspaceResult> {
+): Promise<StoryCharacterActorBindResult> {
   const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/characters/${encodeURIComponent(characterId)}/actor`, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -500,7 +559,10 @@ async function bindStoryCharacterActor(
       ...(actor === undefined ? {} : { actor }),
     }),
   })
-  return workspaceResult(value, '人物角色卡绑定')
+  return {
+    ...workspaceResult(value, '人物角色卡绑定'),
+    sync: actorSyncReport(value.actorSync),
+  }
 }
 
 async function deleteWorkspace(id: string): Promise<void> {
@@ -862,7 +924,6 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
   readonly onBindActor: (
     characterId: string,
     actor?: RoleplayResourceSelection,
-    intent?: 'bind' | 'refresh',
   ) => void
   readonly onImportActor: (characterId: string, file: File) => Promise<void>
   readonly onDelete: (id: string) => void
@@ -943,8 +1004,8 @@ function CharacterWorkspaceView({ workspace, character, actorResources, busy, di
             <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
               onClick={() => { actorFileInputRef.current?.click() }}>{importingActor ? '正在导入角色卡…' : '＋ 导入并绑定角色卡'}</button>
             {character.actor !== undefined && <button className="story-studio-button" type="button" disabled={busy || dirty || importingActor}
-              onClick={() => { onBindActor(character.id, character.actor, 'refresh') }}>重新同步角色卡设定</button>
-            }<span>导入会保存为可复用角色卡；绑定或同步只更新姓名与角色卡档案，保留本局动态、认知、事件和世界进度。</span>
+              onClick={() => { onBindActor(character.id, character.actor) }}>重新同步角色卡设定</button>
+            }<span>导入会保存为可复用角色卡；同步只更新仍由来源卡管理的设定字段，本地改写与本局动态、认知、事件和世界进度都会保留。</span>
           </div>
           {dirty && <p className="story-studio-inline-note">保存当前修改后即可更换角色卡来源。</p>}
           <TextField label="人物名称" rows={1} value={character.name} onChange={value => { patchCharacter(current => ({ ...current, name: value })) }} />
@@ -2758,7 +2819,6 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
   const bindActor = (
     characterId: string,
     actor?: RoleplayResourceSelection,
-    intent: 'bind' | 'refresh' = 'bind',
   ): void => {
     if (workspace === undefined || dirty) return
     setSaving(true)
@@ -2770,11 +2830,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setWebFetchAvailable(saved.webFetchAvailable)
       setWebSearchAvailable(saved.webSearchAvailable)
       setItems(await listWorkspaces())
-      setNotice(actor === undefined
-        ? '人物已经改为手写档案'
-        : intent === 'refresh'
-          ? '角色卡档案已经重新同步；本局动态、认知和世界进度保持不变'
-          : '角色卡已经绑定到本局人物')
+      setNotice(actorSyncNotice(saved.sync))
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
   const advanceSession = (request: string): void => {

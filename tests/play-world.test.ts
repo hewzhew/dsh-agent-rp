@@ -238,11 +238,11 @@ function fixtureFlyingChessCastResources(): RoleplayResourceCatalog {
 
 type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
 
-function storyWorkspaceRoute(store: StoryWorkspaceStore): RegisteredRoute {
+function storyWorkspaceRoute(store: StoryWorkspaceStore, resources?: RoleplayResourceCatalog): RegisteredRoute {
   const routes: RegisteredRoute[] = []
   const ctx = { effect(register: () => unknown) { register() } } as unknown as Context
   const server: AgentRpHttpServer = { register(route) { routes.push(route); return () => {} } }
-  installStoryWorkspaceHttp(ctx, store, server)
+  installStoryWorkspaceHttp(ctx, store, server, resources)
   const route = routes.find(candidate => candidate.kind === 'prefix')
   assert.ok(route)
   return route
@@ -418,11 +418,11 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   const storyPath = join(root, installed.id, 'story.json')
   const stored = JSON.parse(readFileSync(storyPath, 'utf8')) as {
     worldBinding?: unknown
-    characters: { actor?: unknown }[]
+    characters: { actor?: unknown; actorBaseline?: unknown }[]
     outputs: unknown[]
   }
   delete stored.worldBinding
-  stored.characters = stored.characters.map(({ actor: _actor, ...character }) => character)
+  stored.characters = stored.characters.map(({ actor: _actor, actorBaseline: _actorBaseline, ...character }) => character)
   stored.outputs = []
   writeFileSync(storyPath, `${JSON.stringify(stored, null, 2)}\n`)
   writeFileSync(join(root, installed.id, 'characters', reimuId, 'description.md'), '旧灵梦档案')
@@ -923,11 +923,12 @@ test('scaffolds fresh world authoring surfaces without replacing authored work',
   assert.deepEqual(preserved.outputs, configured.outputs)
 })
 
-test('keeps executable world state out of whole-workspace edits', (context) => {
+test('keeps executable world state out of whole-workspace edits', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-save-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
   worlds.register(createFlyingChessWorldModule())
+  const actorResources = fixtureFlyingChessCastResources()
   const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '场地' })
   const first = createStoryCharacterId()
@@ -980,7 +981,7 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
   assert.equal(launched.events.findLast(event => event.type === 'turn/end')?.data.turn, 1)
   const renamed = store.save({ ...editable(installed), name: '新名称' })
   assert.deepEqual(renamed.world, installed.world)
-  const bound = store.bindCharacterActor(renamed.id, {
+  const boundResult = store.bindCharacterActor(renamed.id, {
     format: 0,
     revision: renamed.revision,
     characterId: first,
@@ -990,36 +991,103 @@ test('keeps executable world state out of whole-workspace edits', (context) => {
     voiceAliases: ['博麗霊夢'],
     profile: character(first, '博丽灵梦', '博丽神社的巫女。').profile,
   })
+  const bound = boundResult.workspace
+  assert.equal(boundResult.sync.mode, 'replaced')
   assert.equal(bound.characters[0]?.actor?.id, 'actor:reimu')
-  assert.deepEqual(bound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
-  const rebound = store.bindCharacterActor(bound.id, {
+  assert.deepEqual(bound.characters[0]?.voiceAliases, ['博麗霊夢'])
+  assert.equal(bound.characters[0]?.actorBaseline?.format, 0)
+  const locallyEdited = store.save({
+    ...editable(bound),
+    characters: bound.characters.map(item => item.id === first
+      ? {
+          ...item,
+          name: '本地灵梦名',
+          voiceAliases: ['本地署名'],
+          profile: { ...item.profile, personality: '本地补充的性格。' },
+        }
+      : item),
+  })
+  const reboundResult = store.bindCharacterActor(locallyEdited.id, {
     format: 0,
-    revision: bound.revision,
+    revision: locallyEdited.revision,
     characterId: first,
     actor: { kind: 'actor', id: 'actor:reimu' },
   }, {
     name: '博丽灵梦（更新）',
     voiceAliases: ['更新后的卡片署名'],
-    profile: character(first, '博丽灵梦', '资源中心更新后的角色卡描述。').profile,
+    profile: {
+      ...character(first, '博丽灵梦', '资源中心更新后的角色卡描述。').profile,
+      personality: '资源中心更新后的性格。',
+    },
   })
-  assert.equal(rebound.characters[0]?.name, '博丽灵梦（更新）')
+  const rebound = reboundResult.workspace
+  assert.equal(reboundResult.sync.mode, 'refreshed')
+  assert.deepEqual(reboundResult.sync.updatedFields, ['description'])
+  assert.deepEqual(reboundResult.sync.preservedFields, ['name', 'voiceAliases', 'personality'])
+  assert.equal(rebound.characters[0]?.name, '本地灵梦名')
   assert.equal(rebound.characters[0]?.profile.description, '资源中心更新后的角色卡描述。')
-  assert.deepEqual(rebound.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
-  assert.deepEqual(rebound.characters[0]?.state, bound.characters[0]?.state)
-  assert.deepEqual(rebound.facts, bound.facts)
-  assert.deepEqual(rebound.events, bound.events)
-  assert.deepEqual(rebound.world, bound.world)
-  const detached = store.bindCharacterActor(rebound.id, {
+  assert.equal(rebound.characters[0]?.profile.personality, '本地补充的性格。')
+  assert.deepEqual(rebound.characters[0]?.voiceAliases, ['本地署名'])
+  assert.deepEqual(rebound.characters[0]?.state, locallyEdited.characters[0]?.state)
+  assert.deepEqual(rebound.facts, locallyEdited.facts)
+  assert.deepEqual(rebound.events, locallyEdited.events)
+  assert.deepEqual(rebound.world, locallyEdited.world)
+  const legacyBound = store.save({
+    ...editable(rebound),
+    characters: rebound.characters.map(item => {
+      if (item.id !== first) return item
+      const { actorBaseline: _actorBaseline, ...withoutBaseline } = item
+      return withoutBaseline
+    }),
+  })
+  const conservativeResult = store.bindCharacterActor(legacyBound.id, {
     format: 0,
-    revision: rebound.revision,
+    revision: legacyBound.revision,
+    characterId: first,
+    actor: { kind: 'actor', id: 'actor:reimu' },
+  }, {
+    name: '博丽灵梦（第二次更新）',
+    voiceAliases: ['第二次更新后的卡片署名'],
+    profile: {
+      ...character(first, '博丽灵梦', '第二次更新后的角色卡描述。').profile,
+      personality: '第二次更新后的性格。',
+    },
+  })
+  const conservative = conservativeResult.workspace
+  assert.equal(conservativeResult.sync.baselineCreated, true)
+  assert.deepEqual(conservativeResult.sync.updatedFields, [])
+  assert.deepEqual(conservativeResult.sync.preservedFields, ['name', 'voiceAliases', 'description', 'personality'])
+  assert.equal(conservative.characters[0]?.name, '本地灵梦名')
+  assert.equal(conservative.characters[0]?.profile.description, '资源中心更新后的角色卡描述。')
+  assert.equal(conservative.characters[0]?.actorBaseline?.format, 0)
+  const detachedResult = store.bindCharacterActor(conservative.id, {
+    format: 0,
+    revision: conservative.revision,
     characterId: first,
   })
+  const detached = detachedResult.workspace
+  assert.equal(detachedResult.sync.mode, 'detached')
   assert.equal(detached.characters[0]?.actor, undefined)
-  assert.equal(detached.characters[0]?.name, '博丽灵梦（更新）')
+  assert.equal(detached.characters[0]?.actorBaseline, undefined)
+  assert.equal(detached.characters[0]?.name, '本地灵梦名')
   assert.equal(detached.characters[0]?.profile.description, '资源中心更新后的角色卡描述。')
-  assert.deepEqual(detached.characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
-  assert.deepEqual(store.get(detached.id).characters[0]?.voiceAliases, ['博麗霊夢', '霊夢'])
+  assert.deepEqual(detached.characters[0]?.voiceAliases, ['本地署名'])
+  assert.deepEqual(store.get(detached.id).characters[0]?.voiceAliases, ['本地署名'])
   assert.deepEqual(detached.world, installed.world)
+  const response = await invokeStoryWorkspaceRoute(
+    storyWorkspaceRoute(store, actorResources),
+    'POST',
+    `/api/agent-rp/story-workspaces/${encodeURIComponent(detached.id)}/characters/${encodeURIComponent(first)}/actor`,
+    {
+      format: 0,
+      revision: detached.revision,
+      characterId: first,
+      actor: { kind: 'actor', id: 'actor:reimu' },
+    },
+  )
+  assert.equal(response.status, 200)
+  assert.equal((response.body as { readonly actorSync?: { readonly mode?: unknown } }).actorSync?.mode, 'replaced')
+  assert.deepEqual((response.body as { readonly workspace?: StoryWorkspaceSnapshot }).workspace?.world, detached.world)
 })
 
 test('lets the current private character Worker complete one world turn exactly once', async (context) => {

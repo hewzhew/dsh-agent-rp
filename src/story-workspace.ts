@@ -1,6 +1,6 @@
 /** File-backed typed story workspaces and character-specific context compilation. */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
@@ -43,7 +43,10 @@ import type {
   StoryAudience,
   StoryCitation,
   StoryCharacter,
+  StoryCharacterActorBaseline,
   StoryCharacterActorBindRequest,
+  StoryCharacterActorField,
+  StoryCharacterActorSyncReport,
   StoryCharacterProfile,
   StoryCharacterState,
   StoryEdge,
@@ -110,6 +113,18 @@ const DEFAULT_STORY_PIPELINE: StoryPipelineSettings = {
 const DEFAULT_PLAY_WORLD_REGISTRY = createDefaultPlayWorldRegistry()
 const DEFAULT_PLAY_WORLD_RESOURCES = new RoleplayResourceCatalog()
 DEFAULT_PLAY_WORLD_RESOURCES.register(flyingChessWorldResourceProvider())
+
+const CHARACTER_ACTOR_FIELDS = [
+  'name',
+  'voiceAliases',
+  'description',
+  'personality',
+  'scenario',
+  'exampleDialogue',
+  'systemPrompt',
+  'postHistoryInstructions',
+] as const satisfies readonly StoryCharacterActorField[]
+const CHARACTER_ACTOR_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u
 
 interface StoredStoryNode extends Omit<StoryNode, 'content'> {}
 interface StoredStoryCharacter extends Omit<StoryCharacter, 'profile'> {}
@@ -200,6 +215,12 @@ export interface StoryCharacterContext {
   readonly worldContext: string
   readonly playerInput: string
   readonly text: string
+}
+
+/** Persisted workspace plus the field-level outcome of one Character Card source change. */
+export interface StoryCharacterActorBindResult {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly sync: StoryCharacterActorSyncReport
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -373,6 +394,163 @@ function normalizeCharacterState(value: unknown): StoryCharacterState {
   }
 }
 
+interface CharacterActorValues {
+  readonly name: string
+  readonly voiceAliases: readonly string[]
+  readonly description: string
+  readonly personality: string
+  readonly scenario: string
+  readonly exampleDialogue: string
+  readonly systemPrompt: string
+  readonly postHistoryInstructions: string
+}
+
+interface CharacterActorMergeResult {
+  readonly character: StoryCharacter
+  readonly report: StoryCharacterActorSyncReport
+}
+
+function normalizeCharacterActorBaseline(value: unknown): StoryCharacterActorBaseline {
+  if (!isRecord(value) || value.format !== 0 || !isRecord(value.fingerprints)) {
+    throw new Error('人物角色卡同步基线无效')
+  }
+  const fingerprints = value.fingerprints
+  if (Object.keys(value).some(key => key !== 'format' && key !== 'fingerprints')
+    || Object.keys(fingerprints).length !== CHARACTER_ACTOR_FIELDS.length
+    || CHARACTER_ACTOR_FIELDS.some(field => !CHARACTER_ACTOR_FINGERPRINT_PATTERN.test(
+      typeof fingerprints[field] === 'string' ? fingerprints[field] : '',
+    ))) {
+    throw new Error('人物角色卡同步基线无效')
+  }
+  return {
+    format: 0,
+    fingerprints: Object.fromEntries(CHARACTER_ACTOR_FIELDS.map(field => [field, fingerprints[field] as string])) as
+      Readonly<Record<StoryCharacterActorField, string>>,
+  }
+}
+
+function characterActorValues(character: StoryCharacter): CharacterActorValues {
+  return {
+    name: character.name,
+    voiceAliases: character.voiceAliases ?? [],
+    description: character.profile.description,
+    personality: character.profile.personality,
+    scenario: character.profile.scenario,
+    exampleDialogue: character.profile.exampleDialogue,
+    systemPrompt: character.profile.systemPrompt,
+    postHistoryInstructions: character.profile.postHistoryInstructions,
+  }
+}
+
+function projectedCharacterActorValues(projection: RoleplayActorProjection): CharacterActorValues {
+  return {
+    name: projection.name,
+    voiceAliases: projection.voiceAliases,
+    description: projection.profile.description,
+    personality: projection.profile.personality,
+    scenario: projection.profile.scenario,
+    exampleDialogue: projection.profile.exampleDialogue,
+    systemPrompt: projection.profile.systemPrompt,
+    postHistoryInstructions: projection.profile.postHistoryInstructions,
+  }
+}
+
+function actorValueFingerprint(value: string | readonly string[]): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function characterActorBaseline(values: CharacterActorValues): StoryCharacterActorBaseline {
+  return {
+    format: 0,
+    fingerprints: Object.fromEntries(CHARACTER_ACTOR_FIELDS.map(field => [field, actorValueFingerprint(values[field])])) as
+      Readonly<Record<StoryCharacterActorField, string>>,
+  }
+}
+
+function sameResourceSelection(left: RoleplayResourceSelection | undefined, right: RoleplayResourceSelection): boolean {
+  return left?.kind === right.kind && left.id === right.id && left.variant === right.variant
+}
+
+function characterWithActorValues(
+  character: StoryCharacter,
+  actor: RoleplayResourceSelection,
+  values: CharacterActorValues,
+  baseline: StoryCharacterActorBaseline,
+): StoryCharacter {
+  return {
+    ...character,
+    name: values.name,
+    voiceAliases: values.voiceAliases,
+    profile: {
+      description: values.description,
+      personality: values.personality,
+      scenario: values.scenario,
+      exampleDialogue: values.exampleDialogue,
+      systemPrompt: values.systemPrompt,
+      postHistoryInstructions: values.postHistoryInstructions,
+    },
+    actor,
+    actorBaseline: baseline,
+  }
+}
+
+function mergeCharacterActor(
+  character: StoryCharacter,
+  actor: RoleplayResourceSelection,
+  projection: RoleplayActorProjection,
+): CharacterActorMergeResult {
+  const current = characterActorValues(character)
+  const projected = projectedCharacterActorValues(projection)
+  const nextBaseline = characterActorBaseline(projected)
+  if (!sameResourceSelection(character.actor, actor)) {
+    return {
+      character: characterWithActorValues(character, actor, projected, nextBaseline),
+      report: {
+        mode: 'replaced',
+        baselineCreated: false,
+        updatedFields: CHARACTER_ACTOR_FIELDS.filter(field => (
+          actorValueFingerprint(current[field]) !== nextBaseline.fingerprints[field]
+        )),
+        preservedFields: [],
+      },
+    }
+  }
+  const previousBaseline = character.actorBaseline
+  const updatedFields: StoryCharacterActorField[] = []
+  const preservedFields: StoryCharacterActorField[] = []
+  const select = <Field extends StoryCharacterActorField>(field: Field): CharacterActorValues[Field] => {
+    const currentFingerprint = actorValueFingerprint(current[field])
+    const sourceManaged = previousBaseline === undefined
+      ? currentFingerprint === nextBaseline.fingerprints[field]
+      : currentFingerprint === previousBaseline.fingerprints[field]
+    if (!sourceManaged) {
+      preservedFields.push(field)
+      return current[field]
+    }
+    if (currentFingerprint !== nextBaseline.fingerprints[field]) updatedFields.push(field)
+    return projected[field]
+  }
+  const merged: CharacterActorValues = {
+    name: select('name'),
+    voiceAliases: select('voiceAliases'),
+    description: select('description'),
+    personality: select('personality'),
+    scenario: select('scenario'),
+    exampleDialogue: select('exampleDialogue'),
+    systemPrompt: select('systemPrompt'),
+    postHistoryInstructions: select('postHistoryInstructions'),
+  }
+  return {
+    character: characterWithActorValues(character, actor, merged, nextBaseline),
+    report: {
+      mode: 'refreshed',
+      baselineCreated: previousBaseline === undefined,
+      updatedFields,
+      preservedFields,
+    },
+  }
+}
+
 function cleanDocument(value: unknown, subject: string): string {
   if (typeof value !== 'string') throw new Error(`${subject}不是文本`)
   if (Buffer.byteLength(value, 'utf8') > MAX_DOCUMENT_BYTES) {
@@ -452,6 +630,10 @@ function normalizeCharacter(value: unknown): StoryCharacter {
   if (value.actor !== undefined) {
     actor = normalizeResourceSelection(value.actor, 'actor', '人物绑定的角色资源')
   }
+  if (actor === undefined && value.actorBaseline !== undefined) throw new Error('人物角色卡同步基线没有对应来源')
+  const actorBaseline = value.actorBaseline === undefined
+    ? undefined
+    : normalizeCharacterActorBaseline(value.actorBaseline)
   return {
     id: value.id,
     name: cleanName(value.name, '人物'),
@@ -459,6 +641,7 @@ function normalizeCharacter(value: unknown): StoryCharacter {
     profile: normalizeCharacterProfile(value.profile),
     state: normalizeCharacterState(value.state),
     ...(actor === undefined ? {} : { actor }),
+    ...(actorBaseline === undefined ? {} : { actorBaseline }),
   }
 }
 
@@ -1492,7 +1675,6 @@ function assemblePlayWorldCast(
     if (selection.characterId !== undefined && existing === undefined) {
       throw new Error(`人物槽位 ${JSON.stringify(selection.slotId)} 指向的既有人物不存在`)
     }
-    const existingVoiceAliases = existing?.voiceAliases ?? []
     const character: StoryCharacter = existing === undefined
       ? {
           id: createStoryCharacterId(),
@@ -1501,14 +1683,9 @@ function assemblePlayWorldCast(
           profile: projection.profile,
           state: emptyCharacterState(),
           actor: selection.actor,
+          actorBaseline: characterActorBaseline(projectedCharacterActorValues(projection)),
         }
-      : {
-          ...existing,
-          name: projection.name,
-          voiceAliases: existingVoiceAliases.length > 0 ? existingVoiceAliases : projection.voiceAliases,
-          profile: projection.profile,
-          actor: selection.actor,
-        }
+      : mergeCharacterActor(existing, selection.actor, projection).character
     usedCharacterIds.add(character.id)
     return { selection, character }
   })
@@ -1916,7 +2093,7 @@ export class StoryWorkspaceStore {
     id: string,
     request: StoryCharacterActorBindRequest,
     projection?: RoleplayActorProjection,
-  ): StoryWorkspaceSnapshot {
+  ): StoryCharacterActorBindResult {
     const current = this.get(id)
     this.assertRevision(current, request.revision)
     assertId(request.characterId, CHARACTER_ID_PATTERN, '人物')
@@ -1925,20 +2102,22 @@ export class StoryWorkspaceStore {
       throw new Error('人物角色卡绑定请求无效')
     }
     if (!current.characters.some(character => character.id === request.characterId)) throw new Error('要绑定的场地人物不存在')
+    let sync: StoryCharacterActorSyncReport | undefined
     const characters = current.characters.map(character => {
       if (character.id !== request.characterId) return character
       if (request.actor === undefined || projection === undefined) {
-        const { actor: _actor, ...detached } = character
+        const { actor: _actor, actorBaseline: _actorBaseline, ...detached } = character
+        sync = {
+          mode: 'detached',
+          baselineCreated: false,
+          updatedFields: [],
+          preservedFields: [],
+        }
         return detached
       }
-      const existingVoiceAliases = character.voiceAliases ?? []
-      return {
-        ...character,
-        name: projection.name,
-        voiceAliases: existingVoiceAliases.length > 0 ? existingVoiceAliases : projection.voiceAliases,
-        profile: projection.profile,
-        actor: request.actor,
-      }
+      const merged = mergeCharacterActor(character, request.actor, projection)
+      sync = merged.report
+      return merged.character
     })
     const snapshot = normalizeWorkspace({
       ...current,
@@ -1947,7 +2126,8 @@ export class StoryWorkspaceStore {
       characters,
     }, this.worlds)
     this.writeSnapshot(snapshot)
-    return this.get(snapshot.id)
+    if (sync === undefined) throw new Error('人物角色卡绑定结果缺失')
+    return { workspace: this.get(snapshot.id), sync }
   }
 
   /** Idempotently append one visible turn as an event and one typed story change set. */

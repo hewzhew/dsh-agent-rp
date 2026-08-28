@@ -287,10 +287,13 @@ export function installStoryWorkspaceHttp(
         if (request.method === 'POST' && segments.length === 4 && segments[1] === 'characters' && segments[3] === 'actor') {
           const binding = parseActorBindRequest(await readJson(request), segments[2]!)
           if (binding.actor !== undefined && resources === undefined) throw new Error('当前 Host 没有可用的角色资源目录')
-          const workspace = store.bindCharacterActor(
+          const result = store.bindCharacterActor(
             segments[0]!, binding, binding.actor === undefined ? undefined : resources!.projectActor(binding.actor),
           )
-          json(response, 200, workspaceResponse(ctx, store, workspace))
+          json(response, 200, {
+            ...workspaceResponse(ctx, store, result.workspace),
+            actorSync: result.sync,
+          })
           return
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'sources' && segments[2] === 'url') {

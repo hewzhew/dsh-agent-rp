@@ -1373,6 +1373,13 @@ interface StoryCharacterState {
   readonly objective: string;
   readonly notes: string;
 }
+/** Character Card fields tracked independently so source refreshes can retain local edits. */
+type StoryCharacterActorField = 'name' | 'voiceAliases' | 'description' | 'personality' | 'scenario' | 'exampleDialogue' | 'systemPrompt' | 'postHistoryInstructions';
+/** Fingerprints of the last Character Card projection observed for one bound character. */
+interface StoryCharacterActorBaseline {
+  readonly format: 0;
+  readonly fingerprints: Readonly<Record<StoryCharacterActorField, string>>;
+}
 /** One independently prompted story character. */
 interface StoryCharacter {
   readonly id: string;
@@ -1383,6 +1390,8 @@ interface StoryCharacter {
   readonly state: StoryCharacterState;
   /** Stable source reference for a Character Card snapshot bound from the resource center. */
   readonly actor?: RoleplayResourceSelection;
+  /** Source-field baseline used to distinguish later local edits from refreshable card values. */
+  readonly actorBaseline?: StoryCharacterActorBaseline;
 }
 /** Host service used by trusted plugins to install executable play worlds. */
 declare const PLAY_WORLD_REGISTRY_KEY = "agentRp.playWorlds";
