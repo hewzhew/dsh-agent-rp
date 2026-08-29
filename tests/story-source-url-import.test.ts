@@ -8,11 +8,30 @@ import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { installStoryWorkspaceHttp } from '../src/story-workspace-http.ts'
-import type { StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
-import { StoryWorkspaceStore } from '../src/story-workspace.ts'
+import { splitStorySourcePassages } from '../src/story-source.ts'
+import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import { createStoryCitationId, createStorySourceId, StoryWorkspaceStore } from '../src/story-workspace.ts'
 import { searchStoryVoiceSourceExcerpts } from '../src/story-voice-retrieval.ts'
 
 type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
+
+function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
+  return {
+    format: 2,
+    id: snapshot.id,
+    revision: snapshot.revision,
+    name: snapshot.name,
+    pipeline: snapshot.pipeline,
+    graph: snapshot.graph,
+    characters: snapshot.characters,
+    facts: snapshot.facts,
+    events: snapshot.events,
+    outputs: snapshot.outputs,
+    sources: snapshot.sources,
+    citations: snapshot.citations,
+    researchInbox: snapshot.researchInbox,
+  }
+}
 
 function storyWorkspaceRoute(store: StoryWorkspaceStore, web?: unknown): RegisteredRoute {
   const routes: RegisteredRoute[] = []
@@ -172,6 +191,177 @@ test('rejects unsafe, unavailable, and unsuccessful URL imports without changing
   assert.equal(missing.status, 502)
   assert.equal(calls, 1)
   assert.equal(store.get(created.id).sources.length, 0)
+})
+
+test('refreshes a URL source in place and preserves citation evidence across relocation and failures', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-url-source-refresh-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '网页资料刷新场地' })
+  const requestedUrl = 'https://source.example.test/chapter'
+  const initialContent = '第一段唯一证据。\n第二段重复证据。\n第三段即将消失。'
+  const refreshedContent = '新开场。\n第一段唯一证据。\n第二段重复证据。这里又写一次第二段重复证据。\n插入内容。\n收尾。'
+  let phase: 'initial' | 'refresh' | 'throw' | 'missing' = 'initial'
+  const calls: string[] = []
+  const route = storyWorkspaceRoute(store, {
+    async fetch(request: { readonly url: string }) {
+      calls.push(request.url)
+      assert.equal(request.url, requestedUrl)
+      if (phase === 'throw') throw new Error('temporary network failure')
+      if (phase === 'missing') {
+        return {
+          url: request.url,
+          statusCode: 404,
+          body: { kind: 'text' as const, content: 'not found' },
+          truncated: false,
+        }
+      }
+      return {
+        url: phase === 'initial'
+          ? 'https://archive.example.test/chapter-v1'
+          : 'https://archive.example.test/chapter-v2',
+        statusCode: 200,
+        body: { kind: 'text' as const, content: phase === 'initial' ? initialContent : refreshedContent },
+        truncated: phase === 'refresh',
+      }
+    },
+  })
+  const importPath = `/api/agent-rp/story-workspaces/${encodeURIComponent(created.id)}/sources/url`
+  const importedResponse = await invoke(route, 'POST', importPath, {
+    format: 0,
+    revision: created.revision,
+    url: requestedUrl,
+    name: '会更新的章节',
+    kind: 'original',
+  })
+  assert.equal(importedResponse.status, 201)
+  const imported = importedResponse.body.workspace as StoryWorkspaceSnapshot
+  const source = imported.sources[0]!
+  const initialPassages = splitStorySourcePassages(source)
+  const uniquePassage = initialPassages.find(passage => passage.text.includes('第一段唯一证据。'))!
+  const ambiguousPassage = initialPassages.find(passage => passage.text.includes('第二段重复证据。'))!
+  const missingPassage = initialPassages.find(passage => passage.text.includes('第三段即将消失。'))!
+  const localSource = {
+    id: createStorySourceId(),
+    name: '本地资料',
+    kind: 'reference' as const,
+    enabled: true,
+    content: '本地证据。',
+  }
+  const uniqueCitationId = createStoryCitationId()
+  const ambiguousCitationId = createStoryCitationId()
+  const missingCitationId = createStoryCitationId()
+  const localCitationId = createStoryCitationId()
+  const prepared = store.save({
+    ...editable(imported),
+    sources: [...imported.sources, localSource],
+    citations: [{
+      id: uniqueCitationId,
+      sourceId: source.id,
+      locator: uniquePassage.locator,
+      quote: '第一段唯一证据。',
+      note: '应迁移定位',
+    }, {
+      id: ambiguousCitationId,
+      sourceId: source.id,
+      locator: ambiguousPassage.locator,
+      quote: '第二段重复证据。',
+      note: '应保留旧定位',
+    }, {
+      id: missingCitationId,
+      sourceId: source.id,
+      locator: missingPassage.locator,
+      quote: '第三段即将消失。',
+      note: '应保留原句快照',
+    }, {
+      id: localCitationId,
+      sourceId: localSource.id,
+      locator: '第 1 段',
+      quote: '本地证据。',
+      note: '其他资料不受影响',
+    }],
+  })
+  const citationsBeforeRefresh = prepared.citations.map(citation => ({ ...citation }))
+  phase = 'refresh'
+  const refreshPath = `/api/agent-rp/story-workspaces/${encodeURIComponent(created.id)}/sources/${encodeURIComponent(source.id)}/refresh`
+  const refreshedResponse = await invoke(route, 'POST', refreshPath, {
+    format: 0,
+    revision: prepared.revision,
+    sourceId: source.id,
+  })
+  assert.equal(refreshedResponse.status, 200)
+  assert.equal(calls.length, 2)
+  const refreshed = refreshedResponse.body.workspace as StoryWorkspaceSnapshot
+  assert.equal(refreshed.sources.length, prepared.sources.length)
+  assert.equal(refreshed.sources[0]?.id, source.id)
+  assert.equal(refreshed.sources[0]?.content, refreshedContent)
+  assert.deepEqual(refreshed.sources[0]?.origin, {
+    kind: 'url',
+    url: 'https://archive.example.test/chapter-v2',
+    requestedUrl,
+    truncated: true,
+  })
+  assert.deepEqual(refreshed.sources[1], localSource)
+  assert.deepEqual(
+    refreshed.citations.map(citation => ({ id: citation.id, quote: citation.quote })),
+    citationsBeforeRefresh.map(citation => ({ id: citation.id, quote: citation.quote })),
+  )
+  const expectedUniqueLocator = splitStorySourcePassages(refreshed.sources[0]!)
+    .find(passage => passage.text.includes('第一段唯一证据。'))!.locator
+  assert.notEqual(expectedUniqueLocator, uniquePassage.locator)
+  assert.equal(refreshed.citations.find(citation => citation.id === uniqueCitationId)?.locator, expectedUniqueLocator)
+  assert.equal(refreshed.citations.find(citation => citation.id === ambiguousCitationId)?.locator, ambiguousPassage.locator)
+  assert.equal(refreshed.citations.find(citation => citation.id === missingCitationId)?.locator, missingPassage.locator)
+  assert.deepEqual(refreshed.citations.find(citation => citation.id === localCitationId), citationsBeforeRefresh[3])
+  assert.deepEqual(refreshedResponse.body.sourceRefresh, {
+    sourceId: source.id,
+    truncated: true,
+    citationCount: 3,
+    relocatedCitationIds: [uniqueCitationId],
+    ambiguousCitationIds: [ambiguousCitationId],
+    missingCitationIds: [missingCitationId],
+  })
+
+  const callsBeforeConflict = calls.length
+  const stale = await invoke(route, 'POST', refreshPath, {
+    format: 0,
+    revision: prepared.revision,
+    sourceId: source.id,
+  })
+  assert.equal(stale.status, 409)
+  assert.equal(calls.length, callsBeforeConflict)
+  assert.deepEqual(store.get(created.id), refreshed)
+
+  phase = 'throw'
+  const beforeThrownFetch = store.get(created.id)
+  const thrownFetch = await invoke(route, 'POST', refreshPath, {
+    format: 0,
+    revision: beforeThrownFetch.revision,
+    sourceId: source.id,
+  })
+  assert.equal(thrownFetch.status, 502)
+  assert.deepEqual(store.get(created.id), beforeThrownFetch)
+
+  phase = 'missing'
+  const beforeMissingPage = store.get(created.id)
+  const missingPage = await invoke(route, 'POST', refreshPath, {
+    format: 0,
+    revision: beforeMissingPage.revision,
+    sourceId: source.id,
+  })
+  assert.equal(missingPage.status, 502)
+  assert.deepEqual(store.get(created.id), beforeMissingPage)
+
+  const callsBeforeLocalSource = calls.length
+  const localRefresh = await invoke(route, 'POST',
+    `/api/agent-rp/story-workspaces/${encodeURIComponent(created.id)}/sources/${encodeURIComponent(localSource.id)}/refresh`, {
+      format: 0,
+      revision: beforeMissingPage.revision,
+      sourceId: localSource.id,
+    })
+  assert.equal(localRefresh.status, 400)
+  assert.equal(calls.length, callsBeforeLocalSource)
+  assert.deepEqual(store.get(created.id), beforeMissingPage)
 })
 
 test('promotes a research result with fresh page text and its original search provenance', async (context) => {

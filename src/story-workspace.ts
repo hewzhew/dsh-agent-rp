@@ -39,6 +39,7 @@ import {
 } from './roleplay-resource-catalog.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import { flyingChessWorldResourceProvider } from './play-world-resource-provider.ts'
+import { splitStorySourcePassages } from './story-source.ts'
 import type {
   StoryAudience,
   StoryCitation,
@@ -68,6 +69,8 @@ import type {
   StorySource,
   StorySourceOrigin,
   StorySourceKind,
+  StorySourceRefreshReport,
+  StoryUrlSourceOrigin,
   StorySuggestionEndpoint,
   StoryTurnMaterialization,
   StoryWorldActionReceipt,
@@ -221,6 +224,12 @@ export interface StoryCharacterContext {
 export interface StoryCharacterActorBindResult {
   readonly workspace: StoryWorkspaceSnapshot
   readonly sync: StoryCharacterActorSyncReport
+}
+
+/** Persisted workspace plus citation reconciliation from one in-place URL source refresh. */
+export interface StorySourceRefreshResult {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly report: StorySourceRefreshReport
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1853,6 +1862,63 @@ export class StoryWorkspaceStore {
     }, this.worlds)
     this.writeSnapshot(snapshot)
     return this.get(snapshot.id)
+  }
+
+  /** Refresh one directly imported URL source while retaining its id and durable citation snapshots. */
+  refreshUrlSource(
+    id: string,
+    revision: number,
+    sourceId: string,
+    content: string,
+    origin: StoryUrlSourceOrigin,
+  ): StorySourceRefreshResult {
+    const current = this.get(id)
+    this.assertRevision(current, revision)
+    assertId(sourceId, SOURCE_ID_PATTERN, '故事资料')
+    const source = current.sources.find(candidate => candidate.id === sourceId)
+    if (source === undefined) throw new Error('要刷新的网页资料不存在')
+    if (source.origin?.kind !== 'url') throw new Error('只有直接从网址导入的资料可以刷新')
+    const refreshed = normalizeSource({ ...source, content, origin })
+    const passages = splitStorySourcePassages(refreshed)
+    const relocatedCitationIds: string[] = []
+    const ambiguousCitationIds: string[] = []
+    const missingCitationIds: string[] = []
+    const citations = current.citations.map(citation => {
+      if (citation.sourceId !== sourceId) return citation
+      const matches = passages.flatMap(passage => {
+        const offsets: number[] = []
+        for (let offset = passage.text.indexOf(citation.quote); offset >= 0;
+          offset = passage.text.indexOf(citation.quote, offset + 1)) offsets.push(offset)
+        return offsets.map(() => passage)
+      })
+      if (matches.length === 1 && matches[0]!.locator === citation.locator) return citation
+      if (matches.length === 1) {
+        relocatedCitationIds.push(citation.id)
+        return { ...citation, locator: matches[0]!.locator }
+      }
+      if (matches.length === 0) missingCitationIds.push(citation.id)
+      else ambiguousCitationIds.push(citation.id)
+      return citation
+    })
+    const snapshot = normalizeWorkspace({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      sources: current.sources.map(candidate => candidate.id === sourceId ? refreshed : candidate),
+      citations,
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
+    return {
+      workspace: this.get(snapshot.id),
+      report: {
+        sourceId,
+        truncated: refreshed.origin?.kind === 'url' && refreshed.origin.truncated,
+        citationCount: current.citations.filter(citation => citation.sourceId === sourceId).length,
+        relocatedCitationIds,
+        ambiguousCitationIds,
+        missingCitationIds,
+      },
+    }
   }
 
   /** List resource-owned worlds, including recipes whose trusted module is not currently installed. */
