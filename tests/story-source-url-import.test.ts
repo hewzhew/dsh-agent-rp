@@ -8,7 +8,7 @@ import test from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { installStoryWorkspaceHttp } from '../src/story-workspace-http.ts'
-import { splitStorySourcePassages } from '../src/story-source.ts'
+import { findStorySourceQuoteMatches, splitStorySourcePassages } from '../src/story-source.ts'
 import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { createStoryCitationId, createStorySourceId, StoryWorkspaceStore } from '../src/story-workspace.ts'
 import { searchStoryVoiceSourceExcerpts } from '../src/story-voice-retrieval.ts'
@@ -312,7 +312,23 @@ test('refreshes a URL source in place and preserves citation evidence across rel
   assert.equal(refreshed.citations.find(citation => citation.id === uniqueCitationId)?.locator, expectedUniqueLocator)
   assert.equal(refreshed.citations.find(citation => citation.id === ambiguousCitationId)?.locator, ambiguousPassage.locator)
   assert.equal(refreshed.citations.find(citation => citation.id === missingCitationId)?.locator, missingPassage.locator)
+  assert.deepEqual(refreshed.citations.find(citation => citation.id === uniqueCitationId)?.refreshReview, {
+    kind: 'relocated',
+    previousLocator: uniquePassage.locator,
+  })
+  assert.deepEqual(refreshed.citations.find(citation => citation.id === ambiguousCitationId)?.refreshReview, {
+    kind: 'ambiguous',
+    previousLocator: ambiguousPassage.locator,
+  })
+  assert.deepEqual(refreshed.citations.find(citation => citation.id === missingCitationId)?.refreshReview, {
+    kind: 'missing',
+    previousLocator: missingPassage.locator,
+  })
   assert.deepEqual(refreshed.citations.find(citation => citation.id === localCitationId), citationsBeforeRefresh[3])
+  assert.deepEqual(new StoryWorkspaceStore({ root }).get(created.id).citations, refreshed.citations)
+  const ambiguousMatches = findStorySourceQuoteMatches(splitStorySourcePassages(refreshed.sources[0]!), '第二段重复证据。')
+  assert.equal(ambiguousMatches.length, 1)
+  assert.equal(ambiguousMatches[0]?.occurrenceCount, 2)
   assert.deepEqual(refreshedResponse.body.sourceRefresh, {
     sourceId: source.id,
     truncated: true,
@@ -322,6 +338,17 @@ test('refreshes a URL source in place and preserves citation evidence across rel
     missingCitationIds: [missingCitationId],
   })
 
+  const stabilizedResponse = await invoke(route, 'POST', refreshPath, {
+    format: 0,
+    revision: refreshed.revision,
+    sourceId: source.id,
+  })
+  assert.equal(stabilizedResponse.status, 200)
+  const stabilized = stabilizedResponse.body.workspace as StoryWorkspaceSnapshot
+  assert.equal(stabilized.citations.find(citation => citation.id === uniqueCitationId)?.refreshReview, undefined)
+  assert.equal(stabilized.citations.find(citation => citation.id === ambiguousCitationId)?.refreshReview?.kind, 'ambiguous')
+  assert.equal(stabilized.citations.find(citation => citation.id === missingCitationId)?.refreshReview?.kind, 'missing')
+
   const callsBeforeConflict = calls.length
   const stale = await invoke(route, 'POST', refreshPath, {
     format: 0,
@@ -330,7 +357,7 @@ test('refreshes a URL source in place and preserves citation evidence across rel
   })
   assert.equal(stale.status, 409)
   assert.equal(calls.length, callsBeforeConflict)
-  assert.deepEqual(store.get(created.id), refreshed)
+  assert.deepEqual(store.get(created.id), stabilized)
 
   phase = 'throw'
   const beforeThrownFetch = store.get(created.id)
@@ -362,6 +389,21 @@ test('refreshes a URL source in place and preserves citation evidence across rel
   assert.equal(localRefresh.status, 400)
   assert.equal(calls.length, callsBeforeLocalSource)
   assert.deepEqual(store.get(created.id), beforeMissingPage)
+
+  const reviewed = store.get(created.id)
+  const resolved = store.save({
+    ...editable(reviewed),
+    citations: reviewed.citations.map(citation => {
+      if (citation.sourceId !== source.id) return citation
+      const { refreshReview: _refreshReview, ...withoutReview } = citation
+      return citation.id === ambiguousCitationId
+        ? { ...withoutReview, locator: ambiguousMatches[0]!.passage.locator }
+        : withoutReview
+    }),
+  })
+  assert.equal(resolved.citations.find(citation => citation.id === ambiguousCitationId)?.locator, ambiguousMatches[0]?.passage.locator)
+  assert.equal(resolved.citations.every(citation => citation.refreshReview === undefined), true)
+  assert.deepEqual(new StoryWorkspaceStore({ root }).get(created.id).citations, resolved.citations)
 })
 
 test('promotes a research result with fresh page text and its original search provenance', async (context) => {

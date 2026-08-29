@@ -12,6 +12,12 @@ export interface StorySourcePassage {
   readonly text: string
 }
 
+/** Exact occurrences of one quote within a citeable source passage. */
+export interface StorySourceQuoteMatch {
+  readonly passage: StorySourcePassage
+  readonly occurrenceCount: number
+}
+
 /** One source passage with offsets into its normalized LF-only source text. */
 export interface LocatedStorySourcePassage extends StorySourcePassage {
   readonly sourceStart: number
@@ -140,4 +146,18 @@ export function splitLocatedStorySourcePassages(source: StorySource): readonly L
 /** Split one source into bounded passages while retaining the nearest source heading. */
 export function splitStorySourcePassages(source: StorySource): readonly StorySourcePassage[] {
   return splitLocatedStorySourcePassages(source).map(({ ordinal, locator, text }) => ({ ordinal, locator, text }))
+}
+
+/** Find every exact quote occurrence while grouping candidates by citeable passage. */
+export function findStorySourceQuoteMatches(
+  passages: readonly StorySourcePassage[],
+  quote: string,
+): readonly StorySourceQuoteMatch[] {
+  if (quote === '') return []
+  return passages.flatMap(passage => {
+    let occurrenceCount = 0
+    for (let offset = passage.text.indexOf(quote); offset >= 0;
+      offset = passage.text.indexOf(quote, offset + 1)) occurrenceCount += 1
+    return occurrenceCount === 0 ? [] : [{ passage, occurrenceCount }]
+  })
 }
