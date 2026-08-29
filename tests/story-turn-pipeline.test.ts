@@ -830,6 +830,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(characterSystems[0]!, /futureChoice.*下一轮仍会因此改变/u)
+  assert.match(characterSystems[0]!, /futureChoice 是 Host 唯一持久化的内容/u)
   assert.match(characterSystems[0]!, /Host 会把 text 与 futureChoice 合在一起.*丢弃这种复述/u)
   assert.match(directorBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
   assert.match(directorBody, /对话动作：warn/u)

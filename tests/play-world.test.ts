@@ -1334,10 +1334,10 @@ test('keeps the exact world outcome while preserving only private-section charac
                 speech: null,
                 insights: body.includes('# 人物：博丽灵梦')
                   ? [{
-                      kind: 'decision',
-                      text: '灵梦决定继续当前棋局，不再要求作废已结算回合。',
-                      futureChoice: '本轮结束后遇到不利结果时，仍会接受结算并继续这局。',
-                    }]
+                    kind: 'decision',
+                    text: '这局前几手全是小点，飞机全压在基地里，灵梦打算先按兵不动。',
+                    futureChoice: '遇到不利结果时，仍会接受结算并继续这局。',
+                  }]
                   : [],
               })
               : system.includes('剧情导演 Worker')
@@ -1444,8 +1444,8 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
   assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
-  assert.match(result.finalDraft, /## 灵梦视角[\s\S]*继续当前棋局/u)
-  assert.doesNotMatch(result.finalDraft, /错误记录|魔理沙视角|下一回合掷骰/u)
+  assert.match(result.finalDraft, /## 灵梦视角[\s\S]*遇到不利结果时，仍会接受结算并继续这局/u)
+  assert.doesNotMatch(result.finalDraft, /前几手全是小点|飞机全压在基地|错误记录|魔理沙视角|下一回合掷骰/u)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'section' ? [event.data.subjectId] : []), [])
   session.append('assistant/message', {
@@ -1472,7 +1472,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '继续当前棋局')
   assert.equal(store.get(installed.id).characters.find(character => character.id === marisaId)?.state.objective, '')
   assert.deepEqual(materialized?.changes.facts, [{
-    text: '灵梦决定继续当前棋局，不再要求作废已结算回合。',
+    text: '遇到不利结果时，仍会接受结算并继续这局。',
     knownBy: [reimuId],
   }])
   assert.deepEqual(materialized?.changes.nodes, [])
@@ -1487,8 +1487,9 @@ test('keeps the exact world outcome while preserving only private-section charac
     { location: '', condition: '', objective: '', notes: '' },
   ])
   const saved = store.get(installed.id)
-  assert.match(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /不再要求作废/u)
-  assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /不再要求作废/u)
+  assert.match(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /遇到不利结果时/u)
+  assert.doesNotMatch(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /前几手全是小点|飞机全压在基地/u)
+  assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /遇到不利结果时/u)
   assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), true)
 })
