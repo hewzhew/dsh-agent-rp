@@ -129,7 +129,7 @@ Termux 路线面向 ARM64、Android 11 及以上设备，目标是在手机本�
 
 更具体的格式支持与降级方式见 [SillyTavern 兼容说明](docs/sillytavern-compatibility.md)。
 
-遇到脚本加载、世界书 EJS、行动选项、工作区归属或「RP 互通」问题时，先按 [使用与故障排查](docs/troubleshooting.md) 取得对应失败详情；匿名「复制诊断」不能替代具体错误。
+遇到脚本加载、世界书 EJS、行动选项、工作区归属或「RP 互通」问题时，先按 [使用与故障排查](docs/troubleshooting.md) 取得对应失败详情。全局 Debug 默认关闭；开启后，用户主动点击「复制诊断」会在聚合报告中附加当前会话的 Tavern 脚本与世界书错误详情，世界书「复制失败详情」还会附加有长度上限的 EJS 错误名称、消息和调用栈。EJS 模板可以把运行时值写入错误消息；用户分享 Debug 报告前必须检查报告内容。
 
 需要比较大型卡片改动时，可运行不含社区卡片内容的 [合成兼容基准与本地真实卡、预设验收流程](docs/compatibility-benchmark.md)。EJS 的可执行与保留范围见 [EJS 兼容表](docs/ejs-compatibility.md)；后续世界书与插件生态遵循 [安全扩展能力协议](docs/extension-capabilities.md)。独立 DSH 插件可从 [社区插件接入](docs/community-plugin-development.md) 选择 Host 生命周期接口或 Agent RP 工作台 Slot；安装型第三方扩展另按 [SillyTavern 扩展宿主](docs/st-extension-host.md) 的单例生命周期设计。npm `next` 提供经过发布门禁与 provenance 证明的预发布包；源码分支仍只用于贡献和定向验收。
 

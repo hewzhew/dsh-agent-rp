@@ -82,6 +82,10 @@ export interface EjsTemplateContext {
   readonly characterName: string
   readonly userName: string
   readonly messages: readonly string[]
+  /** Primary character-bound World Info name exposed as SillyTavern `charLoreBook`. */
+  readonly characterWorldInfoBookName?: string
+  /** Replayable Unix timestamp in milliseconds; omitted contexts use the Unix epoch. */
+  readonly replayTime?: number
   /** Replayable per-turn entropy; omitted contexts keep nondeterministic APIs disabled. */
   readonly entropy?: string
   readonly transcript?: readonly EjsTemplateMessage[]
@@ -102,10 +106,23 @@ export type EjsTemplateFailureKind =
   | 'resource-unsupported'
   | 'resource-limit'
 
+/** JSON-safe error returned by the isolated EJS runtime for explicit local Debug reports. */
+export interface EjsTemplateErrorDetail {
+  readonly name?: string
+  readonly message: string
+  readonly stack?: string
+  /** At least one runtime-provided field exceeded the local diagnostic limit. */
+  readonly truncated?: true
+}
+
 /** Result of one isolated template evaluation. */
 export type EjsTemplateResult =
   | { readonly ok: true; readonly text: string }
-  | { readonly ok: false; readonly kind: EjsTemplateFailureKind }
+  | {
+    readonly ok: false
+    readonly kind: EjsTemplateFailureKind
+    readonly error?: EjsTemplateErrorDetail
+  }
 
 interface TemplateSegment {
   readonly kind: 'text' | 'code' | 'escaped' | 'raw'
@@ -173,6 +190,8 @@ function compileTemplate(template: string, context: EjsTemplateContext): string 
   const input = JSON.stringify({
     char: context.characterName,
     user: context.userName,
+    charLoreBook: context.characterWorldInfoBookName,
+    dateNow: context.replayTime ?? 0,
     messages: transcriptIsMessagePrefix ? context.messages.slice(transcript.length) : context.messages,
     transcript,
     transcriptIsMessagePrefix,
@@ -204,6 +223,7 @@ function compileTemplate(template: string, context: EjsTemplateContext): string 
     const user = __input.user;
     const charName = char;
     const userName = user;
+    const charLoreBook = __input.charLoreBook;
     const runType = 'generate';
     const __transcript = __input.transcript;
     const messages = __input.transcriptIsMessagePrefix
@@ -428,7 +448,22 @@ function compileTemplate(template: string, context: EjsTemplateContext): string 
     const getWorldInfo = async (...args) => globalThis.__agentRpGetWorldInfo(...args);
     const getwi = getWorldInfo;
     const print = (...values) => { for (const value of values) __append(value); };
-    globalThis.Date = undefined;
+    globalThis.Date = ((NativeDate, now) => {
+      const ReplayableDate = function Date(...args) {
+        if (new.target === undefined) return new NativeDate(now).toUTCString();
+        return Reflect.construct(NativeDate, args.length === 0 ? [now] : args, new.target);
+      };
+      ReplayableDate.prototype = NativeDate.prototype;
+      Object.defineProperty(ReplayableDate.prototype, 'constructor', {
+        configurable: true, writable: true, value: ReplayableDate,
+      });
+      Object.defineProperties(ReplayableDate, {
+        now: { configurable: true, writable: true, value: () => now },
+        parse: { configurable: true, writable: true, value: NativeDate.parse },
+        UTC: { configurable: true, writable: true, value: NativeDate.UTC },
+      });
+      return ReplayableDate;
+    })(globalThis.Date, __input.dateNow);
     if (typeof __input.randomEntropy === 'string') {
       let __randomState = 2166136261;
       for (let __index = 0; __index < __input.randomEntropy.length; __index += 1) {
@@ -461,6 +496,51 @@ function failureKind(value: unknown): EjsTemplateFailureKind {
   if (/out of memory|memory limit/iu.test(message)) return 'memory-limit'
   if (record.name === 'SyntaxError') return 'syntax-error'
   return 'runtime-error'
+}
+
+const MAX_TEMPLATE_ERROR_NAME_LENGTH = 240
+const MAX_TEMPLATE_ERROR_MESSAGE_LENGTH = 2_000
+const MAX_TEMPLATE_ERROR_STACK_LENGTH = 4_000
+
+function boundedTemplateErrorField(value: string, limit: number): { readonly text: string; readonly truncated: boolean } {
+  return value.length <= limit
+    ? { text: value, truncated: false }
+    : { text: `${value.slice(0, limit)}…`, truncated: true }
+}
+
+function templateErrorDetail(value: unknown): EjsTemplateErrorDetail | undefined {
+  if (typeof value === 'object' && value !== null) {
+    const record = value as { readonly name?: unknown; readonly message?: unknown; readonly stack?: unknown }
+    const name = typeof record.name === 'string' && record.name.trim() !== ''
+      ? boundedTemplateErrorField(record.name, MAX_TEMPLATE_ERROR_NAME_LENGTH) : undefined
+    const message = typeof record.message === 'string' && record.message !== ''
+      ? boundedTemplateErrorField(record.message, MAX_TEMPLATE_ERROR_MESSAGE_LENGTH) : undefined
+    const stack = typeof record.stack === 'string' && record.stack !== ''
+      ? boundedTemplateErrorField(record.stack, MAX_TEMPLATE_ERROR_STACK_LENGTH) : undefined
+    if (message !== undefined) return {
+      ...(name === undefined ? {} : { name: name.text }),
+      message: message.text,
+      ...(stack === undefined ? {} : { stack: stack.text }),
+      ...(name?.truncated === true || message.truncated || stack?.truncated === true ? { truncated: true as const } : {}),
+    }
+  }
+  if (typeof value === 'string' && value !== '') {
+    const message = boundedTemplateErrorField(value, MAX_TEMPLATE_ERROR_MESSAGE_LENGTH)
+    return { message: message.text, ...(message.truncated ? { truncated: true as const } : {}) }
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return { message: String(value) }
+  }
+  return undefined
+}
+
+function templateFailure(value: unknown): Extract<EjsTemplateResult, { readonly ok: false }> {
+  const error = templateErrorDetail(value)
+  return {
+    ok: false,
+    kind: failureKind(value),
+    ...(error === undefined ? {} : { error }),
+  }
 }
 
 interface ParsedRegexPattern {
@@ -633,7 +713,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
       if (errorHandle !== undefined) {
         const error = vm.dump(errorHandle)
         errorHandle.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       const promiseHandle = result.value
       if (promiseHandle === undefined) return { ok: false, kind: 'runtime-error' }
@@ -644,7 +724,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
         jobError.dispose()
         jobs.dispose()
         promiseHandle.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       jobs.dispose()
       const settled = vm.getPromiseState(promiseHandle)
@@ -653,7 +733,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
       if (settled.type === 'rejected') {
         const error = vm.dump(settled.error)
         settled.error.dispose()
-        return { ok: false, kind: failureKind(error) }
+        return templateFailure(error)
       }
       const value = vm.dump(settled.value)
       settled.value.dispose()
@@ -661,7 +741,7 @@ export class EjsTemplateEngine implements LorebookRegexEngine {
         ? { ok: true, text: value }
         : { ok: false, kind: 'runtime-error' }
     } catch (error) {
-      return { ok: false, kind: failureKind(error) }
+      return templateFailure(error)
     } finally {
       vm.dispose()
       runtime.dispose()

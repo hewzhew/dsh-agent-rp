@@ -438,6 +438,53 @@ test('preserves native card prompt ordering across experience and actor worlds',
   ])
 })
 
+test('keeps charLoreBook on the character source when standalone World Info is also active', async () => {
+  const source = cardFixture()
+  const raw = structuredClone(source.raw) as {
+    data: { character_book: { entries: Array<Record<string, unknown>> } }
+  }
+  raw.data.character_book.entries[0]!.content = [
+    '<%= charLoreBook %>|',
+    '<%= await getwi(charLoreBook, "绑定资料") %>|',
+    '<%= Date.now() %>',
+  ].join('')
+  raw.data.character_book.entries.push({
+    id: 9,
+    keys: [],
+    secondary_keys: [],
+    content: '角色绑定命中',
+    enabled: false,
+    insertion_order: 9,
+    constant: false,
+    selective: false,
+    position: 'before_char',
+    name: '绑定资料',
+    use_regex: false,
+    extensions: {},
+  })
+  const card = parseCharacterCardJson(JSON.stringify(raw))
+  let seed = createCharacterCardSessionSeed(
+    card,
+    attachment('turn-plan-char-lorebook', '白露.json'),
+    0,
+    card.firstMessage,
+    { transport: 'json' },
+  )
+  seed = appendWorldInfoLibrarySessionSeed(seed, worldAsset(
+    'world-info-00000000000000000000000000000009',
+    '独立规则书',
+    '独立世界书内容。',
+  ))
+  const session = Session.create(SessionId('turn-plan-char-lorebook'), seed)
+  const engine = await EjsTemplateEngine.create()
+  const resolved = resolveSessionRoleplayRuntime({ session, deployment, templateEngineAvailable: true })
+  const plan = prepareRoleplayTurn({ session, deployment, resolved, templateEngine: engine })
+  const replayTime = session.events.at(-1)?.time ?? 0
+
+  assert.deepEqual(plan.world.actorBefore, [`海城|角色绑定命中|${replayTime}`])
+  assert.deepEqual(plan.world.experienceBeforeActor, ['独立世界书内容。'])
+})
+
 test('routes active world depth entries through the shared provider-message plan', () => {
   const source = cardFixture()
   const raw = structuredClone(source.raw) as {

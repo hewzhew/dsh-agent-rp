@@ -18,6 +18,7 @@ import test, { type TestContext } from 'node:test'
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const installer = resolve(repositoryRoot, 'scripts/install-macos.sh')
 const pluginPackageName = '@hewzhew/dsh-agent-rp'
+const legacyPluginPackageName = '@dsh-external/dsh-agent-rp'
 const defaultPluginSource = '@hewzhew/dsh-agent-rp@next'
 const pluginSource = 'github:hewzhew/dsh-agent-rp#fixture'
 
@@ -98,7 +99,11 @@ if (args[0] === 'plugin') {
   let manifest = { dependencies: {}, dsh: { profile: { bundles: [] } } }
   try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) } catch {}
   if (action === 'add') manifest.dependencies['@hewzhew/dsh-agent-rp'] = value
-  if (!manifest.dsh.profile.bundles.includes('@hewzhew/dsh-agent-rp')) {
+  if (action === 'remove') {
+    delete manifest.dependencies[value]
+    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(bundle => bundle !== value)
+  }
+  if (action !== 'remove' && !manifest.dsh.profile.bundles.includes('@hewzhew/dsh-agent-rp')) {
     manifest.dsh.profile.bundles.push('@hewzhew/dsh-agent-rp')
   }
   mkdirSync(profileRoot, { recursive: true })
@@ -184,6 +189,15 @@ function seedProfile(fixture: InstallerFixture, source: string): void {
   }, null, 2) + '\n')
 }
 
+function seedLegacyProfile(fixture: InstallerFixture, source: string): void {
+  const profileRoot = join(fixture.dshHome, 'profiles', 'web')
+  mkdirSync(profileRoot, { recursive: true })
+  writeFileSync(join(profileRoot, 'package.json'), JSON.stringify({
+    dependencies: { [legacyPluginPackageName]: source },
+    dsh: { profile: { bundles: [legacyPluginPackageName] } },
+  }, null, 2) + '\n')
+}
+
 function commandLog(fixture: InstallerFixture): Array<{
   readonly args: string[]
   readonly dshHome: string
@@ -203,6 +217,10 @@ test('desktop installers default to the npm next prerelease', () => {
   assert.match(windows, new RegExp(`PluginSource = '${defaultPluginSource}'`, 'u'))
   for (const source of [macos, linux]) {
     assert.match(source, new RegExp(`PLUGIN_SOURCE="\\$\\{PLUGIN_SOURCE:-${defaultPluginSource}\\}"`, 'u'))
+  }
+  for (const source of [windows, macos, linux]) {
+    assert.match(source, /@dsh-external\/dsh-agent-rp/u)
+    assert.match(source, /remove/u)
   }
 })
 
@@ -302,6 +320,24 @@ test('synchronizes an existing plugin installed from another source', { skip }, 
   assert.deepEqual(commandLog(fixture)[0]?.args, [
     'plugin', '--profile', 'web', 'add', pluginSource,
   ])
+})
+
+test('installs the renamed package before removing the historical package', { skip }, context => {
+  const fixture = createFixture(context)
+  seedLegacyProfile(fixture, 'github:hewzhew/dsh-agent-rp#legacy')
+  const result = runInstaller(fixture)
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(commandLog(fixture).map(command => command.args), [
+    ['plugin', '--profile', 'web', 'add', pluginSource],
+    ['plugin', '--profile', 'web', 'remove', legacyPluginPackageName],
+  ])
+  const manifest = JSON.parse(readFileSync(
+    join(fixture.dshHome, 'profiles', 'web', 'package.json'),
+    'utf8',
+  ))
+  assert.equal(manifest.dependencies[legacyPluginPackageName], undefined)
+  assert.equal(manifest.dependencies[pluginPackageName], pluginSource)
+  assert.deepEqual(manifest.dsh.profile.bundles, [pluginPackageName])
 })
 
 test('does not create a launcher when the Session patch is absent', { skip }, context => {

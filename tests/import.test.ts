@@ -9,7 +9,8 @@ import {
   parseCharacterCardJson,
   parseCharacterCardJsonBytes,
 } from '../src/import/character-card.ts'
-import { activateLorebook, inspectLorebook } from '../src/import/lorebook.ts'
+import { createEjsWorldInfoBooks, EjsTemplateEngine } from '../src/ejs-template.ts'
+import { activateLorebook, inspectLorebook, inspectLorebooks } from '../src/import/lorebook.ts'
 import { readCharacterCardPng } from '../src/import/png.ts'
 
 const base = {
@@ -412,6 +413,73 @@ test('prefers ccv3 over chara in a dual-metadata PNG', () => {
 
   assert.equal(payload.keyword, 'ccv3')
   assert.equal(card.name, 'V3 角色')
+})
+
+test('renders charLoreBook and UTC Date from a synthetic V3 PNG card', async () => {
+  const raw = {
+    spec: 'chara_card_v3',
+    spec_version: '3.0',
+    data: {
+      ...v2Data({ name: '合成 EJS 角色' }),
+      group_only_greetings: [],
+      character_book: {
+        name: '合成角色世界书',
+        extensions: {},
+        entries: [
+          {
+            id: 1,
+            keys: [],
+            secondary_keys: [],
+            content: [
+              '<% const day = new Date(Date.UTC(2024, 1, 29)); %>',
+              '<%= charLoreBook %>|<%= await getwi(charLoreBook, "日期资料") %>|',
+              '<%= [day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()].join("-") %>',
+            ].join(''),
+            enabled: true,
+            insertion_order: 1,
+            constant: true,
+            selective: false,
+            position: 'before_char',
+            name: '日期控制器',
+            use_regex: false,
+            extensions: {},
+          },
+          {
+            id: 2,
+            keys: [],
+            secondary_keys: [],
+            content: '闰日有效',
+            enabled: false,
+            insertion_order: 2,
+            constant: false,
+            selective: false,
+            position: 'before_char',
+            name: '日期资料',
+            use_regex: false,
+            extensions: {},
+          },
+        ],
+      },
+    },
+  }
+  const payload = readCharacterCardPng(cardPng([['ccv3', raw]]))
+  const card = parseCharacterCardJson(payload.json)
+  const lorebook = card.lorebook
+  if (lorebook?.name === undefined) assert.fail('synthetic V3 card lost its named lorebook')
+  const engine = await EjsTemplateEngine.create()
+  const books = [{ id: 'synthetic-card-book', name: lorebook.name, lorebook }]
+  const inspected = inspectLorebooks(books, [], {
+    renderTemplate: engine.createRenderer({
+      characterName: card.name,
+      userName: '测试用户',
+      messages: [],
+      characterWorldInfoBookName: lorebook.name,
+      worldInfoBooks: createEjsWorldInfoBooks(books),
+    }),
+  })
+
+  assert.equal(payload.keyword, 'ccv3')
+  assert.deepEqual(inspected.beforeCharacter, ['合成角色世界书|闰日有效|2024-1-29'])
 })
 
 test('decodes large PNG character metadata without truncation', () => {

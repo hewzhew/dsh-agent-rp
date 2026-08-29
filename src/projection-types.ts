@@ -138,6 +138,7 @@ export interface AgentRpProjection {
         readonly matchedSecondaryKeys: readonly string[]
         readonly approximateTokens: number
         readonly template?: 'rendered' | import('./ejs-template.ts').EjsTemplateFailureKind
+        readonly templateError?: import('./ejs-template.ts').EjsTemplateErrorDetail
         readonly modified: boolean
         readonly deleted: boolean
       }[]

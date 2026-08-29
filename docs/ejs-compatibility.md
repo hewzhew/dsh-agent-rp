@@ -6,6 +6,7 @@ Agent RP 只执行能够从当前 Session 日志确定性重建的模板语义�
 |---|---|---|
 | `<% %>`、`<%= %>`、`<%- %>`、注释与空白裁剪 | 支持 | 包含条件、循环、`print` 和完全在隔离运行时内完成的 Promise |
 | `char`、`user`、`charName`、`userName`、`runType` | 支持 | `runType` 在模型提示词阶段固定为 `generate` |
+| `charLoreBook` | 支持 | 当前角色主绑定世界书具有非空名称时返回该名称，否则仍声明为 `undefined`；独立、全局、聊天世界书及当前求值书不会覆盖它 |
 | `lastMessage`、`lastUserMessage`、`lastCharMessage` 与对应楼层编号 | 支持 | 从当前可见的 user/assistant Session 消息重建；没有匹配消息时内容为空、编号为 `-1` |
 | `getChatMessage`、`getChatMessages` | 支持 | 支持负数楼层、角色筛选、最近数量和闭区间读取，只返回可见消息正文 |
 | `{{char}}`、`<char>`、`{{user}}`、`<user>` | 支持 | 角色名与玩家名在世界书 EJS 编译前替换，与 ST Prompt Template 的世界书处理顺序一致 |
@@ -16,7 +17,9 @@ Agent RP 只执行能够从当前 Session 日志确定性重建的模板语义�
 | `getchar`、`getpreset`、`getqr` | 未执行 | 需要同样的资源身份与递归预算；原始模板仍完整保留 |
 | `activewi`、`injectPrompt`、`activateRegex`、`@@` 装饰器 | 未执行 | 会改变提示词结构或激活顺序，需要独立的 Session 事件和可检查的执行计划 |
 | 页面对象、JQuery、toastr、SillyTavern 全局对象 | 不提供 | 模型提示词模板不得访问 UI、网络或宿主页面 |
-| `Date`、随机数和 Host 异步 API | 不提供 | 保证同一 Session 日志可以重放出相同提示词 |
+| `Date` | 可重放支持 | 支持 `Date.UTC`、`Date.parse`、显式构造与 UTC getter；`new Date()`、`Date.now()` 和函数式 `Date()` 使用当前 Session 边界的已记录时间，独立调用缺少时间时固定为 Unix epoch，不读取宿主实时钟 |
+| 随机数 | 有种子时支持 | 模型轮次使用 Session 身份、边界和待处理消息生成可重放种子；没有种子的独立调用明确失败 |
+| Host 异步 API | 不提供 | 不向模板开放文件、网络、模块或宿主回调 |
 
 模板超过源码、输出、内存、栈、解释器工作量、资源读取或单轮执行次数限制时，只跳过对应模块或世界书条目，并返回不含模板正文的稳定失败类别。`getWorldInfo` 引用含 EJS 的条目时不会泄露未执行标签；递归渲染加入循环检测前会明确归类为不支持。
 

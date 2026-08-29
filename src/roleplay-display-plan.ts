@@ -60,6 +60,8 @@ export type RoleplayDisplayPlan =
     readonly kind: 'render'
     readonly source: 'override' | 'selected-generation' | 'display-regex'
     readonly compilation: CompiledCharacterDisplay
+    /** Tavern message represented by this rendered row, when the projection can identify it. */
+    readonly messageId?: number
   }
 
 /** Input facts owned by the native user-message Chat Node. */
@@ -89,10 +91,11 @@ function messageDepth(messages: readonly RoleplayDisplayMessage[] | undefined, m
   return index < 0 ? undefined : messages.length - index - 1
 }
 
-function overridePlan(value: string): RoleplayDisplayPlan {
+function overridePlan(value: string, messageId: number): RoleplayDisplayPlan {
   return {
     kind: 'render',
     source: 'override',
+    messageId,
     compilation: { segments: [{ kind: 'html', source: value }], diagnostics: [] },
   }
 }
@@ -125,7 +128,7 @@ export function createRoleplayDisplayPlanner(input: {
       const message = alignedMessage ?? messageBySeq.get(seq)
       const messageId = message?.messageId ?? messageIdBySeq.get(seq)
       const override = messageId === undefined ? undefined : overrides.get(messageId)
-      if (override !== undefined) return overridePlan(override)
+      if (override !== undefined) return overridePlan(override, messageId!)
       if (!hasDisplayRules || message?.role !== 'user' || message.text === '') {
         return { kind: 'host' }
       }
@@ -135,7 +138,7 @@ export function createRoleplayDisplayPlanner(input: {
       }, USER_INPUT_PLACEMENT, messageDepth(messages, message.messageId), projection.userName, sharedRegexScripts)
       return rendered === message.text
         ? { kind: 'host' }
-        : { kind: 'render', source: 'display-regex', compilation: compileCharacterDisplay(rendered) }
+        : { kind: 'render', source: 'display-regex', compilation: compileCharacterDisplay(rendered), messageId: message.messageId }
     },
     assistant: ({ finalSeq, blockText, alignedMessage }) => {
       const generation = finalSeq === undefined
@@ -146,7 +149,7 @@ export function createRoleplayDisplayPlanner(input: {
         ?? alignedMessage?.messageId
         ?? (finalSeq === undefined ? undefined : messageIdBySeq.get(finalSeq))
       const override = messageId === undefined ? undefined : overrides.get(messageId)
-      if (override !== undefined) return overridePlan(override)
+      if (override !== undefined) return overridePlan(override, messageId!)
       if (immersive && generation !== undefined) {
         if (finalSeq !== generation.anchorSeq) return { kind: 'hidden', reason: 'unselected-generation' }
         if (selected !== undefined) {
@@ -156,6 +159,7 @@ export function createRoleplayDisplayPlanner(input: {
           }, AI_OUTPUT_PLACEMENT, messageDepth(messages, messageId), projection.userName, sharedRegexScripts)
           return {
             kind: 'render', source: 'selected-generation', compilation: compileCharacterDisplay(rendered),
+            ...(messageId === undefined ? {} : { messageId }),
           }
         }
       }
@@ -168,7 +172,10 @@ export function createRoleplayDisplayPlanner(input: {
       }, AI_OUTPUT_PLACEMENT, messageDepth(messages, messageId), projection.userName, sharedRegexScripts)
       return rendered === raw
         ? { kind: 'host' }
-        : { kind: 'render', source: 'display-regex', compilation: compileCharacterDisplay(rendered) }
+        : {
+            kind: 'render', source: 'display-regex', compilation: compileCharacterDisplay(rendered),
+            ...(messageId === undefined ? {} : { messageId }),
+          }
     },
   }
 }

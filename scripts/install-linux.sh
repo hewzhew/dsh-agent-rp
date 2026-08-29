@@ -11,6 +11,7 @@ REGISTRY="${REGISTRY:-}"
 AGENT_HOST_PORT="${AGENT_HOST_PORT:-3080}"
 
 PLUGIN_PACKAGE_NAME='@hewzhew/dsh-agent-rp'
+LEGACY_PLUGIN_PACKAGE_NAMES=('@dsh-external/dsh-agent-rp')
 AGENT_HOST_VERSION='0.1.1-rc.2'
 MINIMUM_PNPM_MAJOR=11
 RUNNER_FILES=(
@@ -299,6 +300,15 @@ else
   stage 3 "同步 Agent RP 来源（当前：$installed_spec）"
   "$runner_command" plugin --profile web add "$PLUGIN_SOURCE" || die 'Agent RP 来源同步失败'
 fi
+
+for legacy_package_name in "${LEGACY_PLUGIN_PACKAGE_NAMES[@]}"; do
+  if [ -f "$profile_manifest_path" ] \
+    && [ -n "$(json_dependency_spec "$profile_manifest_path" "$legacy_package_name")" ]; then
+    info "迁移历史包名：$legacy_package_name → $PLUGIN_PACKAGE_NAME"
+    "$runner_command" plugin --profile web remove "$legacy_package_name" \
+      || die "无法从 web profile 移除历史包名 $legacy_package_name"
+  fi
+done
 
 stage 4 '验证 web profile 与插件入口'
 

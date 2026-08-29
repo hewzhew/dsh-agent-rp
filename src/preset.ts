@@ -18,12 +18,13 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 export const AGENT_RP_PRESET_ID = 'agent-rp'
 
 const OWNER = '@hewzhew/dsh-agent-rp'
+const LEGACY_OWNERS = new Set(['@dsh-external/dsh-agent-rp'])
 const MANIFEST = '.dsh-agent-rp-owner.json'
 const PRESET_FILES = ['agent.cordis.yml', 'preset.yml'] as const
 type PresetFiles = readonly [composition: string, metadata: string]
 
 interface OwnedPresetManifest {
-  readonly owner: typeof OWNER
+  readonly owner: string
   readonly format: 0
   readonly digest: string
 }
@@ -68,7 +69,8 @@ function readOwnedManifest(directory: string): OwnedPresetManifest {
     throw new Error(`Agent RP preset ${JSON.stringify(directory)} is not managed by ${OWNER}`, { cause: error })
   }
   const record = value as Partial<OwnedPresetManifest> | null
-  if (record?.owner !== OWNER || record.format !== 0 || typeof record.digest !== 'string') {
+  if ((record?.owner !== OWNER && !LEGACY_OWNERS.has(record?.owner ?? ''))
+    || record?.format !== 0 || typeof record.digest !== 'string') {
     throw new Error(`Agent RP preset ${JSON.stringify(directory)} has an invalid ownership manifest`)
   }
   return record as OwnedPresetManifest
@@ -116,7 +118,7 @@ export function installBundledAgentRpPreset(options: PresetInstallOptions = {}):
   if (existsSync(target)) {
     const current = readOwnedManifest(target)
     assertUnmodified(target, current)
-    if (current.digest === sourceDigest) return 'unchanged'
+    if (current.owner === OWNER && current.digest === sourceDigest) return 'unchanged'
   }
 
   const staging = stagePreset(root, files, nextManifest)

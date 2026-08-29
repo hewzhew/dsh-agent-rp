@@ -57,11 +57,15 @@ export interface CardFrameCompileOptions {
   readonly statData?: JsonValue
   /** Active identities used only while projecting state into the isolated view. */
   readonly identity?: SillyTavernIdentityMacroValues
+  /** Active player display name exposed by the isolated chat facade. */
+  readonly userName?: string
   readonly character?: CharacterLibraryDetail
   /** Successful script-runtime markers that a card may use for compatibility checks. */
   readonly compatibilityMarkers?: readonly string[]
   /** Current greeting plus card-owned alternatives exposed without sharing the rest of the transcript. */
   readonly greetingChoices?: CardFrameGreetingChoices
+  /** Ordered visible transcript through the message that owns this isolated frontend. */
+  readonly chat?: CardFrameChatSnapshot
   /** Read-only current-card projection for frontends that inspect their own Tavern Helper scripts. */
   readonly currentCharacter?: {
     readonly name: string
@@ -77,6 +81,16 @@ export interface CardFrameCompileOptions {
 export interface CardFrameGreetingChoices {
   readonly selected: string
   readonly alternatives: readonly string[]
+}
+
+/** Read-only message context exposed to one isolated light frontend. */
+export interface CardFrameChatSnapshot {
+  readonly currentMessageId: number
+  readonly messages: readonly {
+    readonly messageId: number
+    readonly role: 'user' | 'assistant'
+    readonly text: string
+  }[]
 }
 
 /** Select card resource classes that still need local approval. */
@@ -169,7 +183,9 @@ function mvuFrameRuntime(
   statData: JsonValue | undefined,
   compatibilityMarkers: readonly string[] | undefined,
   greetingChoices: CardFrameGreetingChoices | undefined,
+  chat: CardFrameChatSnapshot | undefined,
   currentCharacter: CardFrameCompileOptions['currentCharacter'],
+  userName: string | undefined,
   variableScopes: CardFrameCompileOptions['variableScopes'],
   capabilityToken: string | undefined,
 ): string {
@@ -177,7 +193,11 @@ function mvuFrameRuntime(
   const markers = JSON.stringify(boundedCompatibilityMarkers(compatibilityMarkers))
   const greetingJson = JSON.stringify(greetingChoices ?? null)
     .replace(/</gu, '\\u003c').replace(/\u2028/gu, '\\u2028').replace(/\u2029/gu, '\\u2029')
+  const chatJson = JSON.stringify(chat ?? null)
+    .replace(/</gu, '\\u003c').replace(/\u2028/gu, '\\u2028').replace(/\u2029/gu, '\\u2029')
   const currentCharacterJson = JSON.stringify(currentCharacter ?? null)
+    .replace(/</gu, '\\u003c').replace(/\u2028/gu, '\\u2028').replace(/\u2029/gu, '\\u2029')
+  const userNameJson = JSON.stringify(userName?.trim() || '用户')
     .replace(/</gu, '\\u003c').replace(/\u2028/gu, '\\u2028').replace(/\u2029/gu, '\\u2029')
   const capabilityTokenJson = JSON.stringify(capabilityToken ?? null)
   const scopesJson = JSON.stringify(variableScopes ?? {
@@ -187,7 +207,9 @@ function mvuFrameRuntime(
 var __dshStatData=${json};
 var __dshCompatibilityMarkers=${markers};
 var __dshCardGreetingChoices=${greetingJson};
+var __dshCardChatSnapshot=${chatJson};
 var __dshCurrentCharacter=${currentCharacterJson};
+var __dshCardUserName=${userNameJson};
 var __dshCardScopes=${scopesJson};
 var __dshCardCapabilityToken=${capabilityTokenJson};
 function __dshDeepFreezeCardValue(value,seen){
@@ -214,7 +236,8 @@ window.eventOnce=function(type,listener){var control;control=__dshCardOn(type,fu
 window.eventEmit=__dshCardEmit;
 window.errorCatched=function(fn){return function(){try{var value=fn.apply(this,arguments);if(value&&typeof value.catch==='function')value.catch(console.error)}catch(error){console.error(error)}}};
 window.toastr={info:function(){},success:function(){},warning:function(){},error:function(){}};
-var __dshCardChat=[{message_id:0,message:__dshCardGreetingChoices?.selected??'',mes:__dshCardGreetingChoices?.selected??'',name:'角色',is_user:false,role:'assistant',extra:{},swipe_id:Math.max(0,__dshCardGreetingChoices?.alternatives?.indexOf(__dshCardGreetingChoices.selected)??0),swipes:__dshCardGreetingChoices?.alternatives??[]}];
+var __dshCardChat=(__dshCardChatSnapshot?.messages??[{messageId:0,role:'assistant',text:__dshCardGreetingChoices?.selected??''}]).map(function(value){var text=String(value.text??''),isGreeting=value.messageId===0&&value.role==='assistant'&&text===(__dshCardGreetingChoices?.selected??'');var swipes=isGreeting?__dshCardGreetingChoices?.alternatives??[text]:[text];return {message_id:value.messageId,message:text,mes:text,name:value.role==='user'?__dshCardUserName:__dshCurrentCharacter?.name??'角色',is_user:value.role==='user',role:value.role,extra:{},swipe_id:isGreeting?Math.max(0,swipes.indexOf(text)):0,swipes:swipes}});
+var __dshCardCurrentMessageId=__dshCardChatSnapshot?.currentMessageId??(__dshCardChat.length===0?-1:__dshCardChat[__dshCardChat.length-1].message_id);
 var __dshCardPending=new Map(),__dshCardRequestSequence=0;
 var __dshCardExternalWindows=new Map();
 var __dshCardDeliveredExternalWindowRequests=new Set();
@@ -244,15 +267,17 @@ window.updateVariablesWith=function(updater,option){var current=window.getVariab
 window.insertOrAssignVariables=function(variables,option){return window.updateVariablesWith(function(current){return __dshMergeCardVariables(current,variables)},option)};
 function __dshSetCardCapabilityState(value){document.documentElement.dataset.agentRpCapabilityState=String(value)}
 function __dshCloneCardMessage(message){return Object.assign({},message,{extra:Object.assign({},message.extra),swipes:Array.isArray(message.swipes)?message.swipes.slice():[]})}
-function __dshApplyCardMessage(text,index){__dshCardChat[index].message=text;__dshCardChat[index].mes=text;var swipe=__dshCardChat[index].swipes.indexOf(text);if(swipe>=0)__dshCardChat[index].swipe_id=swipe;__dshCardEmit('mag_before_message_update',index);__dshCardEmit('mvu-variable-update-ended',{stat_data:__dshStatData})}
+function __dshApplyCardMessage(text,index){var message=__dshCardChat[index];message.message=text;message.mes=text;var swipe=message.swipes.indexOf(text);if(swipe>=0)message.swipe_id=swipe;__dshCardEmit('mag_before_message_update',message.message_id);__dshCardEmit('mvu-variable-update-ended',{stat_data:__dshStatData})}
 function __dshCardSendMessage(value){var text=String(value??'');if(!text.trim())return Promise.reject(new Error('消息不能为空'));if(!__dshCardCapabilityToken)return Promise.reject(new Error('当前卡片发送能力不可用'));if(navigator.userActivation&&navigator.userActivation.isActive!==true){__dshSetCardCapabilityState('chat-send-user-activation-required');return Promise.reject(new Error('需要点击后才能发送消息'))}var requestId='card-chat-send-'+(++__dshCardRequestSequence);return new Promise(function(resolve,reject){var timer=setTimeout(function(){if(!__dshCardPending.delete(requestId))return;__dshSetCardCapabilityState('chat-send-timeout');reject(new Error('消息发送超时，请重试'))},30000);__dshCardPending.set(requestId,{kind:'chat-send',resolve:resolve,reject:reject,timer:timer});__dshSetCardCapabilityState('chat-send-pending');parent.postMessage({source:'dsh-agent-rp-card',action:'capability-request',capability:'chat.send',token:__dshCardCapabilityToken,requestId:requestId,value:text},'*')})}
-addEventListener('message',function(event){var message=event.data;if(event.source!==parent||!message||message.source!=='dsh-agent-rp-host')return;if(message.action==='external-window-message'){if(typeof message.requestId!=='string'||typeof message.origin!=='string')return;if(!__dshCardDeliveredExternalWindowRequests.has(message.requestId)){if(__dshCardDeliveredExternalWindowRequests.size>=64)__dshCardDeliveredExternalWindowRequests.delete(__dshCardDeliveredExternalWindowRequests.values().next().value);__dshCardDeliveredExternalWindowRequests.add(message.requestId);dispatchEvent(new MessageEvent('message',{data:message.value,origin:message.origin}))}parent.postMessage({source:'dsh-agent-rp-card',action:'external-window-delivered',token:__dshCardCapabilityToken,requestId:message.requestId},'*');return}if(message.action==='external-window-closed'){var external=__dshCardExternalWindows.get(message.requestId);if(!external)return;external.closed=true;__dshCardExternalWindows.delete(message.requestId);return}if(message.action==='capability-result'&&message.capability==='ui.external-window.open'){var external=__dshCardExternalWindows.get(message.requestId);if(!external)return;if(message.ok!==true){external.closed=true;__dshCardExternalWindows.delete(message.requestId);__dshSetCardCapabilityState('external-window-error')}else __dshSetCardCapabilityState('external-window-open');return}if(message.action!=='capability-result'&&message.action!=='variables-result')return;var pending=__dshCardPending.get(message.requestId);if(!pending)return;__dshCardPending.delete(message.requestId);clearTimeout(pending.timer);if(pending.kind==='variables'){message.ok===true?pending.resolve():pending.reject(new Error(String(message.error??'变量保存失败')));return}if(pending.kind==='identity'){message.ok===true?pending.resolve(message.value):pending.reject(new Error(String(message.error??'本机身份请求失败')));return}if(pending.kind==='chat-send'){__dshSetCardCapabilityState(message.ok===true?'chat-send-result-ok':'chat-send-result-error');message.ok===true?pending.resolve():pending.reject(new Error(String(message.error??'消息发送失败')));return}__dshSetCardCapabilityState(message.ok===true?'greeting-select-result-ok':'greeting-select-result-error');if(message.ok===true){__dshApplyCardMessage(pending.text,pending.index);pending.resolve()}else pending.reject(new Error(String(message.error??'开场切换失败')))});
+function __dshCardCreateMessages(messages,option){if(!Array.isArray(messages)||messages.length!==1)return Promise.reject(new Error('当前卡片只能创建一条消息'));var message=messages[0];if(!message||typeof message!=='object'||Array.isArray(message)||Object.keys(message).some(function(key){return key!=='role'&&key!=='message'})||message.role!=='user'||typeof message.message!=='string'||!message.message.trim())return Promise.reject(new Error('当前卡片只能创建一条非空用户消息'));option=option??{};var insertAt=option.insert_at??option.insert_before??'end';if(insertAt!=='end')return Promise.reject(new Error('当前卡片只能在会话末尾创建消息'));if(!__dshCardCapabilityToken)return Promise.reject(new Error('当前卡片消息创建能力不可用'));if(navigator.userActivation?.isActive!==true){__dshSetCardCapabilityState('user-message-append-user-activation-required');return Promise.reject(new Error('需要点击后才能创建用户消息'))}var text=message.message,requestId='card-user-message-append-'+(++__dshCardRequestSequence);return new Promise(function(resolve,reject){var timer=setTimeout(function(){if(!__dshCardPending.delete(requestId))return;__dshSetCardCapabilityState('user-message-append-timeout');reject(new Error('消息保存超时，请重试'))},30000);__dshCardPending.set(requestId,{kind:'user-message-append',text:text,resolve:resolve,reject:reject,timer:timer});__dshSetCardCapabilityState('user-message-append-pending');parent.postMessage({source:'dsh-agent-rp-card',action:'capability-request',capability:'chat.user-message.append',token:__dshCardCapabilityToken,requestId:requestId,message:text},'*')})}
+addEventListener('message',function(event){var message=event.data;if(event.source!==parent||!message||message.source!=='dsh-agent-rp-host')return;if(message.action==='external-window-message'){if(typeof message.requestId!=='string'||typeof message.origin!=='string')return;if(!__dshCardDeliveredExternalWindowRequests.has(message.requestId)){if(__dshCardDeliveredExternalWindowRequests.size>=64)__dshCardDeliveredExternalWindowRequests.delete(__dshCardDeliveredExternalWindowRequests.values().next().value);__dshCardDeliveredExternalWindowRequests.add(message.requestId);dispatchEvent(new MessageEvent('message',{data:message.value,origin:message.origin}))}parent.postMessage({source:'dsh-agent-rp-card',action:'external-window-delivered',token:__dshCardCapabilityToken,requestId:message.requestId},'*');return}if(message.action==='external-window-closed'){var external=__dshCardExternalWindows.get(message.requestId);if(!external)return;external.closed=true;__dshCardExternalWindows.delete(message.requestId);return}if(message.action==='capability-result'&&message.capability==='ui.external-window.open'){var external=__dshCardExternalWindows.get(message.requestId);if(!external)return;if(message.ok!==true){external.closed=true;__dshCardExternalWindows.delete(message.requestId);__dshSetCardCapabilityState('external-window-error')}else __dshSetCardCapabilityState('external-window-open');return}if(message.action!=='capability-result'&&message.action!=='variables-result')return;var pending=__dshCardPending.get(message.requestId);if(!pending)return;__dshCardPending.delete(message.requestId);clearTimeout(pending.timer);if(pending.kind==='variables'){message.ok===true?pending.resolve():pending.reject(new Error(String(message.error??'变量保存失败')));return}if(pending.kind==='identity'){message.ok===true?pending.resolve(message.value):pending.reject(new Error(String(message.error??'本机身份请求失败')));return}if(pending.kind==='chat-send'){__dshSetCardCapabilityState(message.ok===true?'chat-send-result-ok':'chat-send-result-error');message.ok===true?pending.resolve():pending.reject(new Error(String(message.error??'消息发送失败')));return}if(pending.kind==='user-message-append'){__dshSetCardCapabilityState(message.ok===true?'user-message-append-result-ok':'user-message-append-result-error');if(message.ok===true){var messageId=__dshCardChat.length===0?0:__dshCardChat[__dshCardChat.length-1].message_id+1;__dshCardChat.push({message_id:messageId,message:pending.text,mes:pending.text,name:__dshCardUserName,is_user:true,role:'user',extra:{},swipe_id:0,swipes:[pending.text]});pending.resolve()}else pending.reject(new Error(String(message.error??'消息保存失败')));return}__dshSetCardCapabilityState(message.ok===true?'greeting-select-result-ok':'greeting-select-result-error');if(message.ok===true){__dshApplyCardMessage(pending.text,pending.index);pending.resolve()}else pending.reject(new Error(String(message.error??'开场切换失败')))});
 window.getChatMessages=function(){__dshSetCardCapabilityState('chat-read');return __dshCardChat.map(__dshCloneCardMessage)};
-window.getLastMessageId=function(){return Math.max(-1,__dshCardChat.length-1)};
-window.getCurrentMessageId=window.getLastMessageId;
+window.getLastMessageId=function(){return __dshCardChat.length===0?-1:__dshCardChat[__dshCardChat.length-1].message_id};
+window.getCurrentMessageId=function(){return __dshCardCurrentMessageId};
 window.sendMessage=__dshCardSendMessage;
-window.setChatMessage=function(value,id){var index=Number(id);if(!Number.isSafeInteger(index)||index<0||index>=__dshCardChat.length)index=__dshCardChat.length-1;var text=typeof value==='string'?value:value?.message??value?.mes;if(typeof text!=='string')return Promise.resolve();var greetingIndex=__dshCardGreetingChoices?.alternatives?.indexOf(text)??-1;if(index===0&&greetingIndex>=0&&__dshCardCapabilityToken){if(navigator.userActivation&&navigator.userActivation.isActive!==true){__dshSetCardCapabilityState('greeting-select-user-activation-required');return Promise.reject(new Error('需要点击后才能切换开场'))}return new Promise(function(resolve,reject){var requestId='card-capability-'+(++__dshCardRequestSequence);var timer=setTimeout(function(){if(!__dshCardPending.delete(requestId))return;__dshSetCardCapabilityState('greeting-select-timeout');reject(new Error('开场切换超时，请重试'))},15000);__dshCardPending.set(requestId,{index:index,text:text,resolve:resolve,reject:reject,timer:timer});__dshSetCardCapabilityState('greeting-select-pending');parent.postMessage({source:'dsh-agent-rp-card',action:'capability-request',capability:'greeting.select',token:__dshCardCapabilityToken,requestId:requestId,greetingIndex:greetingIndex},'*')})}__dshSetCardCapabilityState('local-message-update');__dshApplyCardMessage(text,index);return Promise.resolve()};
-window.SillyTavern={chat:__dshCardChat,name1:'用户',name2:__dshCurrentCharacter?.name??'角色',characters:__dshCardCharacters,this_chid:0,characterId:0,groups:[],groupId:null,chatMetadata:{},chat_metadata:{},extensionSettings:{EjsTemplate:{enabled:true}},eventSource:{on:window.eventOn,once:window.eventOnce,emit:window.eventEmit},getChatMessages:window.getChatMessages,setChatMessage:window.setChatMessage,sendMessage:window.sendMessage,getContext:function(){return this}};
+window.createChatMessages=__dshCardCreateMessages;
+window.setChatMessage=function(value,id){var messageId=Number(id),index=__dshCardChat.findIndex(function(message){return message.message_id===messageId});if(!Number.isSafeInteger(messageId)||index<0)index=__dshCardChat.length-1;var text=typeof value==='string'?value:value?.message??value?.mes;if(typeof text!=='string'||index<0)return Promise.resolve();var greetingIndex=__dshCardGreetingChoices?.alternatives?.indexOf(text)??-1;if(__dshCardChat[index].message_id===0&&greetingIndex>=0&&__dshCardCapabilityToken){if(navigator.userActivation&&navigator.userActivation.isActive!==true){__dshSetCardCapabilityState('greeting-select-user-activation-required');return Promise.reject(new Error('需要点击后才能切换开场'))}return new Promise(function(resolve,reject){var requestId='card-capability-'+(++__dshCardRequestSequence);var timer=setTimeout(function(){if(!__dshCardPending.delete(requestId))return;__dshSetCardCapabilityState('greeting-select-timeout');reject(new Error('开场切换超时，请重试'))},15000);__dshCardPending.set(requestId,{index:index,text:text,resolve:resolve,reject:reject,timer:timer});__dshSetCardCapabilityState('greeting-select-pending');parent.postMessage({source:'dsh-agent-rp-card',action:'capability-request',capability:'greeting.select',token:__dshCardCapabilityToken,requestId:requestId,greetingIndex:greetingIndex},'*')})}__dshSetCardCapabilityState('local-message-update');__dshApplyCardMessage(text,index);return Promise.resolve()};
+window.SillyTavern={chat:__dshCardChat,name1:__dshCardUserName,name2:__dshCurrentCharacter?.name??'角色',characters:__dshCardCharacters,this_chid:0,characterId:0,groups:[],groupId:null,chatMetadata:{},chat_metadata:{},extensionSettings:{EjsTemplate:{enabled:true}},eventSource:{on:window.eventOn,once:window.eventOnce,emit:window.eventEmit},getChatMessages:window.getChatMessages,setChatMessage:window.setChatMessage,sendMessage:window.sendMessage,createChatMessages:window.createChatMessages,getContext:function(){return this}};
 window.getContext=function(){return window.SillyTavern.getContext()};
 window.TavernHelper=window;
 window._={
@@ -344,6 +369,7 @@ window.__dshCardResourceMonitor('listener-installed');
 const sandboxFacadeNames = [
   'SillyTavern', 'Mvu', 'getAllVariables', 'waitGlobalInitialized', 'eventOn', 'eventOnce', 'eventEmit',
   'errorCatched', 'toastr', 'getChatMessages', 'getLastMessageId', 'getCurrentMessageId', 'setChatMessage',
+  'createChatMessages',
   'getContext', 'TavernHelper', '_', '$',
 ] as const
 
@@ -406,7 +432,7 @@ function cardFrameSource(source: string, options: CardFrameCompileOptions): stri
   const statData = options.statData === undefined || options.identity === undefined
     ? options.statData
     : projectSillyTavernIdentityMacros(options.statData, options.identity)
-  const head = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: ${allowedImageOrigins}; media-src ${policy('media')}; style-src 'unsafe-inline'${styleOrigins}; script-src 'unsafe-inline'${unsafeEval}${scriptOrigins}; connect-src ${policy('connect')}; font-src ${policy('font')}; frame-src ${policy('frame')};"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1">${cardFrameCompatibility}<script>${cardFrameAppearanceRuntime(options.appearance)}${isolatedCardStorageRuntime()}${mvuFrameRuntime(statData, options.compatibilityMarkers, options.greetingChoices, options.currentCharacter, options.variableScopes, options.capabilityToken)}${resourceViolationRuntime()}window.dshCharacterAssets=Object.freeze(${assetJson}.map(Object.freeze));window.getCharacterAsset=function(type,name){var target=window.dshCharacterAssets.find(function(asset){return asset.type===String(type).toLowerCase()&&(name===undefined||asset.name===String(name))});return target?.url};window.triggerSlash=function(value){parent.postMessage({source:'dsh-agent-rp-card',action:'trigger-slash',token:__dshCardCapabilityToken,value:String(value)},'*')};var __dshLastSize=-1,__dshSizeFrame=0;function __dshReportSize(force){__dshSizeFrame=0;var root=document.documentElement;var body=document.body;var value=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);if(!force&&value===__dshLastSize)return;__dshLastSize=value;parent.postMessage({source:'dsh-agent-rp-card',action:'resize',token:__dshCardCapabilityToken,value:value},'*')}function __dshScheduleSize(force){if(__dshSizeFrame)return;__dshSizeFrame=requestAnimationFrame(function(){__dshReportSize(force===true)})}addEventListener('message',function(event){var message=event.data;if(message&&message.source==='dsh-agent-rp-host'&&message.action==='request-resize')__dshScheduleSize(true)});addEventListener('load',function(){__dshScheduleSize(true)});addEventListener('DOMContentLoaded',function(){var input=document.getElementById('send_textarea');if(!input){input=document.createElement('textarea');input.id='send_textarea';input.hidden=true;document.body.appendChild(input)}input.addEventListener('input',function(){parent.postMessage({source:'dsh-agent-rp-card',action:'draft',token:__dshCardCapabilityToken,value:input.value},'*')});var send=document.getElementById('send_but');if(!send){send=document.createElement('button');send.id='send_but';send.type='button';send.hidden=true;document.body.appendChild(send)}send.addEventListener('click',function(){void __dshCardSendMessage(input.value).then(function(){input.value='';parent.postMessage({source:'dsh-agent-rp-card',action:'draft',token:__dshCardCapabilityToken,value:''},'*')}).catch(console.error)});__dshScheduleSize(true);if(window.ResizeObserver){var resizeObserver=new ResizeObserver(function(){__dshScheduleSize(false)});resizeObserver.observe(document.documentElement);resizeObserver.observe(document.body)}if(window.MutationObserver)new MutationObserver(function(){__dshScheduleSize(false)}).observe(document.body,{attributes:true,childList:true,subtree:true});setTimeout(function(){__dshScheduleSize(true)},250);setTimeout(function(){__dshScheduleSize(true)},2000)});</script>`
+  const head = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: ${allowedImageOrigins}; media-src ${policy('media')}; style-src 'unsafe-inline'${styleOrigins}; script-src 'unsafe-inline'${unsafeEval}${scriptOrigins}; connect-src ${policy('connect')}; font-src ${policy('font')}; frame-src ${policy('frame')};"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1">${cardFrameCompatibility}<script>${cardFrameAppearanceRuntime(options.appearance)}${isolatedCardStorageRuntime()}${mvuFrameRuntime(statData, options.compatibilityMarkers, options.greetingChoices, options.chat, options.currentCharacter, options.userName, options.variableScopes, options.capabilityToken)}${resourceViolationRuntime()}window.dshCharacterAssets=Object.freeze(${assetJson}.map(Object.freeze));window.getCharacterAsset=function(type,name){var target=window.dshCharacterAssets.find(function(asset){return asset.type===String(type).toLowerCase()&&(name===undefined||asset.name===String(name))});return target?.url};window.triggerSlash=function(value){parent.postMessage({source:'dsh-agent-rp-card',action:'trigger-slash',token:__dshCardCapabilityToken,value:String(value)},'*')};var __dshLastSize=-1,__dshSizeFrame=0;function __dshReportSize(force){__dshSizeFrame=0;var root=document.documentElement;var body=document.body;var value=Math.max(root?root.scrollHeight:0,body?body.scrollHeight:0);if(!force&&value===__dshLastSize)return;__dshLastSize=value;parent.postMessage({source:'dsh-agent-rp-card',action:'resize',token:__dshCardCapabilityToken,value:value},'*')}function __dshScheduleSize(force){if(__dshSizeFrame)return;__dshSizeFrame=requestAnimationFrame(function(){__dshReportSize(force===true)})}addEventListener('message',function(event){var message=event.data;if(message&&message.source==='dsh-agent-rp-host'&&message.action==='request-resize')__dshScheduleSize(true)});addEventListener('load',function(){__dshScheduleSize(true)});addEventListener('DOMContentLoaded',function(){var input=document.getElementById('send_textarea');if(!input){input=document.createElement('textarea');input.id='send_textarea';input.hidden=true;document.body.appendChild(input)}input.addEventListener('input',function(){parent.postMessage({source:'dsh-agent-rp-card',action:'draft',token:__dshCardCapabilityToken,value:input.value},'*')});var send=document.getElementById('send_but');if(!send){send=document.createElement('button');send.id='send_but';send.type='button';send.hidden=true;document.body.appendChild(send)}send.addEventListener('click',function(){void __dshCardSendMessage(input.value).then(function(){input.value='';parent.postMessage({source:'dsh-agent-rp-card',action:'draft',token:__dshCardCapabilityToken,value:''},'*')}).catch(console.error)});__dshScheduleSize(true);if(window.ResizeObserver){var resizeObserver=new ResizeObserver(function(){__dshScheduleSize(false)});resizeObserver.observe(document.documentElement);resizeObserver.observe(document.body)}if(window.MutationObserver)new MutationObserver(function(){__dshScheduleSize(false)}).observe(document.body,{attributes:true,childList:true,subtree:true});setTimeout(function(){__dshScheduleSize(true)},250);setTimeout(function(){__dshScheduleSize(true)},2000)});</script>`
   if (/<head(?:\s|>)/iu.test(adapted)) {
     return adapted.replace(/<head([^>]*)>/iu, (_matched, attributes: string) => `<head${attributes}>${head}`)
   }
@@ -428,13 +454,53 @@ function cardFrameCompatibilityShell(source: string, capabilityToken: string | u
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,#chat{background:transparent;border:0;margin:0;min-width:0;padding:0;width:100%}body{overflow:hidden}#agent-rp-card-content{background:transparent;border:0;color-scheme:dark;display:block;height:72px;width:100%}#send_textarea,#send_but{display:none!important}</style></head><body><main id="chat"><iframe id="agent-rp-card-content" title="角色卡界面"></iframe></main><textarea id="send_textarea" aria-hidden="true"></textarea><button id="send_but" type="button" aria-hidden="true"></button><script>(()=>{'use strict';const token=${token};const source=${cardSource};const card=document.getElementById('agent-rp-card-content');const input=document.getElementById('send_textarea');const send=document.getElementById('send_but');let lastHeight=-1;let sendSequence=800000000;let pendingSend;const postHost=message=>parent.postMessage(message,'*');const reportHeight=value=>{const measured=Math.max(72,Math.ceil(Number(value)||0),document.documentElement.scrollHeight,document.body.scrollHeight);if(measured===lastHeight)return;lastHeight=measured;postHost({source:'dsh-agent-rp-card',action:'resize',token,value:measured})};const measureCard=()=>{try{const root=card.contentDocument?.documentElement;const body=card.contentDocument?.body;const height=Math.max(root?.scrollHeight??0,body?.scrollHeight??0);if(height>0)card.style.height=Math.max(72,Math.ceil(height))+'px'}catch{}reportHeight(card.getBoundingClientRect().height)};const installCardObservers=()=>{measureCard();try{const document=card.contentDocument;if(!document)return;if(window.ResizeObserver){const observer=new ResizeObserver(measureCard);if(document.documentElement)observer.observe(document.documentElement);if(document.body)observer.observe(document.body)}if(window.MutationObserver&&document.body)new MutationObserver(measureCard).observe(document.body,{attributes:true,childList:true,subtree:true})}catch{}};input.addEventListener('input',()=>{if(token!==null)postHost({source:'dsh-agent-rp-card',action:'draft',token,value:input.value})});send.addEventListener('click',()=>{const value=String(input.value??'');if(token===null||pendingSend!==undefined||!value.trim())return;if(navigator.userActivation&&navigator.userActivation.isActive!==true){document.documentElement.dataset.agentRpCapabilityState='chat-send-user-activation-required';return}sendSequence=sendSequence>=999999998?800000001:sendSequence+1;pendingSend='card-chat-send-'+sendSequence;document.documentElement.dataset.agentRpCapabilityState='chat-send-pending';postHost({source:'dsh-agent-rp-card',action:'capability-request',capability:'chat.send',token,requestId:pendingSend,value})});addEventListener('message',event=>{const message=event.data;if(event.source===card.contentWindow){if(!message||typeof message!=='object'||message.source!=='dsh-agent-rp-card')return;if(message.action==='resize'&&typeof message.value==='number'&&Number.isFinite(message.value)){card.style.height=Math.max(72,Math.ceil(message.value))+'px';reportHeight(message.value);return}postHost(message);return}if(event.source!==parent||!message||typeof message!=='object'||message.source!=='dsh-agent-rp-host')return;if(message.action==='capability-result'&&message.capability==='chat.send'&&message.requestId===pendingSend){pendingSend=undefined;document.documentElement.dataset.agentRpCapabilityState=message.ok===true?'chat-send-result-ok':'chat-send-result-error';if(message.ok===true){input.value='';if(token!==null)postHost({source:'dsh-agent-rp-card',action:'draft',token,value:''})}}card.contentWindow?.postMessage(message,'*')});card.addEventListener('load',installCardObservers);if(window.ResizeObserver)new ResizeObserver(measureCard).observe(document.getElementById('chat'));if(window.MutationObserver)new MutationObserver(measureCard).observe(document.getElementById('chat'),{attributes:true,childList:true,subtree:true});card.srcdoc=source;setTimeout(measureCard,250);setTimeout(measureCard,2000)})();</script></body></html>`
 }
 
+function cardPlayerActionRelayRuntime(): string {
+  return `<script>
+(()=>{'use strict';
+  const card=document.getElementById('agent-rp-card-content');
+  const playerCapabilities=new Set(['chat.send','chat.user-message.append','greeting.select']);
+  const slashNeedsPlayer=value=>/^\\/(?:trigger\\s*$|send(?:\\s|$)|setinput[\\s\\S]*\\|{1,2}\\s*\\/trigger\\s*$)/iu.test(String(value));
+  let triggerGrantExpiresAt=0;
+  addEventListener('message',event=>{
+    const message=event.data;
+    if(!message||typeof message!=='object')return;
+    if(event.source===parent){
+      if(message.source==='dsh-agent-rp-host'&&message.action==='capability-result'&&message.capability==='chat.user-message.append'&&message.ok===true)triggerGrantExpiresAt=Date.now()+30000;
+      return;
+    }
+    if(event.source!==card.contentWindow||message.source!=='dsh-agent-rp-card')return;
+    delete message.playerAction;
+    const capabilityAction=message.action==='capability-request'&&playerCapabilities.has(message.capability);
+    const slashAction=message.action==='trigger-slash'&&slashNeedsPlayer(message.value);
+    if(!capabilityAction&&!slashAction)return;
+    const activated=navigator.userActivation?.isActive===true;
+    let triggerGranted=false;
+    if(message.action==='trigger-slash'&&/^\\/trigger\\s*$/iu.test(String(message.value))&&triggerGrantExpiresAt>=Date.now()){
+      triggerGranted=true;
+      triggerGrantExpiresAt=0;
+    }
+    if(activated){message.playerAction=true;return;}
+    if(triggerGranted)return;
+    event.stopImmediatePropagation();
+    if(capabilityAction&&typeof message.requestId==='string')card.contentWindow?.postMessage({source:'dsh-agent-rp-host',action:'capability-result',capability:message.capability,requestId:message.requestId,ok:false,error:'需要点击后才能执行卡片操作'},'*');
+  },true);
+})();
+</script>`
+}
+
 /**
  * Place a card document behind a cross-origin data: shell. The shell remains
  * isolated from DSH while its nested srcdoc can use a bounded parent.document
  * surface for legacy Tavern input controls.
  */
 export function cardFrameCompatibilityUrl(source: string, capabilityToken?: string): string {
-  const bytes = new TextEncoder().encode(cardFrameCompatibilityShell(source, capabilityToken))
+  const shell = cardFrameCompatibilityShell(source, capabilityToken).replace(
+    '<script>(()=>', `${cardPlayerActionRelayRuntime()}<script>(()=>`,
+  ).replace(
+    "capability:'chat.send',token,requestId:pendingSend,value",
+    "capability:'chat.send',token,requestId:pendingSend,playerAction:true,value",
+  )
+  const bytes = new TextEncoder().encode(shell)
   let binary = ''
   for (let offset = 0; offset < bytes.length; offset += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))

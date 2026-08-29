@@ -1,8 +1,9 @@
 /** Content-free local compatibility audit for one private Character Card. */
 
 import { readFileSync } from 'node:fs'
-import { extname } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { pathToFileURL } from 'node:url'
 import {
   cardRemoteResourceApprovalKey, cardRemoteResourceRequirements,
 } from '../src/card-remote-resource.ts'
@@ -34,6 +35,8 @@ import {
 } from '../src/extension-capability.ts'
 
 type Counter = Record<string, number>
+
+const auditReplayTime = Date.UTC(2026, 0, 1)
 
 /** Content-free result printed by the local card audit command. */
 export interface CharacterCardCompatibilityAudit {
@@ -148,6 +151,7 @@ export async function auditCharacterCardCompatibility(
   const engine = await EjsTemplateEngine.create()
   const worldInfoBooks = card.lorebook === undefined ? [] : [{
     id: 'character-card',
+    ...(card.lorebook.name === undefined ? {} : { name: card.lorebook.name }),
     entries: card.lorebook.entries.map(entry => ({
       sourceId: entry.sourceId,
       ...(entry.name === undefined ? {} : { name: entry.name }),
@@ -159,6 +163,8 @@ export async function auditCharacterCardCompatibility(
   const context = {
     characterName: 'Character',
     userName: 'User',
+    ...(card.lorebook?.name === undefined ? {} : { characterWorldInfoBookName: card.lorebook.name }),
+    replayTime: auditReplayTime,
     entropy: 'agent-rp-private-card-compat-v1',
     messages: ['Synthetic user message', 'Synthetic assistant message'],
     transcript: [
@@ -340,9 +346,18 @@ export async function auditCharacterCardCompatibility(
   }
 }
 
-const [path] = process.argv.slice(2).filter(argument => argument !== '--')
-if (path === undefined || process.argv.slice(2).filter(argument => argument !== '--').length !== 1) {
-  throw new Error('usage: pnpm run audit:card -- <private-card.png|json|charx>')
+async function main(): Promise<void> {
+  const inputs = process.argv.slice(2).filter(argument => argument !== '--')
+  const [path] = inputs
+  if (path === undefined || inputs.length !== 1) {
+    throw new Error('usage: pnpm run audit:card -- <private-card.png|json|charx>')
+  }
+  const report = await auditCharacterCardCompatibility(path, readFileSync(path))
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 }
-const report = await auditCharacterCardCompatibility(path, readFileSync(path))
-process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+
+const entry = process.argv[1]
+if (entry !== undefined && basename(entry).startsWith('audit-card-compat.')
+  && pathToFileURL(resolve(entry)).href === import.meta.url) {
+  await main()
+}

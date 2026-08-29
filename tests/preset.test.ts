@@ -48,6 +48,22 @@ test('installs one idempotent managed preset', (context) => {
   assert.match(readFileSync(join(root, 'agent-rp', 'preset.yml'), 'utf8'), /角色会话/u)
 })
 
+test('migrates the managed preset owner without replacing local content', (context) => {
+  const root = temporaryRoot()
+  context.after(() => rmSync(root, { recursive: true, force: true }))
+
+  assert.equal(installBundledAgentRpPreset({ presetRoot: root, sourceDir: SOURCE }), 'created')
+  const manifestPath = join(root, 'agent-rp', '.dsh-agent-rp-owner.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  writeFileSync(manifestPath, `${JSON.stringify({
+    ...manifest,
+    owner: '@dsh-external/dsh-agent-rp',
+  }, null, 2)}\n`, 'utf8')
+
+  assert.equal(installBundledAgentRpPreset({ presetRoot: root, sourceDir: SOURCE }), 'updated')
+  assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).owner, '@hewzhew/dsh-agent-rp')
+})
+
 test('refuses to replace a locally edited managed preset', (context) => {
   const root = temporaryRoot()
   context.after(() => rmSync(root, { recursive: true, force: true }))

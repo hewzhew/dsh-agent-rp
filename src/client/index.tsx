@@ -164,16 +164,23 @@ import {
 } from './character-library-client.ts'
 import { CharacterContentEditor } from './character-content-editor.tsx'
 import {
-  parseCardCapabilityRequest, parseCardChatSendCapabilityRequest, parseCardExternalWindowCapabilityRequest,
+  parseCardCapabilityRequest, parseCardChatSendCapabilityRequest,
+  parseCardExternalWindowCapabilityRequest,
   parseCardExternalWindowControlRequest, parseCardExternalWindowDeliveryReport,
   parseCardNativeIdentityCapabilityRequest,
   parseCardResourceBlockedReport, parseCardRuntimeReport,
+  parseCardUserMessageAppendCapabilityRequest,
   parseCardVariableReplaceRequest,
 } from './card-capability.ts'
+import { CardPlayerActionCoordinator } from './card-player-action.ts'
 import {
   collectAgentRpBrowserCompatibilitySnapshot,
   installAgentRpBrowserCompatibilityDiagnostic,
 } from './compatibility-diagnostic.ts'
+import {
+  collectAgentRpCopiedDiagnostic,
+  serializeAgentRpCopiedDiagnostic,
+} from './debug-diagnostic-report.ts'
 import {
   AgentRpRuntimeDiagnosticRegistry,
   createAgentRpRuntimeDiagnosticSource,
@@ -564,6 +571,7 @@ interface PreparedChatMigration {
 
 type HeaderProps = PropsRuntime<'conversation.session.header.actions'> & {
   readonly runtimeDiagnostics: AgentRpRuntimeDiagnosticRegistry
+  readonly workspaceSettings: WorkspaceSettingsSource
   readonly loadAvatar: (attachmentId: string) => Promise<string | undefined>
   readonly renameSession: (sessionId: SessionId, title: string) => Promise<void>
   readonly configurePreset: (sessionId: SessionId, request: PresetConfigurationRequest) => Promise<void>
@@ -4074,6 +4082,27 @@ function WorkspaceSettingsSection({
         </div>
       </div>
     </details>
+    <section style={{
+      border: '1px solid var(--dsw-alias-border-l2, #3d3d43)', borderRadius: '12px', marginBottom: '22px',
+      padding: '14px',
+    }}>
+      <h3 style={{ fontSize: '13px', margin: '0 0 7px' }}>诊断 Debug</h3>
+      <label style={{
+        alignItems: 'flex-start', cursor: writable ? 'pointer' : 'default', display: 'flex', gap: '10px',
+      }}>
+        <input type="checkbox" checked={settings.debug.enabled} disabled={!writable} onChange={event => {
+          write({ ...settings, debug: { enabled: event.target.checked } })
+        }} />
+        <span>
+          <strong style={{ display: 'block', fontSize: '13px', fontWeight: 580 }}>
+            在诊断复制中包含详细错误信息
+          </strong>
+          <span style={{ display: 'block', fontSize: '12px', lineHeight: 1.55, marginTop: '3px', opacity: .56 }}>
+            开启后，“复制诊断”会包含失败脚本和世界书错误，世界书“复制失败详情”还会包含有长度上限的 EJS 错误名称、消息和调用栈。错误消息可能包含模板运行时值；截断会在报告中明确标记。诊断不会自动上传。
+          </span>
+        </span>
+      </label>
+    </section>
     <NativeIdentitySettingsPanel />
     <TurnWorkerSettingsPanel settings={settings} writable={writable} onSave={write} loadModelCatalog={loadModelCatalog} />
     <ToolStrategySettingsPanel settings={settings} writable={writable} onSave={write} />
@@ -4260,10 +4289,16 @@ function RoleplayHeader({
   startCharacterSession, exportChat,
   listMemory, manageMemory, manageState, manageTurnMode,
   listPresets, listPersonas, savePersona, deletePersona, applyPersona, loadModelCapabilities, runtimeDiagnostics,
+  workspaceSettings,
 }: HeaderProps) {
   const summary = useSessions(state => state.byId[sessionId])
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
+  const debugEnabled = useSyncExternalStore(
+    workspaceSettings.subscribe,
+    workspaceSettings.getSnapshot,
+    workspaceSettings.getSnapshot,
+  ).value.debug.enabled
   const [open, setOpen] = useState(false)
   const [statusOpen, setStatusOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(false)
@@ -4685,6 +4720,7 @@ function RoleplayHeader({
           onLibrary={request => managePresetLibrary(sessionId, request)}
         />)}
     {worldInfoOpen && <WorldInfoManagerDialog
+      debugEnabled={debugEnabled}
       worldInfo={projection.worldInfo}
       onClose={() => { setWorldInfoOpen(false) }}
       listWorldInfos={listWorldInfos}
@@ -5181,7 +5217,8 @@ function WorldInfoLibraryAttachDialog({ books, listWorldInfos, onAttach, onClose
   </div>
 }
 
-function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, onImport, onSave }: {
+function WorldInfoManagerDialog({ debugEnabled, worldInfo, listWorldInfos, onAttach, onClose, onImport, onSave }: {
+  readonly debugEnabled: boolean
   readonly worldInfo: WorldInfoProjection
   readonly listWorldInfos: HeaderProps['listWorldInfos']
   readonly onAttach: (importId: string) => Promise<void>
@@ -5220,7 +5257,7 @@ function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, 
   const enabledCount = allEntries.filter(candidate => candidate.enabled && !candidate.deleted).length
   const blockedCount = allEntries.filter(candidate => !candidate.deleted
     && (candidate.compatibilityBlockers.length > 0 || candidate.hasDecorators)).length
-  const failureReport = worldInfoFailureReport(worldInfo.books)
+  const failureReport = worldInfoFailureReport(worldInfo.books, { includeDebugErrors: debugEnabled })
   useEffect(() => { setCopyFailureNotice(undefined) }, [failureReport])
   const mutate = (request: WorldInfoConfigurationRequest, after?: () => void): void => {
     setSaving(true)
@@ -5276,7 +5313,9 @@ function WorldInfoManagerDialog({ worldInfo, listWorldInfos, onAttach, onClose, 
           {importing ? '导入中…' : '从文件导入'}
         </button>
         {failureReport !== undefined && <button type="button" data-agent-rp-world-info-copy-failures
-          title="复制包含世界书名、条目标识和稳定失败类别的详情；发送前请检查内容"
+          title={debugEnabled
+            ? '复制包含世界书标识、失败类别和 EJS 运行时错误的详情；发送前请检查内容'
+            : '复制包含世界书名、条目标识和稳定失败类别的详情；开启全局 Debug 后可包含 EJS 运行时错误'}
           onClick={() => {
             if (navigator.clipboard === undefined) {
               setCopyFailureNotice('无法复制')
@@ -9290,11 +9329,12 @@ function TavernStatusPanels({ projection }: { readonly projection: AgentRpProjec
 }
 
 function TavernScriptRuntime({
-  characterDisplayRegexScripts, ctx, inputActions, onCompatibilityMarkersChange, onDisplayOverride, projection, runGeneration, runModelList, runMutation,
+  characterDisplayRegexScripts, ctx, debugEnabled, inputActions, onCompatibilityMarkersChange, onDisplayOverride, projection, runGeneration, runModelList, runMutation,
   runPresetConfiguration, runPromptPreview, runTrigger, sessionId, runtimeDiagnostics,
 }: {
   readonly characterDisplayRegexScripts?: readonly ImportedRegexScript[]
   readonly ctx: Context
+  readonly debugEnabled: boolean
   readonly inputActions: ComposerDockProps['inputActions']
   readonly onCompatibilityMarkersChange: (markers: readonly string[]) => void
   readonly onDisplayOverride: (scriptId: string, messageId: number, value: string) => void
@@ -11183,7 +11223,9 @@ function TavernScriptRuntime({
               textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>{entry.script.name || '未命名脚本'}</button>)}
           </div>
-          <button type="button" aria-live="polite" title="复制不含角色名、正文、脚本源码和 URL 的兼容诊断" onClick={() => {
+          <button type="button" aria-live="polite" title={debugEnabled
+            ? '复制包含失败脚本和世界书错误详情的兼容诊断；发送前请检查内容'
+            : '复制不含角色名、正文、脚本源码和 URL 的兼容诊断'} onClick={() => {
             if (navigator.clipboard === undefined) {
               setDiagnosticNotice('无法复制')
               return
@@ -11197,10 +11239,15 @@ function TavernScriptRuntime({
                 ...snapshot,
                 session: { ...snapshot.session, turns },
               }
-              const report = JSON.stringify(collectAgentRpBrowserCompatibilitySnapshot(
+              const snapshotWithChecks = collectAgentRpBrowserCompatibilitySnapshot(
                 document,
                 withTurns,
-              ), null, 2)
+              )
+              const report = serializeAgentRpCopiedDiagnostic(collectAgentRpCopiedDiagnostic(snapshotWithChecks, {
+                debugEnabled,
+                tavernScripts: localScriptStatuses,
+                worldInfoBooks: projection.worldInfo.books,
+              }))
               return navigator.clipboard.writeText(report)
             }).then(() => {
               setDiagnosticNotice('诊断已复制')
@@ -11301,6 +11348,7 @@ const chipStyle = {
 function roleplayComposerDockComponent(
   ctx: Context,
   runtimeDiagnostics: AgentRpRuntimeDiagnosticRegistry,
+  workspaceSettings: WorkspaceSettingsSource,
   runImageGeneration: RunImageGeneration,
   runTavernMutation: RunTavernMutation,
   runTavernGeneration: RunTavernGeneration,
@@ -11316,6 +11364,11 @@ function roleplayComposerDockComponent(
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
   const chat = useChat(state => state)
+  const debugEnabled = useSyncExternalStore(
+    workspaceSettings.subscribe,
+    workspaceSettings.getSnapshot,
+    workspaceSettings.getSnapshot,
+  ).value.debug.enabled
   const viewMode = useRoleplayViewMode(sessionId)
   const [drawOpen, setDrawOpen] = useState(false)
   const [displayOverrides, setDisplayOverrides] = useState<ReadonlyMap<number, string>>(() => new Map())
@@ -11585,8 +11638,7 @@ function roleplayComposerDockComponent(
       readonly root: Root
       signature: string
     }>()
-    const pendingCardMutations = new WeakSet<Window>()
-    const pendingCardSends = new WeakSet<Window>()
+    const cardPlayerActions = new CardPlayerActionCoordinator<Window>()
     const cardVariableMutationQueues = new WeakMap<Window, Promise<void>>()
     const hiddenTranscriptDetails = new Map<HTMLElement, { readonly display: string; readonly priority: string }>()
     const legacyConversationNotices = new Set<HTMLElement>()
@@ -11782,19 +11834,47 @@ function roleplayComposerDockComponent(
           respond(false, '当前角色会话尚未准备好发送消息')
           return
         }
-        if (pendingCardSends.has(target)) {
-          respond(false, '上一条卡片消息仍在发送')
-          return
-        }
-        pendingCardSends.add(target)
         const variableWrites = cardVariableMutationQueues.get(target) ?? Promise.resolve()
-        void variableWrites.catch(() => undefined).then(() => conversation.send(chatSendRequest.value)).then(() => {
-          respond(true)
-        }, reason => {
-          ctx.logger.warn(`agent-rp: card chat send failed: ${String(reason)}`)
-          respond(false, '消息发送失败')
-        }).finally(() => {
-          pendingCardSends.delete(target)
+        void cardPlayerActions.run(target, chatSendRequest.playerAction, () => (
+          variableWrites.catch(() => undefined).then(() => conversation.send(chatSendRequest.value))
+        )).then(result => {
+          if (result.status === 'completed') respond(true)
+          else if (result.status === 'activation-required') respond(false, '需要点击后才能发送消息')
+          else if (result.status === 'busy') respond(false, '上一项卡片操作仍在进行')
+          else {
+            ctx.logger.warn(`agent-rp: card chat send failed: ${String(result.reason)}`)
+            respond(false, '消息发送失败')
+          }
+        })
+        return
+      }
+      const userMessageAppendRequest = parseCardUserMessageAppendCapabilityRequest(event.data)
+      if (userMessageAppendRequest !== undefined) {
+        const sourceFrame = registeredCardFrame(userMessageAppendRequest.token, event.source)
+        if (sourceFrame === undefined) return
+        sourceFrame.dataset.agentRpCapabilityRequest = userMessageAppendRequest.capability
+        const target = event.source as Window
+        const respond = (ok: boolean, error?: string): void => {
+          target.postMessage({
+            source: 'dsh-agent-rp-host', action: 'capability-result', capability: 'chat.user-message.append',
+            requestId: userMessageAppendRequest.requestId, ok,
+            ...(error === undefined ? {} : { error }),
+          }, '*')
+        }
+        const variableWrites = cardVariableMutationQueues.get(target) ?? Promise.resolve()
+        void cardPlayerActions.run(target, userMessageAppendRequest.playerAction, () => variableWrites.catch(() => undefined).then(() => (
+          runTavernMutation(sessionId, {
+            format: 0, operation: 'create-chat-messages',
+            messages: [{ role: 'user', message: userMessageAppendRequest.message }], insertAt: 'end',
+          })
+        )), { grantTrigger: true }).then(result => {
+          if (result.status === 'completed') respond(true)
+          else if (result.status === 'activation-required') respond(false, '需要点击后才能创建用户消息')
+          else if (result.status === 'busy') respond(false, '上一项卡片操作仍在进行')
+          else {
+            ctx.logger.warn(`agent-rp: card user message append failed: ${String(result.reason)}`)
+            respond(false, '卡片用户消息保存失败')
+          }
         })
         return
       }
@@ -11817,20 +11897,16 @@ function roleplayComposerDockComponent(
           respond(false, '这条开场已不属于当前角色卡')
           return
         }
-        if (pendingCardMutations.has(target)) {
-          respond(false, '正在切换开场')
-          return
-        }
-        pendingCardMutations.add(target)
-        void runTavernMutation(sessionId, {
+        void cardPlayerActions.run(target, capabilityRequest.playerAction, () => runTavernMutation(sessionId, {
           format: 0, operation: 'set-chat-messages', messages: [{ message_id: 0, message: selectedGreeting }],
-        }).then(() => {
-          respond(true)
-        }, reason => {
-          ctx.logger.warn(`agent-rp: card greeting switch failed: ${String(reason)}`)
-          respond(false, '开场切换失败')
-        }).finally(() => {
-          pendingCardMutations.delete(target)
+        })).then(result => {
+          if (result.status === 'completed') respond(true)
+          else if (result.status === 'activation-required') respond(false, '需要点击后才能切换开场')
+          else if (result.status === 'busy') respond(false, '上一项卡片操作仍在进行')
+          else {
+            ctx.logger.warn(`agent-rp: card greeting switch failed: ${String(result.reason)}`)
+            respond(false, '开场切换失败')
+          }
         })
         return
       }
@@ -11872,6 +11948,7 @@ function roleplayComposerDockComponent(
       const message = event.data as {
         readonly source?: unknown
         readonly action?: unknown
+        readonly playerAction?: unknown
         readonly token?: unknown
         readonly value?: unknown
       }
@@ -11906,20 +11983,36 @@ function roleplayComposerDockComponent(
         return
       }
       if (command?.kind === 'trigger') {
-        void runTavernTrigger(sessionId).catch((reason: unknown) => {
-          ctx.logger.warn(`agent-rp: Tavern /trigger failed: ${String(reason)}`)
+        void cardPlayerActions.trigger(
+          event.source as Window, message.playerAction === true, () => runTavernTrigger(sessionId),
+        ).then(result => {
+          if (result.status === 'failed') {
+            ctx.logger.warn(`agent-rp: card /trigger failed: ${String(result.reason)}`)
+          } else if (result.status === 'activation-required') {
+            sourceFrame.dataset.agentRpCapabilityRequest = 'trigger-user-activation-required'
+          }
         })
         return
       }
       if (command?.kind !== 'send' && command?.kind !== 'set-input') return
       const scoped = ctx.sessions.scope(sessionId)
       const conversation = scoped?.get('conversation') as IConversation | undefined
-      void conversation?.send(command.text)
+      if (conversation === undefined) return
+      void cardPlayerActions.run(
+        event.source as Window, message.playerAction === true, () => conversation.send(command.text),
+      ).then(result => {
+        if (result.status === 'failed') {
+          ctx.logger.warn(`agent-rp: card slash send failed: ${String(result.reason)}`)
+        } else if (result.status === 'activation-required') {
+          sourceFrame.dataset.agentRpCapabilityRequest = 'slash-send-user-activation-required'
+        }
+      })
     }
     const mountRenderedDisplay = (
       item: HTMLElement,
       original: HTMLElement,
       compilation: CompiledCharacterDisplay,
+      currentMessageId: number | undefined,
       activeProjection: AgentRpProjection,
       activeCharacterDetail: CharacterLibraryDetail | undefined,
       activeCompatibilityMarkers: readonly string[],
@@ -11928,12 +12021,26 @@ function roleplayComposerDockComponent(
       const appearance = captureCardFrameAppearance(original)
       const greetingChoices = cardFrameGreetingChoices(activeProjection, activeCharacterDetail)
       const activeCharacterScripts = activeTavernScripts(activeProjection, 'character')
+      const visibleMessages = activeProjection.tavern?.messages.filter(message => !message.isHidden) ?? []
+      const currentMessageIndex = currentMessageId === undefined
+        ? -1
+        : visibleMessages.findIndex(message => message.messageId === currentMessageId)
+      const chat = currentMessageIndex < 0 ? undefined : {
+        currentMessageId: currentMessageId!,
+        messages: visibleMessages.slice(0, currentMessageIndex + 1).map(message => ({
+          messageId: message.messageId,
+          role: message.role,
+          text: message.text,
+        })),
+      }
       const signature = JSON.stringify([
         compilation,
+        chat,
         appearance,
         activeProjection.mvu?.statData,
         activeProjection.tavern?.scopes,
         activeProjection.characterName,
+        activeProjection.userName,
         activeCharacterDetail?.id,
         activeCharacterDetail?.imageAssets,
         activeCharacterDetail?.displayExtensions.filter(extension => extension.enabled),
@@ -11968,12 +12075,14 @@ function roleplayComposerDockComponent(
         mount.root.render(<CharacterDisplay
           appearance={appearance}
           capabilityToken={mount.capabilityToken}
+          {...(chat === undefined ? {} : { chat })}
           compilation={compilation}
           statData={activeProjection.mvu?.statData}
           characterName={activeProjection.characterName}
           compatibilityMarkers={activeCompatibilityMarkers}
           tavernHelperScripts={activeCharacterScripts}
           {...(activeProjection.tavern === undefined ? {} : { variableScopes: activeProjection.tavern.scopes })}
+          {...(activeProjection.userName === undefined ? {} : { userName: activeProjection.userName })}
           {...(greetingChoices === undefined ? {} : { greetingChoices })}
           {...(activeCharacterDetail === undefined ? {} : { character: activeCharacterDetail })}
           onFrameRegistration={registerFrame}
@@ -12098,7 +12207,7 @@ function roleplayComposerDockComponent(
         const plan = displayPlanner.user({ seq, ...(alignedMessage === undefined ? {} : { alignedMessage }) })
         if (plan.kind === 'host') restoreHostDisplay(item, original)
         else if (plan.kind === 'render') mountRenderedDisplay(
-          item, original, plan.compilation, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
+          item, original, plan.compilation, plan.messageId, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
         )
       }
       for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="assistant-step"]')) {
@@ -12123,7 +12232,7 @@ function roleplayComposerDockComponent(
         if (original === null) continue
         if (plan.kind === 'host') restoreHostDisplay(item, original)
         else mountRenderedDisplay(
-          item, original, plan.compilation, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
+          item, original, plan.compilation, plan.messageId, activeProjection, activeCharacterDetail, activeCompatibilityMarkers,
         )
       }
       if (activeViewMode === 'immersive') {
@@ -12437,7 +12546,7 @@ function roleplayComposerDockComponent(
           </>}
       </div>
     </section></div>}
-    <TavernScriptRuntime key={sessionId} ctx={ctx} inputActions={inputActions}
+    <TavernScriptRuntime key={sessionId} ctx={ctx} debugEnabled={debugEnabled} inputActions={inputActions}
       {...(storedCharacterRuntime === undefined ? {} : { characterDisplayRegexScripts: storedCharacterRuntime.displayRegexScripts })}
       runtimeDiagnostics={runtimeDiagnostics}
       onCompatibilityMarkersChange={onCompatibilityMarkersChange} onDisplayOverride={onDisplayOverride} projection={projection}
@@ -13433,7 +13542,7 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions', id: 'agent-rp-character-header', order: -100,
-  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} loadAvatar={loadAvatar} renameSession={renameSession} configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset} managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo} attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters} readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter} importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration} prepareRpDistributionChatMigration={prepareRpDistributionChatMigration} launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory} manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode} startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks} importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack} listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona} deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
+  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} workspaceSettings={workspaceSettings} loadAvatar={loadAvatar} renameSession={renameSession} configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset} managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo} attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters} readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter} importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration} prepareRpDistributionChatMigration={prepareRpDistributionChatMigration} launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory} manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode} startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks} importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack} listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona} deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'agent-rp',
@@ -13550,7 +13659,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
     name: 'conversation.composer.dock', id: 'agent-rp-status', order: -100,
   }, roleplayComposerDockComponent(
-    ctx, runtimeDiagnostics, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
+    ctx, runtimeDiagnostics, workspaceSettings, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
     runTavernTrigger, configurePreset,
   )))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({

@@ -66,6 +66,7 @@ import {
 } from './roleplay-state-action.ts'
 import type { RoleplayTurnMode } from './roleplay-turn-mode.ts'
 import { renderNativePromptPolicy } from './native-prompt-policy.ts'
+import { characterWorldInfoBookName } from './world-info-configuration-core.ts'
 import {
   DEFAULT_TOOL_GUIDANCE,
   prepareRoleplayToolPolicy,
@@ -435,6 +436,10 @@ export function prepareRoleplayTurn(input: PrepareRoleplayTurnInput): RoleplayTu
     || snapshot.actor?.name || snapshot.experience.name
   const userName = snapshot.participant?.name
   const transcript = roleplayVisibleTranscript(input.session, pendingMessages)
+  const characterWorldbook = characterWorldInfoBookName(
+    resolved.lorebooks.map(({ source }) => source),
+    tavern,
+  )
   const macroContext: RoleplayMacroContext = {
     ...(resolved.card === undefined ? {} : { card: resolved.card }),
     characterName,
@@ -455,6 +460,8 @@ export function prepareRoleplayTurn(input: PrepareRoleplayTurnInput): RoleplayTu
   const options = templateOptions(input.templateEngine, {
     characterName,
     userName: userName ?? '用户',
+    ...(characterWorldbook === undefined ? {} : { characterWorldInfoBookName: characterWorldbook }),
+    replayTime: sessionBoundarySeq === 0 ? 0 : input.session.events[sessionBoundarySeq - 1]?.time ?? 0,
     entropy: macroContext.entropy,
     messages: [...roleplayVisibleDialogue(input.session, pendingMessages), ...injectedScanText],
     transcript,

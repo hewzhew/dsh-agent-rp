@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $pluginPackageName = '@hewzhew/dsh-agent-rp'
+$legacyPluginPackageNames = @('@dsh-external/dsh-agent-rp')
 $minimumPnpmMajor = 11
 $previousRegistry = $env:npm_config_registry
 $agentHostVersion = '0.1.1-rc.2'
@@ -249,6 +250,16 @@ try {
   } else {
     Write-Stage 3 4 "同步 Agent RP 来源（当前：$installedSpec）"
     Invoke-Dsh $runnerCommand @('plugin', '--profile', 'web', 'add', $PluginSource)
+  }
+
+  if (Test-Path -LiteralPath $profileManifestPath) {
+    $profileAfterInstall = Read-JsonFile $profileManifestPath
+    foreach ($legacyPackageName in $legacyPluginPackageNames) {
+      if ($null -ne (Get-DependencySpec $profileAfterInstall $legacyPackageName)) {
+        Write-Host "    迁移历史包名：$legacyPackageName → $pluginPackageName"
+        Invoke-Dsh $runnerCommand @('plugin', '--profile', 'web', 'remove', $legacyPackageName)
+      }
+    }
   }
 
   Write-Stage 4 4 '验证 web profile 与插件入口'

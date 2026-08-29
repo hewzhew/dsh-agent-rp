@@ -29,6 +29,7 @@ import { summarizeWorldEngineFailures } from './world-engine-diagnostic.ts'
 import { createEjsWorldInfoBooks, EjsTemplateEngine } from './ejs-template.ts'
 import type { ImportedCharacterCard, ImportedWorldInfo } from './import/types.ts'
 import {
+  characterWorldInfoBookName,
   configuredLorebook,
   decodeWorldInfoConfiguration,
   editableWorldInfoEntry,
@@ -289,6 +290,7 @@ interface AgentRpProjectionState {
   readonly cardLorebook?: SessionLorebookSource
   readonly standaloneWorldInfos: Readonly<Record<string, SessionLorebookSource>>
   readonly worldInfoConfiguration: WorldInfoConfigurationState
+  readonly replayTime: number
   readonly surface: readonly {
     readonly seq: number
     readonly text?: string
@@ -335,6 +337,7 @@ const projectionStateSchema = {
       || Array.isArray(record.standaloneWorldInfos)
       || typeof record.worldInfoConfiguration !== 'object' || record.worldInfoConfiguration === null
       || Array.isArray(record.worldInfoConfiguration)
+      || typeof record.replayTime !== 'number' || !Number.isSafeInteger(record.replayTime)
       || !Array.isArray(record.surface)
       || typeof record.calls !== 'object' || record.calls === null || Array.isArray(record.calls)
       || typeof record.personaCommands !== 'object' || record.personaCommands === null
@@ -512,6 +515,7 @@ function worldInfoProjection(
     ? []
     : [{ role: node.role, content: node.text }])
   const configuredSources = sources.map(source => ({ source, configured: configuredLorebook(source, state.worldInfoConfiguration) }))
+  const characterWorldbook = characterWorldInfoBookName(sources, state.tavern)
   const identity = {
     characterName: state.character.characterName,
     userName: state.character.persona?.name ?? state.character.userName ?? '用户',
@@ -521,6 +525,8 @@ function worldInfoProjection(
     renderTemplate: ejsTemplateEngine.createRenderer({
       characterName: state.character.characterName,
       userName: state.character.persona?.name ?? state.character.userName ?? '用户',
+      ...(characterWorldbook === undefined ? {} : { characterWorldInfoBookName: characterWorldbook }),
+      replayTime: state.replayTime,
       messages,
       transcript,
       variableScopes: state.tavern?.scopes ?? {},
@@ -574,6 +580,7 @@ function worldInfoProjection(
           matchedSecondaryKeys: decision.matchedSecondaryKeys,
           approximateTokens: decision.approximateTokens,
           ...(decision.template === undefined ? {} : { template: decision.template }),
+          ...(decision.templateError === undefined ? {} : { templateError: decision.templateError }),
           modified: override?.entry !== undefined,
           deleted,
         }
@@ -854,6 +861,7 @@ export function createAgentRpProjectionDefinition(
     cardWorldInfoCount: 0,
     standaloneWorldInfos: {},
     worldInfoConfiguration: { format: 0, revision: 0, overrides: [] },
+    replayTime: 0,
     surface: [],
     calls: {},
     personaCommands: {},
@@ -865,11 +873,12 @@ export function createAgentRpProjectionDefinition(
     regexPacks: [],
   }),
   apply(state, event) {
-    const surface = applySurface(state.surface, event)
-    const auxiliaryGenerations = applyTavernAuxiliaryGenerationEvent(state.auxiliaryGenerations, event)
-    const withSurface = surface === state.surface && auxiliaryGenerations === state.auxiliaryGenerations
-      ? state
-      : { ...state, surface, auxiliaryGenerations }
+    const replayState = state.replayTime === event.time ? state : { ...state, replayTime: event.time }
+    const surface = applySurface(replayState.surface, event)
+    const auxiliaryGenerations = applyTavernAuxiliaryGenerationEvent(replayState.auxiliaryGenerations, event)
+    const withSurface = surface === replayState.surface && auxiliaryGenerations === replayState.auxiliaryGenerations
+      ? replayState
+      : { ...replayState, surface, auxiliaryGenerations }
     const tavernMessageAnnotations = applyTavernMessageAnnotationEvent(withSurface.tavernMessageAnnotations, event)
     if (tavernMessageAnnotations !== withSurface.tavernMessageAnnotations) {
       return { ...withSurface, tavernMessageAnnotations }

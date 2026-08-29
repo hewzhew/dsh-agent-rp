@@ -63,6 +63,7 @@ test('plans user display regexes without reading a rendered DSH row', () => {
   assert.equal(plan.kind, 'render')
   if (plan.kind !== 'render') return
   assert.equal(plan.source, 'display-regex')
+  assert.equal(plan.messageId, 0)
   assert.deepEqual(plan.compilation.segments, [{
     kind: 'inline-html', source: '<span style="color:#d9b36c">藤子</span>',
   }])
@@ -118,6 +119,7 @@ test('keeps display regexes inactive in debug view while honoring explicit scrip
   assert.equal(plan.kind, 'render')
   if (plan.kind !== 'render') return
   assert.equal(plan.source, 'override')
+  assert.equal(plan.messageId, 0)
   assert.deepEqual(plan.compilation.segments, [{
     kind: 'html', source: '<!doctype html><html><body>脚本展示</body></html>',
   }])
@@ -143,6 +145,7 @@ test('selects one generation at the stable anchor and hides its superseded rows'
   assert.equal(plan.kind, 'render')
   if (plan.kind !== 'render') return
   assert.equal(plan.source, 'selected-generation')
+  assert.equal(plan.messageId, 2)
   assert.deepEqual(plan.compilation.segments, [{ kind: 'markdown', text: '备选回复' }])
 })
 
@@ -159,6 +162,7 @@ test('uses an aligned imported message when its durable seq cannot identify the 
   const plan = planner.assistant({ blockText: 'Host 文本', alignedMessage: aligned })
   assert.equal(plan.kind, 'render')
   if (plan.kind !== 'render') return
+  assert.equal(plan.messageId, 99)
   assert.deepEqual(plan.compilation.segments, [{
     kind: 'inline-html', source: '<span style="color:#d9b36c">藤子</span>',
   }])

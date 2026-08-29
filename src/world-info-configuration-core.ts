@@ -19,6 +19,18 @@ export interface SessionLorebookSource {
   readonly degradations: readonly string[]
 }
 
+/** Resolve the SillyTavern primary character-world identity without consulting global or chat bindings. */
+export function characterWorldInfoBookName(
+  sources: readonly SessionLorebookSource[],
+  state: Pick<TavernHelperState, 'worldbookBindings'> | undefined,
+): string | undefined {
+  const explicit = state?.worldbookBindings?.character
+  const name = explicit === undefined
+    ? sources.find(source => source.source === 'character')?.name
+    : explicit.primary ?? undefined
+  return name === undefined || name.trim() === '' ? undefined : name
+}
+
 function importedScriptEntry(entry: TavernWorldbookEntry): ImportedLorebookEntry {
   const logic = entry.strategy.keys_secondary.logic
   const position = entry.position.type === 'before_character_definition' ? 'before_char'

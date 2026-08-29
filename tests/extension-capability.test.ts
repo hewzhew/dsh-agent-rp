@@ -85,11 +85,11 @@ test('aggregates independent runtime plans without treating user activation as a
     summarizeAgentRpCapabilityPlan(resolveAgentRpCapabilityPlan(TAVERN_LEGACY_ADAPTER_MANIFEST)),
   ])
   assert.deepEqual(summary, {
-    requirements: 18,
+    requirements: 19,
     requiredUnavailable: 0,
     optionalUnavailable: 0,
     resolutions: {
-      available: 18,
+      available: 19,
       'approval-required': 0,
       unsupported: 0,
       'version-mismatch': 0,
@@ -107,6 +107,21 @@ test('publishes truthful Session variable ownership and runtime-specific payload
   assert.deepEqual(chatSend.runtimePolicies, {
     'card-frame-v0': { requestBytes: 64 * 1024, resultBytes: 4096 },
   })
+
+  const userMessageAppend = AGENT_RP_CAPABILITIES['chat.user-message.append']
+  assert.equal(userMessageAppend.effect, 'session-write')
+  assert.equal(userMessageAppend.approval, 'player-action')
+  assert.equal(userMessageAppend.approvalPersistence, 'none')
+  assert.equal(userMessageAppend.statePersistence, 'session')
+  assert.equal(userMessageAppend.stateOwner, 'session')
+  assert.equal(userMessageAppend.modelVisible, true)
+  assert.deepEqual(userMessageAppend.runtimePolicies, {
+    'card-frame-v0': { requestBytes: 64 * 1024, resultBytes: 4096 },
+  })
+  const cardCapabilities = CARD_FRONTEND_CAPABILITY_MANIFEST.requirements
+    .map(requirement => requirement.capability) as readonly string[]
+  assert.equal(cardCapabilities.includes('chat.user-message.append'), true)
+  assert.equal(cardCapabilities.includes('chat.session.mutate'), false)
 
   const variables = AGENT_RP_CAPABILITIES['session.variables.replace']
   assert.equal(variables.stateOwner, 'session')
@@ -127,7 +142,14 @@ test('publishes truthful Session variable ownership and runtime-specific payload
     'session.variables.replace', 'world-engine-v0', 'unregistered runtime', 'fallback',
   ), 'fallback')
 
-  for (const id of ['chat.session.mutate', 'world-info.session.mutate', 'prompt-injection.session.replace'] as const) {
+  const chatMutation = AGENT_RP_CAPABILITIES['chat.session.mutate']
+  assert.equal(chatMutation.stateOwner, 'session')
+  assert.equal(chatMutation.modelVisible, true)
+  assert.deepEqual(chatMutation.runtimePolicies, {
+    'tavern-script-frame-v0': { requestBytes: 2 * 1024 * 1024, resultBytes: 4096 },
+  })
+
+  for (const id of ['world-info.session.mutate', 'prompt-injection.session.replace'] as const) {
     const definition = AGENT_RP_CAPABILITIES[id]
     assert.equal(definition.stateOwner, 'session')
     assert.equal(definition.modelVisible, true)

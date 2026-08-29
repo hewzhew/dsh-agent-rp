@@ -4,6 +4,7 @@ import { CommandId } from '@deepseek-ai/dsh-commands'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { parseWorldInfoJson } from '../src/import/world-info.ts'
 import {
+  characterWorldInfoBookName,
   configureWorldInfo,
   configuredLorebook,
   editableWorldInfoEntry,
@@ -21,6 +22,20 @@ function source(): SessionLorebookSource {
   } }))
   return { id: 'standalone:fixture', name: '海城', source: 'standalone', lorebook: worldInfo.lorebook, degradations: [] }
 }
+
+test('resolves only the primary character World Info identity', () => {
+  const standalone = source()
+  const character = { ...source(), id: 'character:fixture', name: '角色主书', source: 'character' as const }
+
+  assert.equal(characterWorldInfoBookName([standalone, character], undefined), '角色主书')
+  assert.equal(characterWorldInfoBookName([standalone], undefined), undefined)
+  assert.equal(characterWorldInfoBookName([character, standalone], {
+    worldbookBindings: { character: { primary: '改绑世界书', additional: ['角色主书'] } },
+  }), '改绑世界书')
+  assert.equal(characterWorldInfoBookName([character, standalone], {
+    worldbookBindings: { character: { primary: null, additional: ['角色主书'] } },
+  }), undefined)
+})
 
 test('persists a complete editable World Info overlay without mutating imported entries', () => {
   const book = source()
