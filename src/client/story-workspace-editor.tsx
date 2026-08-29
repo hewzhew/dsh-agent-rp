@@ -74,6 +74,7 @@ import {
 } from '../story-suggestion-batch.ts'
 import { createEventObservationFact, removeStoryFact } from '../story-fact.ts'
 import {
+  findStorySourceQuoteMatches,
   normalizeStorySourceContent,
   splitLocatedStorySourcePassages,
   splitStorySourcePassages,
@@ -687,6 +688,11 @@ function edgeWithoutSourceEvent(edge: StoryEdge): StoryEdge {
 
 function citationWithoutTarget(citation: StoryCitation): StoryCitation {
   const { target: _target, ...rest } = citation
+  return rest
+}
+
+function citationWithoutRefreshReview(citation: StoryCitation): StoryCitation {
+  const { refreshReview: _refreshReview, ...rest } = citation
   return rest
 }
 
@@ -1397,11 +1403,13 @@ function CitationInspector({ workspace, citation, update, onDelete }: {
   return <>
     <h2>资料引用</h2><div className="story-studio-inspector-subtitle">{citationSourceLabel(workspace, citation)}</div>
     <Field label="来源资料"><select className="story-studio-input" value={citation.sourceId}
-      onChange={event => { patch(current => ({ ...current, sourceId: event.target.value })) }}>
+      onChange={event => { patch(current => citationWithoutRefreshReview({ ...current, sourceId: event.target.value })) }}>
       {workspace.sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></Field>
-    <TextField label="原文位置" rows={1} value={citation.locator} onChange={value => { patch(current => ({ ...current, locator: value })) }} />
-    <TextField label="引用原文快照" rows={8} value={citation.quote} onChange={value => { patch(current => ({ ...current, quote: value })) }} />
+    <TextField label="原文位置" rows={1} value={citation.locator}
+      onChange={value => { patch(current => citationWithoutRefreshReview({ ...current, locator: value })) }} />
+    <TextField label="引用原文快照" rows={8} value={citation.quote}
+      onChange={value => { patch(current => citationWithoutRefreshReview({ ...current, quote: value })) }} />
     <div className="story-citation-state" data-current={source?.content.includes(citation.quote) ?? false}>
       {source?.content.includes(citation.quote) === true ? '仍可在当前原文中定位' : '原文已变化；引用快照仍被保留'}
     </div>
@@ -1445,7 +1453,48 @@ function passageContainsSpeaker(
     && storyVoiceSpeakerMatches(speakerNames, line.speaker))
 }
 
-function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webFetchAvailable, onBack, onSelectCitation, onAddCitation, onEditCharacter, onRefresh }: {
+const citationRefreshReviewLabels = {
+  relocated: '已重新定位',
+  ambiguous: '需要选择位置',
+  missing: '新正文中缺失',
+} as const
+
+function CitationRefreshReviewPanel({ citations, passages, onSelectCitation, onResolve }: {
+  readonly citations: readonly StoryCitation[]
+  readonly passages: readonly StorySourcePassage[]
+  readonly onSelectCitation: (id: string) => void
+  readonly onResolve: (id: string, locator?: string) => void
+}) {
+  return <section className="story-source-refresh-reviews" aria-label="引用刷新审阅">
+    <div className="story-source-refresh-reviews-heading"><div><strong>引用刷新待审</strong>
+      <span>原句快照始终保留。确认新位置或选择保留历史快照后，再保存场地。</span></div><b>{citations.length}</b></div>
+    <div className="story-source-refresh-review-list">{citations.map(citation => {
+      const review = citation.refreshReview!
+      const matches = findStorySourceQuoteMatches(passages, citation.quote)
+      return <article className="story-source-refresh-review" data-kind={review.kind} key={citation.id}>
+        <div className="story-source-refresh-review-heading"><span>{citationRefreshReviewLabels[review.kind]}</span>
+          <button type="button" onClick={() => { onSelectCitation(citation.id) }}>查看引用</button></div>
+        <blockquote>{citation.quote}</blockquote>
+        <div className="story-source-refresh-review-location"><span>刷新前</span><b>{review.previousLocator || '未标注位置'}</b>
+          {review.kind === 'relocated' && <><span>现在</span><b>{citation.locator || '未标注位置'}</b></>}</div>
+        {review.kind === 'ambiguous' && <div className="story-source-refresh-candidates">
+          <span>新正文中的候选段落</span>{matches.map(match => <button type="button" key={`${citation.id}:${match.passage.locator}`}
+            onClick={() => { onResolve(citation.id, match.passage.locator) }}>
+            <strong>{match.passage.locator}</strong><small>{match.occurrenceCount > 1 ? `同段出现 ${String(match.occurrenceCount)} 次` : '出现 1 次'}</small>
+          </button>)}
+        </div>}
+        <div className="story-source-refresh-review-actions">
+          {review.kind === 'relocated' && <button className="story-studio-button story-studio-button-primary" type="button"
+            onClick={() => { onResolve(citation.id) }}>确认新位置</button>}
+          {review.kind !== 'relocated' && <button className="story-studio-button" type="button"
+            onClick={() => { onResolve(citation.id) }}>仅保留历史快照</button>}
+        </div>
+      </article>
+    })}</div>
+  </section>
+}
+
+function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webFetchAvailable, onBack, onSelectCitation, onAddCitation, onEditCharacter, onRefresh, onResolveCitationReview }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly source: StorySource
   readonly selectedCitationId: string | undefined
@@ -1457,10 +1506,12 @@ function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webF
   readonly onAddCitation: (passage: StorySourcePassage) => void
   readonly onEditCharacter: (id: string) => void
   readonly onRefresh: () => void
+  readonly onResolveCitationReview: (id: string, locator?: string) => void
 }) {
   const normalizedContent = useMemo(() => normalizeStorySourceContent(source.content), [source.content])
   const passages = useMemo(() => splitLocatedStorySourcePassages(source), [source])
   const citations = workspace.citations.filter(citation => citation.sourceId === source.id)
+  const citationReviews = citations.filter(citation => citation.refreshReview !== undefined)
   const [selectedVoiceCharacterId, setSelectedVoiceCharacterId] = useState(workspace.characters[0]?.id)
   const [visibleVoiceUnitCount, setVisibleVoiceUnitCount] = useState(SOURCE_VOICE_UNIT_PAGE_SIZE)
   const [passageQuery, setPassageQuery] = useState('')
@@ -1519,6 +1570,8 @@ function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webF
           onClick={onRefresh}>重新读取网页</button>
       </div>}
     </div>
+    {citationReviews.length > 0 && <CitationRefreshReviewPanel citations={citationReviews} passages={passages}
+      onSelectCitation={onSelectCitation} onResolve={onResolveCitationReview} />}
     {source.kind === 'original' && <section className="story-source-voice-inspection">
       <div className="story-source-voice-heading"><div><strong>原作声音</strong><span>逐句核对识别结果；署名遗漏或冲突可以回人物档案修正。</span></div>
         <span>{voiceDocument.orderedLines.length} 行署名台词</span></div>
@@ -1588,8 +1641,9 @@ function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webF
     </section>
     {citations.length > 0 && <div className="story-source-citations"><strong>已保存引用</strong><div>
       {citations.map(citation => <button className="story-citation-chip" data-selected={selectedCitationId === citation.id}
+        data-review={citation.refreshReview?.kind}
         key={citation.id} type="button" onClick={() => { onSelectCitation(citation.id) }}>
-        <span>{citation.locator}</span><small>{citation.target === undefined ? '未关联'
+        <span>{citation.locator}</span><small>{citation.refreshReview === undefined ? '' : `${citationRefreshReviewLabels[citation.refreshReview.kind]} · `}{citation.target === undefined ? '未关联'
           : citation.target.kind === 'node' ? '剧情节点' : citation.target.kind === 'fact' ? '人物事实' : '故事事件'}</small>
       </button>)}
     </div></div>}
@@ -1931,10 +1985,14 @@ function StudioNavigation({ workspace, view, selection, setView, select, addChar
         type="button" onClick={() => { setView('sources') }}>
         <span className="story-studio-nav-icon">⌁</span><span>研究收件箱</span><span className="story-studio-nav-count">{workspace.researchInbox.length}</span>
       </button>
-      {workspace.sources.slice(0, 8).map(source => <button key={source.id} className="story-studio-nav-item"
-        data-active={selection?.kind === 'source' && selection.id === source.id} type="button" onClick={() => { select({ kind: 'source', id: source.id }) }}>
-        <span className="story-studio-nav-icon">▤</span><span>{source.name}</span>
-      </button>)}
+      {workspace.sources.slice(0, 8).map(source => {
+        const refreshReviewCount = workspace.citations.filter(citation => citation.sourceId === source.id && citation.refreshReview !== undefined).length
+        return <button key={source.id} className="story-studio-nav-item"
+          data-active={selection?.kind === 'source' && selection.id === source.id} type="button" onClick={() => { select({ kind: 'source', id: source.id }) }}>
+          <span className="story-studio-nav-icon">▤</span><span>{source.name}</span>
+          {refreshReviewCount > 0 && <span className="story-studio-nav-count" data-attention="true">{refreshReviewCount} 待审</span>}
+        </button>
+      })}
       {workspace.sources.length > 8 && <button className="story-studio-nav-item" type="button" onClick={() => { setView('sources') }}>
         <span className="story-studio-nav-icon">…</span><span>全部资料</span><span className="story-studio-nav-count">{workspace.sources.length}</span>
       </button>}
@@ -3024,6 +3082,14 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     }] }))
     setSelection({ kind: 'citation', id })
   }
+  const resolveCitationRefreshReview = (id: string, locator?: string): void => {
+    update(current => ({
+      ...current,
+      citations: current.citations.map(citation => citation.id !== id
+        ? citation
+        : citationWithoutRefreshReview(locator === undefined ? citation : { ...citation, locator })),
+    }))
+  }
   const acceptResearchExcerpt = (item: StoryResearchItem): void => {
     const id = `source-${createClientOpaqueUuid()}`
     const content = [`# ${item.title}`, '', item.snippet || '这个搜索结果没有提供摘要。', '', `来源：${item.url}`].join('\n')
@@ -3330,9 +3396,11 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         <div className="story-studio-card-list">{workspace.sources.map(source => {
           const passages = splitStorySourcePassages(source)
           const citationCount = workspace.citations.filter(citation => citation.sourceId === source.id).length
+          const refreshReviewCount = workspace.citations.filter(citation => citation.sourceId === source.id && citation.refreshReview !== undefined).length
           return <article className="story-studio-card" key={source.id} onClick={() => { select({ kind: 'source', id: source.id }) }}>
             <h3>{source.name}</h3><p>{passages[0]?.text.slice(0, 220) || '尚未添加内容'}</p>
-            <div className="story-studio-card-meta"><span>{sourceKindLabels[source.kind]}</span><span>{passages.length} 段</span><span>{citationCount} 条引用</span><span>{source.enabled ? '参与研究' : '暂不使用'}</span></div>
+            <div className="story-studio-card-meta"><span>{sourceKindLabels[source.kind]}</span><span>{passages.length} 段</span><span>{citationCount} 条引用</span>
+              {refreshReviewCount > 0 && <span className="story-source-review-count">{refreshReviewCount} 条待审</span>}<span>{source.enabled ? '参与研究' : '暂不使用'}</span></div>
           </article>
         })}{workspace.sources.length === 0 && <div className="story-studio-empty"><span>添加原著章节、参考材料，或限定网络查询范围。</span></div>}</div>
       </div>
@@ -3340,7 +3408,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         busy={saving} dirty={dirty} webFetchAvailable={webFetchAvailable}
         onBack={() => { setSelection(undefined); setReaderSourceId(undefined) }} onSelectCitation={id => { setSelection({ kind: 'citation', id }) }}
         onAddCitation={passage => { addCitation(readerSource, passage) }} onEditCharacter={id => { select({ kind: 'character', id }) }}
-        onRefresh={() => { refreshSourceFromUrl(readerSource) }} />
+        onRefresh={() => { refreshSourceFromUrl(readerSource) }} onResolveCitationReview={resolveCitationRefreshReview} />
   } else {
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>输出布局</h1><p>拖动卡片或使用上下按钮，决定生成和展示顺序。</p></div><button className="story-studio-button" type="button" onClick={addOutput}>＋ 添加分区</button></div>
       <div className="story-studio-card-list">{workspace.outputs.map((output, index) => <article draggable className="story-studio-card story-output-card"

@@ -39,7 +39,7 @@ import {
 } from './roleplay-resource-catalog.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import { flyingChessWorldResourceProvider } from './play-world-resource-provider.ts'
-import { splitStorySourcePassages } from './story-source.ts'
+import { findStorySourceQuoteMatches, splitStorySourcePassages } from './story-source.ts'
 import type {
   StoryAudience,
   StoryCitation,
@@ -982,6 +982,19 @@ function normalizeCitation(
   assertId(value.id, CITATION_ID_PATTERN, '资料引用')
   assertId(value.sourceId, SOURCE_ID_PATTERN, '资料引用来源')
   if (!sourceIds.has(value.sourceId)) throw new Error('资料引用指向未知资料')
+  let refreshReview: StoryCitation['refreshReview']
+  if (value.refreshReview !== undefined) {
+    if (!isRecord(value.refreshReview)
+      || value.refreshReview.kind !== 'relocated' && value.refreshReview.kind !== 'ambiguous' && value.refreshReview.kind !== 'missing'
+      || typeof value.refreshReview.previousLocator !== 'string'
+      || Object.keys(value.refreshReview).some(key => key !== 'kind' && key !== 'previousLocator')) {
+      throw new Error('资料引用刷新审阅状态无效')
+    }
+    refreshReview = {
+      kind: value.refreshReview.kind,
+      previousLocator: cleanLabel(value.refreshReview.previousLocator, '资料引用刷新前位置'),
+    }
+  }
   let target: StoryCitation['target']
   if (value.target !== undefined) {
     if (!isRecord(value.target)) throw new Error('资料引用目标无效')
@@ -1008,7 +1021,13 @@ function normalizeCitation(
     quote: citationText(value.quote, '资料引用原文', true),
     note: citationText(value.note, '资料引用说明', false),
     ...(target === undefined ? {} : { target }),
+    ...(refreshReview === undefined ? {} : { refreshReview }),
   }
+}
+
+function citationWithoutRefreshReview(citation: StoryCitation): StoryCitation {
+  const { refreshReview: _refreshReview, ...rest } = citation
+  return rest
 }
 
 function normalizeWorkspace(value: unknown, worlds: PlayWorldRegistry): StoryWorkspaceSnapshot {
@@ -1885,20 +1904,27 @@ export class StoryWorkspaceStore {
     const missingCitationIds: string[] = []
     const citations = current.citations.map(citation => {
       if (citation.sourceId !== sourceId) return citation
-      const matches = passages.flatMap(passage => {
-        const offsets: number[] = []
-        for (let offset = passage.text.indexOf(citation.quote); offset >= 0;
-          offset = passage.text.indexOf(citation.quote, offset + 1)) offsets.push(offset)
-        return offsets.map(() => passage)
-      })
-      if (matches.length === 1 && matches[0]!.locator === citation.locator) return citation
-      if (matches.length === 1) {
+      const matches = findStorySourceQuoteMatches(passages, citation.quote)
+      const occurrenceCount = matches.reduce((total, match) => total + match.occurrenceCount, 0)
+      const withoutReview = citationWithoutRefreshReview(citation)
+      if (occurrenceCount === 1 && matches[0]!.passage.locator === citation.locator) return withoutReview
+      if (occurrenceCount === 1) {
         relocatedCitationIds.push(citation.id)
-        return { ...citation, locator: matches[0]!.locator }
+        return {
+          ...withoutReview,
+          locator: matches[0]!.passage.locator,
+          refreshReview: { kind: 'relocated' as const, previousLocator: citation.locator },
+        }
       }
-      if (matches.length === 0) missingCitationIds.push(citation.id)
+      if (occurrenceCount === 0) missingCitationIds.push(citation.id)
       else ambiguousCitationIds.push(citation.id)
-      return citation
+      return {
+        ...withoutReview,
+        refreshReview: {
+          kind: occurrenceCount === 0 ? 'missing' as const : 'ambiguous' as const,
+          previousLocator: citation.locator,
+        },
+      }
     })
     const snapshot = normalizeWorkspace({
       ...current,

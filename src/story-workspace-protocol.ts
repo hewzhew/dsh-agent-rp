@@ -312,6 +312,14 @@ export interface StoryCitation {
   readonly quote: string
   readonly note: string
   readonly target?: StoryCitationTarget
+  /** Unresolved or newly relocated evidence produced by the latest in-place URL refresh. */
+  readonly refreshReview?: StoryCitationRefreshReview
+}
+
+/** Durable review item retained until the player accepts a refreshed citation location or snapshot. */
+export interface StoryCitationRefreshReview {
+  readonly kind: 'relocated' | 'ambiguous' | 'missing'
+  readonly previousLocator: string
 }
 
 /** Durable proof that one model-selected world action was applied exactly once. */
