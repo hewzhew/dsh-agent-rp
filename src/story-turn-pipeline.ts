@@ -3318,7 +3318,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const reviewed = await runStage(input, 'voice', generateOptions(
           input,
           reasoning,
-          'structural',
+          'quality',
           VOICE_REVIEW_SYSTEM,
           [
             commonBody,
