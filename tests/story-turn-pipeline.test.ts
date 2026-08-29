@@ -767,18 +767,18 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(calls, 16)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 0)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 3)
   assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 8)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 8)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
     .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.reasoningEffort === 'high'), true)
+    .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.maxTokens === 16_384), true)
-  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 16)
+    .every(request => request.dispatch.maxTokens === 2_048), true)
+  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 13)
   assert.equal(characterBodies.length, 2)
   assert.equal(historyBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
@@ -820,14 +820,16 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(characterBodies[0]!, /<voice_evidence>|local:source-|#seed-/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
-  assert.match(characterSystems[0]!, /为了让场面热闹.*speech 必须为 null/u)
+  assert.match(characterSystems[0]!, /不能仅因反应不会形成长期知识.*一律判为沉默/u)
+  assert.match(characterSystems[0]!, /玩家明确要求把权威结果写成角色场面/u)
   assert.match(characterSystems[0]!, /respondsTo.*move.*focus.*effect/u)
   assert.match(characterSystems[0]!, /focus 不是完整论点/u)
-  assert.match(characterSystems[0]!, /一个对象、区别或直接答案/u)
-  assert.match(characterSystems[0]!, /effect.*不会交给声音 Worker/u)
+  assert.match(characterSystems[0]!, /一个对象、区别、态度或直接答案/u)
+  assert.match(characterSystems[0]!, /effect.*交流作用.*不会交给声音 Worker/u)
   assert.match(characterSystems[0]!, /后续声音阶段会独立检索该人物的原作证据/u)
   assert.match(characterSystems[0]!, /证据不足时让人物沉默/u)
-  assert.match(characterSystems[0]!, /不要用看向、换手、敲碰物件/u)
+  assert.match(characterSystems[0]!, /不要用看向、伸手、换手、拨弄物件/u)
+  assert.match(characterSystems[0]!, /不要用“像是”“仿佛”“似乎”/u)
   assert.match(characterSystems[0]!, /当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action/u)
   assert.match(characterSystems[0]!, /futureChoice.*下一轮仍会因此改变/u)
   assert.match(characterSystems[0]!, /futureChoice 是 Host 唯一持久化的内容/u)
@@ -1410,4 +1412,58 @@ test('materializes continuity from the actually visible reply instead of the pre
   }), result)
   assert.equal(store.get(workspace.id).revision, saved.revision)
   assert.equal(store.get(workspace.id).citations.length, 2)
+})
+
+test('keeps materialization idempotency separate across sessions with matching local event sequences', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-materialization-session-key-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '跨会话故事事件' })
+  const fake = { sessions: { flush: async () => true } } as unknown as Context
+
+  const materialize = async (sessionId: string, text: string): Promise<void> => {
+    const session = Session.create(SessionId(sessionId))
+    appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+      format: 1,
+      sessionId: String(session.id),
+      workspaceId: created.id,
+      workspaceRevision: store.get(created.id).revision,
+      turn: 1,
+      step: 1,
+      resultEventSeqs: [],
+      directorBrief: '',
+      finalSections: [{ sectionId: 'prose', name: '正文', kind: 'prose', text }],
+      finalDraft: text,
+      modelContext: '',
+      hostOwnedWorldDraft: true,
+    })
+    session.append('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: createAssistantMessage({
+        source: { provider: 'fixture', model: 'fixture' },
+        content: [{ type: 'text', text }],
+      }),
+    }, { surfaceOp: 'append' })
+    const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+    await materializeStoryTurn({
+      ctx: fake,
+      agent,
+      store,
+      workspaceId: created.id,
+      turn: 1,
+      signal: new AbortController().signal,
+    })
+  }
+
+  await materialize('materialize-session-a', '第一段会话实际展示的正文。')
+  await materialize('materialize-session-b', '第二段会话实际展示的正文。')
+
+  const saved = store.get(created.id)
+  assert.equal(saved.events.length, 2)
+  assert.notEqual(saved.events[0]?.key, saved.events[1]?.key)
+  assert.deepEqual(saved.events.map(event => event.evidence), [
+    '第一段会话实际展示的正文。',
+    '第二段会话实际展示的正文。',
+  ])
 })
