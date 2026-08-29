@@ -258,6 +258,23 @@ export interface StorySourceUrlImportRequest {
   readonly kind: 'original' | 'reference'
 }
 
+/** Revision-guarded request to fetch one durable URL source again without replacing its identity. */
+export interface StorySourceRefreshRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly sourceId: string
+}
+
+/** Citation reconciliation performed after one durable URL source is refreshed. */
+export interface StorySourceRefreshReport {
+  readonly sourceId: string
+  readonly truncated: boolean
+  readonly citationCount: number
+  readonly relocatedCitationIds: readonly string[]
+  readonly ambiguousCitationIds: readonly string[]
+  readonly missingCitationIds: readonly string[]
+}
+
 /** Revision-guarded request to promote one research-inbox URL into a full-text source. */
 export interface StoryResearchAcceptRequest {
   readonly format: 0

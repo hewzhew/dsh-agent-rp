@@ -63,6 +63,7 @@ import {
   type StoryResearchItem,
   type StorySource,
   type StorySourceKind,
+  type StorySourceRefreshReport,
   type StoryWorkspaceSnapshot,
   type StoryWorkspaceSummary,
 } from '../story-workspace-protocol.ts'
@@ -131,6 +132,7 @@ interface StoryWorkspaceResponse {
   readonly webFetchAvailable?: boolean
   readonly webSearchAvailable?: boolean
   readonly sourceImport?: { readonly sourceId?: string; readonly truncated?: boolean }
+  readonly sourceRefresh?: StorySourceRefreshReport
   readonly actorSync?: StoryCharacterActorSyncReport
   readonly workspaces?: readonly StoryWorkspaceSummary[]
   readonly error?: string
@@ -139,6 +141,10 @@ interface StoryWorkspaceResponse {
 interface StorySourceImportResult extends StoryWorkspaceResult {
   readonly sourceId: string
   readonly truncated: boolean
+}
+
+interface StorySourceRefreshResult extends StoryWorkspaceResult {
+  readonly report: StorySourceRefreshReport
 }
 
 interface StoryWorkspaceResult {
@@ -368,6 +374,28 @@ function actorSyncNotice(report: StoryCharacterActorSyncReport): string {
   return '角色卡设定已经是最新版本'
 }
 
+function sourceRefreshReport(value: unknown): StorySourceRefreshReport {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('网页资料刷新响应无效')
+  const record = value as Partial<Record<keyof StorySourceRefreshReport, unknown>>
+  const citationIds = (ids: unknown): ids is readonly string[] => Array.isArray(ids)
+    && ids.every(id => typeof id === 'string') && new Set(ids).size === ids.length
+  if (typeof record.sourceId !== 'string' || typeof record.truncated !== 'boolean'
+    || typeof record.citationCount !== 'number' || !Number.isSafeInteger(record.citationCount) || record.citationCount < 0
+    || !citationIds(record.relocatedCitationIds) || !citationIds(record.ambiguousCitationIds)
+    || !citationIds(record.missingCitationIds)) throw new Error('网页资料刷新响应无效')
+  return record as unknown as StorySourceRefreshReport
+}
+
+function sourceRefreshNotice(report: StorySourceRefreshReport): string {
+  const details = [
+    report.relocatedCitationIds.length === 0 ? '' : `${String(report.relocatedCitationIds.length)} 条引用位置已重新定位`,
+    report.ambiguousCitationIds.length === 0 ? '' : `${String(report.ambiguousCitationIds.length)} 条引用在新正文中有多个位置，保留原定位待检查`,
+    report.missingCitationIds.length === 0 ? '' : `${String(report.missingCitationIds.length)} 条引用未在新正文中找到，引用快照仍保留`,
+  ].filter(detail => detail !== '')
+  const citationSummary = report.citationCount === 0 ? '当前没有关联引用' : `${String(report.citationCount)} 条引用均保留`
+  return `网页资料已经原地刷新；${citationSummary}${details.length === 0 ? '' : `；${details.join('；')}`}${report.truncated ? '；新正文达到安全截断上限' : ''}`
+}
+
 async function storyRequest(path = '', init?: RequestInit): Promise<StoryWorkspaceResponse> {
   const response = await fetch(`${STORY_WORKSPACES_PATH}${path}`, init ?? { headers: { accept: 'application/json' } })
   const text = await response.text()
@@ -463,6 +491,20 @@ async function importStorySourceUrl(
     throw new Error('网址资料导入响应无效')
   }
   return { ...result, sourceId: value.sourceImport.sourceId, truncated: value.sourceImport.truncated }
+}
+
+async function refreshStorySourceUrl(
+  workspace: StoryWorkspaceSnapshot,
+  sourceId: string,
+): Promise<StorySourceRefreshResult> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/sources/${encodeURIComponent(sourceId)}/refresh`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, sourceId }),
+  })
+  const report = sourceRefreshReport(value.sourceRefresh)
+  if (report.sourceId !== sourceId) throw new Error('网页资料刷新响应指向了其他资料')
+  return { ...workspaceResult(value, '网页资料刷新'), report }
 }
 
 async function acceptStoryResearchItem(
@@ -1403,14 +1445,18 @@ function passageContainsSpeaker(
     && storyVoiceSpeakerMatches(speakerNames, line.speaker))
 }
 
-function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectCitation, onAddCitation, onEditCharacter }: {
+function SourceReader({ workspace, source, selectedCitationId, busy, dirty, webFetchAvailable, onBack, onSelectCitation, onAddCitation, onEditCharacter, onRefresh }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly source: StorySource
   readonly selectedCitationId: string | undefined
+  readonly busy: boolean
+  readonly dirty: boolean
+  readonly webFetchAvailable: boolean | null
   readonly onBack: () => void
   readonly onSelectCitation: (id: string) => void
   readonly onAddCitation: (passage: StorySourcePassage) => void
   readonly onEditCharacter: (id: string) => void
+  readonly onRefresh: () => void
 }) {
   const normalizedContent = useMemo(() => normalizeStorySourceContent(source.content), [source.content])
   const passages = useMemo(() => splitLocatedStorySourcePassages(source), [source])
@@ -1464,7 +1510,15 @@ function SourceReader({ workspace, source, selectedCitationId, onBack, onSelectC
   }, [source.id])
   return <div className="story-source-reader">
     <div className="story-studio-view-heading"><div><button className="story-source-back" type="button" onClick={onBack}>← 资料库</button>
-      <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div></div>
+      <h1>{source.name}</h1><p>{sourceKindLabels[source.kind]} · {passages.length} 段 · {citations.length} 条引用</p></div>
+      {source.origin?.kind === 'url' && <div className="story-studio-actions">
+        <a className="story-studio-button" href={source.origin.url} target="_blank" rel="noreferrer">打开原网页 ↗</a>
+        <button className="story-studio-button story-studio-button-primary" type="button"
+          disabled={busy || dirty || webFetchAvailable !== true}
+          title={dirty ? '先保存当前修改，再刷新网页资料' : webFetchAvailable === false ? '当前 Host 没有网页正文读取能力' : undefined}
+          onClick={onRefresh}>重新读取网页</button>
+      </div>}
+    </div>
     {source.kind === 'original' && <section className="story-source-voice-inspection">
       <div className="story-source-voice-heading"><div><strong>原作声音</strong><span>逐句核对识别结果；署名遗漏或冲突可以回人物档案修正。</span></div>
         <span>{voiceDocument.orderedLines.length} 行署名台词</span></div>
@@ -2943,6 +2997,22 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setNotice(imported.truncated ? '网页资料已经导入；正文超过安全上限的部分未保存' : '网页资料已经导入并保留来源地址')
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
+  const refreshSourceFromUrl = (source: StorySource): void => {
+    if (workspace === undefined || dirty || webFetchAvailable !== true || source.origin?.kind !== 'url') return
+    setSaving(true)
+    setError(undefined)
+    void refreshStorySourceUrl(workspace, source.id).then(async refreshed => {
+      setWorkspace(refreshed.workspace)
+      setWorldTurn(refreshed.worldTurn)
+      setWorldModuleAvailable(refreshed.worldModuleAvailable)
+      setWebFetchAvailable(refreshed.webFetchAvailable)
+      setWebSearchAvailable(refreshed.webSearchAvailable)
+      setItems(await listWorkspaces())
+      setDirty(false)
+      setReaderSourceId(source.id)
+      setNotice(sourceRefreshNotice(refreshed.report))
+    }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
+  }
   const addCitation = (source: StorySource, passage: StorySourcePassage): void => {
     const id = `citation-${createClientOpaqueUuid()}`
     update(current => ({ ...current, citations: [...current.citations, {
@@ -3267,8 +3337,10 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
         })}{workspace.sources.length === 0 && <div className="story-studio-empty"><span>添加原著章节、参考材料，或限定网络查询范围。</span></div>}</div>
       </div>
       : <SourceReader workspace={workspace} source={readerSource} selectedCitationId={selectedCitation?.id}
+        busy={saving} dirty={dirty} webFetchAvailable={webFetchAvailable}
         onBack={() => { setSelection(undefined); setReaderSourceId(undefined) }} onSelectCitation={id => { setSelection({ kind: 'citation', id }) }}
-        onAddCitation={passage => { addCitation(readerSource, passage) }} onEditCharacter={id => { select({ kind: 'character', id }) }} />
+        onAddCitation={passage => { addCitation(readerSource, passage) }} onEditCharacter={id => { select({ kind: 'character', id }) }}
+        onRefresh={() => { refreshSourceFromUrl(readerSource) }} />
   } else {
     main = <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>输出布局</h1><p>拖动卡片或使用上下按钮，决定生成和展示顺序。</p></div><button className="story-studio-button" type="button" onClick={addOutput}>＋ 添加分区</button></div>
       <div className="story-studio-card-list">{workspace.outputs.map((output, index) => <article draggable className="story-studio-card story-output-card"

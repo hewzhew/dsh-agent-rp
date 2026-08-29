@@ -12,6 +12,7 @@ import {
 import {
   STORY_WORKSPACES_PATH,
   type StoryResearchAcceptRequest,
+  type StorySourceRefreshRequest,
   type StorySourceUrlImportRequest,
   type StoryWorkspaceCreateRequest,
   type StoryCharacterActorBindRequest,
@@ -174,6 +175,15 @@ function parseSourceUrlImportRequest(value: unknown): StorySourceUrlImportReques
   return record as unknown as StorySourceUrlImportRequest
 }
 
+function parseSourceRefreshRequest(value: unknown, sourceId: string): StorySourceRefreshRequest {
+  const record = requestRecord(value)
+  if (record.format !== 0 || typeof record.revision !== 'number' || record.sourceId !== sourceId
+    || Object.keys(record).some(key => !['format', 'revision', 'sourceId'].includes(key))) {
+    throw new Error('网页资料刷新请求字段无效')
+  }
+  return record as unknown as StorySourceRefreshRequest
+}
+
 function parseResearchAcceptRequest(value: unknown): StoryResearchAcceptRequest {
   const record = requestRecord(value)
   if (record.format !== 0 || typeof record.revision !== 'number' || typeof record.itemId !== 'string'
@@ -293,6 +303,28 @@ export function installStoryWorkspaceHttp(
           json(response, 200, {
             ...workspaceResponse(ctx, store, result.workspace),
             actorSync: result.sync,
+          })
+          return
+        }
+        if (request.method === 'POST' && segments.length === 4 && segments[1] === 'sources' && segments[3] === 'refresh') {
+          const input = parseSourceRefreshRequest(await readJson(request), segments[2]!)
+          const current = store.get(segments[0]!)
+          if (!Number.isSafeInteger(input.revision) || input.revision < 0 || input.revision !== current.revision) {
+            throw new Error(`故事工作室已更新；当前 revision 为 ${String(current.revision)}`)
+          }
+          const source = current.sources.find(candidate => candidate.id === input.sourceId)
+          if (source === undefined) throw new Error('要刷新的网页资料不存在')
+          if (source.origin?.kind !== 'url') throw new Error('只有直接从网址导入的资料可以刷新')
+          const fetched = await fetchSourcePage(ctx, source.origin.requestedUrl ?? source.origin.url)
+          const result = store.refreshUrlSource(segments[0]!, input.revision, input.sourceId, fetched.content, {
+            kind: 'url',
+            url: fetched.url,
+            ...(fetched.requestedUrl === fetched.url ? {} : { requestedUrl: fetched.requestedUrl }),
+            truncated: fetched.truncated,
+          })
+          json(response, 200, {
+            ...workspaceResponse(ctx, store, result.workspace),
+            sourceRefresh: result.report,
           })
           return
         }
