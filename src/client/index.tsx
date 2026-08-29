@@ -2918,15 +2918,13 @@ function SidebarRoleplayDestination({
   const defaultStorySessionWorkspaceId = workspaceEnabled
     ? String(workspace.workspaceId)
     : storySessionWorkspaces.length === 1 ? storySessionWorkspaces[0]?.id : undefined
-  const storyWorkspaceLaunchUnavailableReason = currentRoleplaySession
-    ? undefined
-    : settingsSnapshot.status === 'loading'
-      ? '正在读取可用的会话工作区…'
-      : settingsSnapshot.status === 'error'
-        ? '会话工作区设置暂时不可用，请稍后重试。'
-        : storySessionWorkspaces.length === 0
-          ? '先在 Agent RP 工作台为一个 DSH 工作区启用入口，再从这里开始游玩。'
-          : undefined
+  const storyWorkspaceLaunchUnavailableReason = settingsSnapshot.status === 'loading'
+    ? '正在读取可用的会话工作区…'
+    : settingsSnapshot.status === 'error'
+      ? '会话工作区设置暂时不可用，请稍后重试。'
+      : storySessionWorkspaces.length === 0
+        ? '先在 Agent RP 工作台为一个 DSH 工作区启用入口，再从这里开始游玩。'
+        : undefined
   const unavailableReason = currentSessionId === undefined
     ? '先点侧栏的“新会话”，再从这里选择角色或迁移聊天'
     : !currentSession?.blank
@@ -3078,14 +3076,22 @@ function SidebarRoleplayDestination({
           </button>}
           <h2 style={{ fontSize: '13px', margin: '22px 0 10px', opacity: .62 }}>开始</h2>
           <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))' }}>
+            <button type="button" data-agent-rp-action="open-story-workspaces" onClick={openStoryWorkspace} style={{
+              background: `color-mix(in srgb, ${color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 34%, transparent)`,
+              borderRadius: '12px', color: 'inherit', cursor: 'pointer', font: 'inherit', minHeight: '88px',
+              padding: '13px', textAlign: 'left',
+            }}><span aria-hidden="true" style={{ color, display: 'block', fontSize: '20px', lineHeight: 1 }}>✦</span>
+              <strong style={{ display: 'block', fontSize: '14px', marginTop: '10px' }}>游玩场地</strong>
+              <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '4px', opacity: .58 }}>进入可执行世界、人物与故事</span>
+            </button>
             <button type="button" data-agent-rp-action="open-launch-composer"
               data-agent-rp-source-session={currentSessionId} disabled={!blankSessionReady} onClick={openLaunchComposer} style={{
-              background: `color-mix(in srgb, ${color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 34%, transparent)`,
+              background: 'var(--dsw-alias-bg-layer-1, #292a2e)', border: '1px solid var(--dsw-alias-border-l2, #444)',
               borderRadius: '12px', color: 'inherit', cursor: blankSessionReady ? 'pointer' : 'default', font: 'inherit',
               minHeight: '88px', opacity: blankSessionReady ? 1 : .42, padding: '13px', textAlign: 'left',
             }}><span aria-hidden="true" style={{ color, display: 'block', fontSize: '20px', lineHeight: 1 }}>✦</span>
-              <strong style={{ display: 'block', fontSize: '14px', marginTop: '10px' }}>开始游玩</strong>
-              <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '4px', opacity: .58 }}>组合角色或场景、身份、世界与提示策略</span>
+              <strong style={{ display: 'block', fontSize: '14px', marginTop: '10px' }}>角色或世界书</strong>
+              <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '4px', opacity: .58 }}>组合角色卡或世界书场景与提示策略</span>
             </button>
             <button type="button" disabled={!blankSessionReady} onClick={openMigration} style={{
               background: 'var(--dsw-alias-bg-layer-1, #292a2e)', border: '1px solid var(--dsw-alias-border-l2, #444)',
@@ -3111,20 +3117,6 @@ function SidebarRoleplayDestination({
               <strong style={{ display: 'block', fontSize: '13px' }}>资源中心</strong>
               <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '3px', opacity: .52 }}>
                 角色、世界书、预设与 Persona
-              </span>
-            </span>
-            <span aria-hidden="true" style={{ fontSize: '16px', opacity: .38 }}>›</span>
-          </button>
-          <button type="button" data-agent-rp-action="open-story-workspaces" onClick={openStoryWorkspace} style={{
-            alignItems: 'center', background: 'var(--dsw-alias-bg-layer-1, #292a2e)',
-            border: '1px solid var(--dsw-alias-border-l2, #3d3d43)', borderRadius: '12px', color: 'inherit',
-            cursor: 'pointer', display: 'flex', font: 'inherit', gap: '11px', marginTop: '9px', padding: '12px', textAlign: 'left', width: '100%',
-          }}>
-            <span aria-hidden="true" style={{ color, fontSize: '20px', lineHeight: 1 }}>✎</span>
-            <span style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ display: 'block', fontSize: '13px' }}>游玩场地</strong>
-              <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '3px', opacity: .52 }}>
-                可执行世界、人物认知、故事地图、资料与输出布局
               </span>
             </span>
             <span aria-hidden="true" style={{ fontSize: '16px', opacity: .38 }}>›</span>
@@ -3214,12 +3206,10 @@ function SidebarRoleplayDestination({
         { entryKey: moduleId, fallback },
       )}
       {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
-      {...(currentRoleplaySession ? {} : {
-        launchTargets: storySessionWorkspaces,
-        ...(defaultStorySessionWorkspaceId === undefined ? {} : { defaultLaunchTargetId: defaultStorySessionWorkspaceId }),
-        ...(storyWorkspaceLaunchUnavailableReason === undefined ? {} : { launchUnavailableReason: storyWorkspaceLaunchUnavailableReason }),
-        onStartSession: (hostWorkspaceId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(hostWorkspaceId, workspaceId, request),
-      })}
+      launchTargets={storySessionWorkspaces}
+      {...(defaultStorySessionWorkspaceId === undefined ? {} : { defaultLaunchTargetId: defaultStorySessionWorkspaceId })}
+      {...(storyWorkspaceLaunchUnavailableReason === undefined ? {} : { launchUnavailableReason: storyWorkspaceLaunchUnavailableReason })}
+      onStartSession={(hostWorkspaceId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(hostWorkspaceId, workspaceId, request)}
       {...(currentSessionId === undefined || !currentRoleplaySession
         ? {}
         : {

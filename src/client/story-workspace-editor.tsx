@@ -100,6 +100,7 @@ import {
   storyPlayWorldParticipants,
 } from './story-play-world-readiness.ts'
 import { assignImportedStoryWorldActor } from './story-world-actor-assignment.ts'
+import { resolveStoryWorkspaceSessionAction } from './story-workspace-session-action.ts'
 import {
   decodeStorySourceFile,
   STORY_SOURCE_FILE_ACCEPT,
@@ -2945,6 +2946,14 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       setNotice(actorSyncNotice(saved.sync))
     }).catch(reason => { setError(errorMessage(reason)) }).finally(() => { setSaving(false) })
   }
+  const sessionAction = workspace === undefined ? undefined : resolveStoryWorkspaceSessionAction({
+    workspaceId: workspace.id,
+    currentSessionId: sessionId,
+    currentSessionWorkspaceId: storyTurn?.workspaceId,
+    launchTargetId,
+    canStart: onStartSession !== undefined,
+    canContinue: onContinueSession !== undefined,
+  })
   const advanceSession = (request: string): void => {
     if (workspace === undefined || dirty) return
     if (inspectStoryPlayWorldReadiness(workspace).enabledProseOutputCount === 0) {
@@ -2955,11 +2964,12 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
     }
     setSaving(true)
     setError(undefined)
-    const pending = sessionId !== undefined && onContinueSession !== undefined
-      ? onContinueSession(sessionId, workspace.id, request)
-      : launchTargetId !== undefined && onStartSession !== undefined
-        ? onStartSession(launchTargetId, workspace.id, request)
-        : undefined
+    let pending: Promise<void> | undefined
+    if (sessionAction === 'continue' && sessionId !== undefined && onContinueSession !== undefined) {
+      pending = onContinueSession(sessionId, workspace.id, request)
+    } else if (sessionAction === 'start' && launchTargetId !== undefined && onStartSession !== undefined) {
+      pending = onStartSession(launchTargetId, workspace.id, request)
+    }
     if (pending === undefined) {
       setSaving(false)
       return
@@ -3291,9 +3301,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       <button className="story-studio-button story-studio-button-primary" disabled={saving} type="button" onClick={createNew}>创建场地</button></div>
   } else if (view === 'world') {
     main = <PlayWorldView workspace={workspace} worlds={playWorlds} actorResources={actorResources} turn={worldTurn} moduleAvailable={worldModuleAvailable} busy={saving} dirty={dirty}
-      sessionAction={sessionId !== undefined && onContinueSession !== undefined
-        ? 'continue'
-        : launchTargetId !== undefined && onStartSession !== undefined ? 'start' : undefined}
+      sessionAction={sessionAction}
       launchTargets={launchTargets} launchTargetId={launchTargetId} launchUnavailableReason={launchUnavailableReason}
       renderPlayWorldView={renderPlayWorldView}
       onLaunchTargetChange={setLaunchTargetId}
@@ -3476,9 +3484,9 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       </aside>
     </div>
     <footer className="story-studio-statusbar">
-      <strong>回合写作</strong><span className="story-studio-turn-progress" role="status">{storyTurnProgressText(workspace, storyTurn)}</span><span>{sessionId !== undefined
+      <strong>回合写作</strong><span className="story-studio-turn-progress" role="status">{storyTurnProgressText(workspace, storyTurn)}</span><span>{sessionAction === 'continue'
         ? '可以在当前会话继续'
-        : launchTargetId === undefined
+        : sessionAction !== 'start' || launchTargetId === undefined
           ? '启用会话工作区后可以开始'
           : `新会话将保存到「${launchTargets.find(target => target.id === launchTargetId)?.title ?? launchTargetId}」`}</span>
       {error !== undefined ? <span className="story-studio-status-error" role="alert">{error}</span>
