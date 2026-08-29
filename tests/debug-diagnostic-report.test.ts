@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { AgentRpBrowserCompatibilitySnapshot } from '../src/client/compatibility-diagnostic.ts'
+import { AGENT_RP_BUILD_IDENTITY } from '../src/client/build-identity.ts'
 import {
   collectAgentRpCopiedDiagnostic,
   MAX_AGENT_RP_COPIED_DIAGNOSTIC_BYTES,
@@ -11,6 +12,7 @@ import type { WorldInfoFailureReportBook } from '../src/client/world-info-failur
 
 const snapshot = {
   audit: 'agent-rp-browser-compat-v0',
+  build: AGENT_RP_BUILD_IDENTITY,
   interactions: {
     characterLibrary: { launchers: 0, state: 'closed' },
     presetManager: { launchers: 0, state: 'closed' },

@@ -9,7 +9,9 @@ import type { SessionSummary } from '@deepseek-ai/dsh-api-session-controller/cli
 import type { WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { CommandRowProps, TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {
+  AssistantActionOwnerProps, CommandRowProps, TurnTailOwnerProps,
+} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -175,6 +177,7 @@ import {
   collectAgentRpBrowserCompatibilitySnapshot,
   installAgentRpBrowserCompatibilityDiagnostic,
 } from './compatibility-diagnostic.ts'
+import { resolveAssistantActionMessage } from './generation-action-target.ts'
 import {
   collectAgentRpCopiedDiagnostic,
   serializeAgentRpCopiedDiagnostic,
@@ -633,7 +636,7 @@ type HeaderProps = PropsRuntime<'conversation.session.header.actions'> & {
 
 type ComposerDockProps = PropsRuntime<'conversation.composer.dock'>
 
-type GenerationTailProps = TurnTailOwnerProps & {
+type GenerationTailProps = Pick<TurnTailOwnerProps, 'seq' | 'turn'> & {
   readonly sessionId: SessionId
   readonly runGeneration: (
     sessionId: SessionId,
@@ -646,6 +649,9 @@ type GenerationTailProps = TurnTailOwnerProps & {
   readonly useProjection: PropsRuntime<'conversation.composer.dock'>['useProjection']
   readonly useSession: PropsRuntime<'conversation.composer.dock'>['useSession']
 }
+
+type AssistantGenerationActionsProps = AssistantActionOwnerProps
+  & Omit<GenerationTailProps, 'seq' | 'turn'>
 
 const color = 'var(--dsw-alias-state-business-primary, #6f78e8)'
 const statusPlaceholder = ROLEPLAY_STATUS_PLACEHOLDER
@@ -1278,6 +1284,17 @@ function GenerationTail({
         )
       }} />}
   </span>
+}
+
+function AssistantGenerationActions({
+  messageId, useChat, ...props
+}: AssistantGenerationActionsProps) {
+  const message = useChat(snapshot => resolveAssistantActionMessage(snapshot, messageId))
+  const turn = useChat(snapshot => message === undefined
+    ? undefined
+    : snapshot.timeline.turns.get(message.turn))
+  if (message === undefined || turn === undefined) return null
+  return <GenerationTail {...props} useChat={useChat} seq={message.seq} turn={turn} />
 }
 
 const generationButtonStyle = {
@@ -13628,17 +13645,26 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
     name: 'conversation.chat.commandview', key: 'rp-world-info-import',
   }, () => null))
+  ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
+    name: 'conversation.chat.assistant-actions',
+    id: 'agent-rp-generation',
+    order: 100,
+  }, props => <AssistantGenerationActions {...props} runGeneration={runGeneration} rewriteTurn={rewriteTurn}
+    runImageGeneration={runImageGeneration} />))
   ctx.slots.inject('conversation.chat.turnActions', () => ctx.slots.register({
     name: 'conversation.chat.turnActions',
     id: 'agent-rp-generation',
     order: 100,
-  }, props => <GenerationTail {...props} runGeneration={runGeneration} rewriteTurn={rewriteTurn}
-    runImageGeneration={runImageGeneration} />))
+  }, props => ctx.slots.spec('conversation.chat.assistant-actions') === undefined
+    ? <GenerationTail {...props} runGeneration={runGeneration} rewriteTurn={rewriteTurn}
+      runImageGeneration={runImageGeneration} />
+    : null))
   ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
     name: 'conversation.chat.turnTail',
     priority: 100,
     select: owner => {
-      if (ctx.slots.spec('conversation.chat.turnActions') !== undefined) return null
+      if (ctx.slots.spec('conversation.chat.assistant-actions') !== undefined
+        || ctx.slots.spec('conversation.chat.turnActions') !== undefined) return null
       const closing = owner.turn.data.get('turn-tail')?.closing
       return closing === null || closing === undefined ? null : { replySeq: closing.finalNode.seq }
     },

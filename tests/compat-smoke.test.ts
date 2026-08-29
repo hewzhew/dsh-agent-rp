@@ -14,6 +14,7 @@ import {
   type AgentRpCompatSmokePermissionDuration,
 } from '../src/compat-smoke.ts'
 import type { AgentRpBrowserCompatibilitySnapshot } from '../src/client/compatibility-diagnostic.ts'
+import { AGENT_RP_BUILD_IDENTITY } from '../src/client/build-identity.ts'
 
 test('classifies browser console failures without retaining their private text', () => {
   assert.equal(classifyAgentRpSmokeConsoleError('Failed to load resource: net::ERR_FAILED'), 'resource-load')
@@ -72,6 +73,7 @@ function browserSnapshot(options: {
   const preflight = options.preflight
   return {
     audit: 'agent-rp-browser-compat-v0',
+    build: AGENT_RP_BUILD_IDENTITY,
     interactions: {
       characterLibrary: { launchers: 1, state: options.characterLibrary ?? 'closed' },
       presetManager: { launchers: 1, state: options.presetManager ?? 'closed' },

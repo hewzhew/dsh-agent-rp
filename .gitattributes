@@ -1,3 +1,4 @@
 src/client/tavern-vendor-sources.generated.ts text eol=lf
 src/tavern-local-modules.generated.ts text eol=lf
 host-runner/patches/*.patch -whitespace
+host-patches/*.patch -whitespace
