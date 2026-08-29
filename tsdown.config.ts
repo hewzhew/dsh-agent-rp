@@ -1,6 +1,63 @@
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { defineConfig, type UserConfig } from 'tsdown'
+
+interface GitIdentity {
+  readonly revision?: string
+  readonly tree?: string
+  readonly dirty: boolean
+}
+
+const packageRoot = import.meta.dirname
+
+function gitIdentity(path: string, dirtyPaths?: readonly string[]): GitIdentity {
+  try {
+    const root = execFileSync('git', ['-C', path, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
+    return {
+      revision: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      tree: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
+      dirty: execFileSync('git', [
+        '-C', root, 'status', '--porcelain', '--untracked-files=normal',
+        ...(dirtyPaths === undefined ? [] : ['--', ...dirtyPaths]),
+      ], { encoding: 'utf8' }).trim() !== '',
+    }
+  } catch {
+    return { dirty: false }
+  }
+}
+
+function browserBuildIdentity(): string {
+  const agentRpManifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'))
+  const hostPatchManifest = JSON.parse(readFileSync(resolve(
+    packageRoot, 'host-patches/dsh-alpha-session-event-owners.json',
+  ), 'utf8'))
+  const dshManifestPath = realpathSync(resolve(
+    packageRoot, 'node_modules/@deepseek-ai/dsh-session/package.json',
+  ))
+  const dshManifest = JSON.parse(readFileSync(dshManifestPath, 'utf8'))
+  const agentRpGit = gitIdentity(packageRoot, [
+    'package.json', 'src', 'host-patches', 'tsdown.config.ts',
+  ])
+  const dshGit = gitIdentity(dirname(dshManifestPath))
+  return JSON.stringify({
+    audit: 'agent-rp-build-v0',
+    channel: agentRpManifest.private === true ? 'alpha-dev' : 'prerelease',
+    agentRp: {
+      version: agentRpManifest.version,
+      ...(agentRpGit.revision === undefined ? {} : { revision: agentRpGit.revision }),
+      dirty: agentRpGit.dirty,
+    },
+    dsh: {
+      version: dshManifest.version,
+      ...(dshGit.revision === undefined ? {} : { revision: dshGit.revision }),
+      dirty: dshGit.dirty,
+      ...(dshGit.tree === hostPatchManifest.patch.expectedTree
+        ? { hostPatch: hostPatchManifest.patch.id }
+        : {}),
+    },
+  })
+}
 
 function isHostExternal(id: string): boolean {
   return id.startsWith('node:') || id.startsWith('@deepseek-ai/')
@@ -68,6 +125,7 @@ const client: UserConfig = {
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+    'globalThis.__DSH_AGENT_RP_BUILD_IDENTITY__': browserBuildIdentity(),
   },
   plugins: [{
     name: 'bundle-raw-css',

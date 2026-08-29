@@ -6,6 +6,7 @@ import type {
 } from './runtime-diagnostic.ts'
 import type { AgentRpTurnHealthDiagnostic } from '../roleplay-turn-health-protocol.ts'
 import { WORLD_ENGINE_ACTIVATION_REASONS } from '../world-engine-diagnostic.ts'
+import { AGENT_RP_BUILD_IDENTITY, type AgentRpBuildIdentity } from './build-identity.ts'
 
 type Counter = Readonly<Record<string, number>>
 
@@ -38,6 +39,7 @@ export type AgentRpBrowserCompatibilityIssue =
 /** Content-free Host runtime facts plus mounted DOM integrity and interaction checks. */
 export interface AgentRpBrowserCompatibilitySnapshot {
   readonly audit: 'agent-rp-browser-compat-v0'
+  readonly build: AgentRpBuildIdentity
   readonly runtime?: {
     readonly source: 'host'
     readonly audit: AgentRpRuntimeDiagnosticSnapshot['audit']
@@ -627,6 +629,7 @@ export function collectAgentRpBrowserCompatibilitySnapshot(
   if (allFrames.some(frame => !restrictedSandbox(frame))) issues.add('iframe-sandbox-expanded')
   return {
     audit: 'agent-rp-browser-compat-v0',
+    build: AGENT_RP_BUILD_IDENTITY,
     ...(runtime === undefined ? {} : { runtime: {
       source: 'host' as const,
       audit: runtime.audit,

@@ -1,6 +1,6 @@
 {
   "name": "@hewzhew/dsh-agent-rp",
-  "version": "0.0.0-rc.252",
+  "version": "0.0.0-alpha-dev",
   "private": true,
   "description": "Native roleplay runtime and SillyTavern compatibility plugin for DeepSeek Harness.",
   "license": "MIT",
@@ -90,7 +90,7 @@
     "benchmark:compat": "tsdown benchmarks/heavy-card.ts --no-config --format esm --platform node --target es2024 --out-dir .benchmark-dist --clean && node .benchmark-dist/heavy-card.mjs",
     "generate:tavern-vendor": "node scripts/generate-tavern-vendor-sources.mjs",
     "check:tavern-vendor": "node scripts/generate-tavern-vendor-sources.mjs --check",
-    "check:dsh-alpha-source": "node scripts/check-dsh-alpha-session-events.mjs",
+    "check:dsh-alpha-source": "node scripts/manage-dsh-alpha-host-patch.mjs --check && node scripts/check-dsh-alpha-session-events.mjs",
     "check:release": "node scripts/check-prerelease-package.mjs",
     "clean:generated": "tsx scripts/clean-generated.ts",
     "smoke:compat": "tsdown --config tsdown.smoke.config.ts && node .smoke-dist/smoke-card-compat.mjs",

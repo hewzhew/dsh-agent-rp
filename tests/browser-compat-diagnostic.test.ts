@@ -191,6 +191,12 @@ test('collects one content-free healthy browser snapshot with expected permissio
   }))
 
   assert.equal(report.audit, 'agent-rp-browser-compat-v0')
+  assert.deepEqual(report.build, {
+    audit: 'agent-rp-build-v0',
+    channel: 'alpha-dev',
+    agentRp: { version: 'source', dirty: true },
+    dsh: { version: 'source', dirty: true },
+  })
   assert.deepEqual(report.checks, {
     capabilitiesResolved: true,
     externalWindowsHealthy: true,
