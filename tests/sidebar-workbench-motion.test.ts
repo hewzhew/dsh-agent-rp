@@ -56,6 +56,19 @@ test('sidebar starts one peer-resource composer instead of separate character an
   assert.doesNotMatch(source, /data-agent-rp-action="open-world-info-library"/u)
 })
 
+test('sidebar presents play spaces as a start path instead of a management tool', () => {
+  const startHeading = source.indexOf('>开始</h2>')
+  const storyWorkspaces = source.indexOf('data-agent-rp-action="open-story-workspaces"')
+  const manageHeading = source.indexOf('>管理</h2>')
+
+  assert.notEqual(startHeading, -1)
+  assert.notEqual(storyWorkspaces, -1)
+  assert.notEqual(manageHeading, -1)
+  assert.ok(startHeading < storyWorkspaces)
+  assert.ok(storyWorkspaces < manageHeading)
+  assert.match(source, />角色或世界书</u)
+})
+
 test('character launch keeps additional World Info in one collapsed resource selection', () => {
   assert.match(source, /const \[worldInfoOpen, setWorldInfoOpen\] = useState\(false\)/u)
   assert.match(source, /data-agent-rp-world-info-selection=\{selection\.length\}/u)
@@ -120,7 +133,7 @@ test('every roleplay launcher stays open when staged Tavern permissions discover
 
 test('sidebar exposes one resource-center drilldown for peer resource types', () => {
   assert.match(source, /data-agent-rp-action="open-resource-center"/u)
-  assert.match(source, /组合角色或场景、身份、世界与提示策略/u)
+  assert.match(source, /组合角色卡或世界书场景与提示策略/u)
   assert.match(source, /data-agent-rp-action="open-session-tools"/u)
   assert.match(source, /new CustomEvent\(openRoleplaySessionToolsEvent/u)
   assert.match(source, /className="agent-rp-session-menu"/u)
