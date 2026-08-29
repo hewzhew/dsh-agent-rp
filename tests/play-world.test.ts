@@ -1550,6 +1550,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
           name: model,
           reasoning: {
             efforts: [
+              { id: 'off', name: 'Off' },
               { id: 'none', name: 'None' },
               { id: 'minimal', name: 'Minimal' },
               { id: 'low', name: 'Low' },
@@ -1683,7 +1684,12 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
-  assert.equal(stageRequests.every(request => request.dispatch.reasoningEffort === 'high'), true)
+  assert.equal(stageRequests.find(request => request.stage === 'world-action')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'voice'
+    && request.subjectId?.startsWith('draft:') === true)?.dispatch.reasoningEffort, 'high')
+  assert.equal(stageRequests.find(request => request.stage === 'voice'
+    && request.subjectId?.startsWith('review:') === true)?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.some(request => request.stage === 'cast'), true)
   const characterRequests = stageRequests.filter(request => request.stage === 'character')
   const reimuCharacterBody = JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages)
