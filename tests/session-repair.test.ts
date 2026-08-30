@@ -46,8 +46,8 @@ test('repairs only known legacy events in a chosen multi-frame session and keeps
   assert.deepEqual(await readFile(repaired.backupPath), original)
   assert.deepEqual(await readFile(path), Buffer.concat([
     frame(header),
-    frame(events.map(event => event.type === 'agent-rp/state'
-      ? { type: event.type, seq: event.seq, time: event.time, data: event.data }
+    frame(events.map(event => event.type === 'agent-rp/turn-settlement'
+      ? { ...event, ignorable: true }
       : event)),
   ]))
   const verified = await repairAgentRpSessionFile(path)
@@ -55,14 +55,14 @@ test('repairs only known legacy events in a chosen multi-frame session and keeps
   assert.equal(verified.alreadySafeEvents, 2)
 })
 
-test('removes only the legacy field from plaintext JSONL records', async (t) => {
+test('adds only the replay-safe marker to plaintext Agent RP records', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'agent-rp-session-repair-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const path = join(directory, 'session.jsonl')
   const header = { type: 'session', version: 0, id: 'plain-fixture', createdAt: 1, delegationDepth: 0 }
   const legacy = {
     type: 'agent-rp/turn-mode', seq: 0, time: 2,
-    data: { format: 0, mode: 'agent', source: 'default' }, ignorable: true,
+    data: { format: 0, mode: 'agent', source: 'default' },
   }
   await writeFile(path, `${JSON.stringify(header)}\n${JSON.stringify(legacy)}\n`)
 
@@ -73,7 +73,7 @@ test('removes only the legacy field from plaintext JSONL records', async (t) => 
     .map(line => JSON.parse(line) as unknown)
   assert.deepEqual(storedHeader, header)
   assert.deepEqual(storedEvent, {
-    type: legacy.type, seq: legacy.seq, time: legacy.time, data: legacy.data,
+    type: legacy.type, seq: legacy.seq, time: legacy.time, data: legacy.data, ignorable: true,
   })
 })
 
@@ -102,7 +102,7 @@ test('locates one encoded Session id and refuses ambiguous or misplaced artifact
   const firstPath = join(firstDirectory, 'session.jsonl.zstd')
   const original = Buffer.concat([
     frame({ type: 'session', version: 0, id: sessionId, createdAt: 1, delegationDepth: 0 }),
-    frame({ type: 'agent-rp/turn-settlement', seq: 0, time: 2, data: { format: 0 }, ignorable: true }),
+    frame({ type: 'agent-rp/turn-settlement', seq: 0, time: 2, data: { format: 0 } }),
   ])
   await writeFile(firstPath, original)
 

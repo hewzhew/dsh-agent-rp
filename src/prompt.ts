@@ -1,6 +1,7 @@
 /** Stable character identity and dynamic memory context rendering. */
 
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ResolvedConfig } from './config.ts'
 import { activateLorebook, type LorebookActivationOptions } from './import/lorebook.ts'
 import type { ImportedCharacterCard, ImportedLorebook } from './import/types.ts'
@@ -20,7 +21,7 @@ const MEMORY_BEHAVIOR = '已记录的持久背景不是本轮必须提及的话�
 const IMPORT_BEHAVIOR = '用户附带 SillyTavern 角色卡 PNG、JSON 或 CHARX 并要求导入、接管或切换角色时，调用 import_character_card；附带独立 World Info / 世界书 JSON 并要求导入时，调用 import_world_info；附带 Chat Completion 预设 JSON 并要求导入时，调用 import_sillytavern_preset。一条消息附有多个同类文件时才指定从零开始的 attachmentIndex。导入成功后直接采用新角色、世界设定或预设，不解释内部格式。'
 const MVU_OUTPUT_BEHAVIOR = '每次回复都必须在正文末尾完整输出一个 <UpdateVariable><Analysis>…</Analysis><JSONPatch>[…]</JSONPatch></UpdateVariable>；没有变量变化时 JSONPatch 也输出空数组。'
 
-function finalizeRoleplayPrompt(value: string, statData?: import('@deepseek-ai/dsh-session').JsonValue): string {
+function finalizeRoleplayPrompt(value: string, statData?: JsonValue): string {
   let result = substituteMvuMacros(value, statData)
   for (;;) {
     const next = result.replace(/\{\{[^{}]*\}\}/gu, '')
@@ -37,7 +38,7 @@ function renderCardTemplate(value: string, options: LorebookActivationOptions): 
 
 function withResolvedLorebookMacros(
   options: LorebookActivationOptions,
-  statData: import('@deepseek-ai/dsh-session').JsonValue | undefined,
+  statData: JsonValue | undefined,
 ): LorebookActivationOptions {
   return {
     ...options,
@@ -136,7 +137,7 @@ export function renderSessionLorebooks(input: {
   readonly session: Session
   readonly pendingMessages?: readonly UserMessage[]
   readonly scanText?: readonly string[]
-  readonly statData?: import('@deepseek-ai/dsh-session').JsonValue
+  readonly statData?: JsonValue
   readonly templateOptions?: LorebookActivationOptions
   readonly tokenBudget?: number
 }) {
@@ -207,7 +208,7 @@ export function renderImportedCharacterPrompt(
   loreBefore: readonly string[],
   loreAfter: readonly string[],
   userName?: string,
-  statData?: import('@deepseek-ai/dsh-session').JsonValue,
+  statData?: JsonValue,
   userPersona?: string,
   templateOptions: LorebookActivationOptions = {},
   macros?: ReplayableRoleplayMacros,
@@ -328,7 +329,7 @@ export function renderImportedLorebook(
   card: ImportedCharacterCard,
   session: Session,
   pendingMessages: readonly UserMessage[] = [],
-  statData?: import('@deepseek-ai/dsh-session').JsonValue,
+  statData?: JsonValue,
   scanText: readonly string[] = [],
   templateOptions: LorebookActivationOptions = {},
 ) {

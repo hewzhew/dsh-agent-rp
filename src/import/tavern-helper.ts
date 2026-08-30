@@ -1,6 +1,6 @@
 /** Shared Tavern Helper script-tree parser for cards and presets. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ImportedTavernHelperScript } from './types.ts'
 
 /** Normalized Tavern Helper extension plus facts about its source encoding. */

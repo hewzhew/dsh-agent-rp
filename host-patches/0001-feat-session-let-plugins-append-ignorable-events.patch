@@ -1,0 +1,151 @@
+From 436f111b10aa22de868fb54d4b3bb6b51e2ce9c0 Mon Sep 17 00:00:00 2001
+From: hewzhew <hewzhew@bupt.edu.cn>
+Date: Sun, 23 Aug 2026 03:42:06 +0800
+Subject: [PATCH] feat(session): let plugins append ignorable events
+
+---
+ packages/core/session/src/index.ts          | 35 ++++++++++++++
+ packages/core/session/tests/session.spec.ts | 53 +++++++++++++++++++++
+ 2 files changed, 88 insertions(+)
+
+diff --git a/packages/core/session/src/index.ts b/packages/core/session/src/index.ts
+index afa2ff3604..395473162f 100644
+--- a/packages/core/session/src/index.ts
++++ b/packages/core/session/src/index.ts
+@@ -19,6 +19,7 @@ import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestC
+ import { deriveEventMessage, SurfaceManager } from './surface.ts'
+ import type { SessionSurface } from './surface.ts'
+ import { foldRequestHeader } from './request-header.ts'
++import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.ts'
+ 
+ export * from './types.ts'
+ export { SessionPreparation } from './preparation.ts'
+@@ -605,6 +606,39 @@ export class Session {
+     ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
+   ): SessionEvent<T> {
+     const surfaceOpts: SurfaceIntent | undefined = opts[0]
++    return this.appendAccepted(type, data, surfaceOpts, false)
++  }
++
++  /**
++   * Append one declaration-merged event owned by an out-of-repository plugin.
++   * The event is log-only and carries `ignorable: true`, so a harness without
++   * that plugin may load the Session without interpreting its private record.
++   * Known first-party event types must use {@link append}; surface events can
++   * never be ignorable because skipping one would change model history.
++   *
++   * @param type - An event type absent from this build's generated known-event list.
++   * @param data - The plugin-owned event payload; must be JSON-serializable.
++   * @returns the committed frozen event with its assigned sequence and timestamp.
++   * @throws if `type` belongs to this build, or if `data` violates the same JSON,
++   *   publication, or reentrancy checks as {@link append}.
++   */
++  appendIgnorable<T extends Exclude<SessionEventType, SurfaceEventType>>(
++    type: T,
++    data: SessionEventMap[T],
++  ): SessionEvent<T> & { readonly ignorable: true } {
++    if (KNOWN_SESSION_EVENT_TYPES.has(type)) {
++      throw new Error(`known session event "${type}" must use append()`)
++    }
++    return this.appendAccepted(type, data, undefined, true) as SessionEvent<T> & { readonly ignorable: true }
++  }
++
++  /** Snapshot, validate, commit, and publish one accepted event. */
++  private appendAccepted<T extends SessionEventType>(
++    type: T,
++    data: SessionEventMap[T],
++    surfaceOpts: SurfaceIntent | undefined,
++    ignorable: boolean,
++  ): SessionEvent<T> {
+     const surfaceMetadata = {
+       ...surfaceOpts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: surfaceOpts.sourceEventSeqs },
+       ...surfaceOpts?.surfaceOp === undefined ? {} : { surfaceOp: surfaceOpts.surfaceOp },
+@@ -628,6 +662,7 @@ export class Session {
+       time: Date.now(),
+       data: dataSnapshot,
+       ...(surfaceMetadataSnapshot as { surfaceOp?: unknown; sourceEventSeqs?: unknown }),
++      ...(ignorable ? { ignorable: true as const } : {}),
+     } as unknown as SessionEvent<T>)
+     this.surfaceManager.validateNext(event as SessionEvent)
+ 
+diff --git a/packages/core/session/tests/session.spec.ts b/packages/core/session/tests/session.spec.ts
+index 49c4e3f662..785e4ca330 100644
+--- a/packages/core/session/tests/session.spec.ts
++++ b/packages/core/session/tests/session.spec.ts
+@@ -11,6 +11,12 @@ import SessionStore, {
+ } from '@deepseek-ai/dsh-session'
+ import type { CreateSessionOptions, SessionEventType, SessionHeader, SessionSurface } from '@deepseek-ai/dsh-session'
+ 
++declare module '@deepseek-ai/dsh-session' {
++  interface SessionEventMap {
++    'external-plugin/audit': { readonly format: 0; readonly value: string }
++  }
++}
++
+ describe('Session', () => {
+   it('exposes one stable readonly surface view', () => {
+     const session = Session.create(SessionId('surface-view'))
+@@ -776,6 +782,26 @@ describe('Session', () => {
+     expect((event.data.content[0] as { text: string }).text).toBe('original')
+   })
+ 
++  it('marks out-of-repository plugin events ignorable without weakening known events', () => {
++    const session = Session.create(SessionId('external-plugin-event'))
++    const event = session.appendIgnorable('external-plugin/audit', { format: 0, value: 'recorded' })
++
++    expectTypeOf(event.ignorable).toEqualTypeOf<true>()
++    expect(event).toMatchObject({
++      type: 'external-plugin/audit',
++      seq: 0,
++      data: { format: 0, value: 'recorded' },
++      ignorable: true,
++    })
++    expect(Object.isFrozen(event)).toBe(true)
++    expect(Session.create(SessionId('external-plugin-replay'), structuredClone(session.events)).events[0])
++      .toMatchObject({ type: 'external-plugin/audit', ignorable: true })
++
++    expect(() => session.appendIgnorable('todo/write' as never, { todos: [] } as never))
++      .toThrow('known session event "todo/write" must use append()')
++    expect(session.events).toHaveLength(1)
++  })
++
+   it('reads a nested append-data getter once and stores its first JSON value', () => {
+     const session = Session.create(SessionId('append-nested-drift'))
+     let reads = 0
+@@ -1092,6 +1118,33 @@ describe('Session', () => {
+ 
+ 
+ describe('SessionStore', () => {
++  it('publishes and seeds plugin-owned ignorable events through the store lifecycle', async () => {
++    const ctx = new Context()
++    await ctx.plugin(SessionStore)
++    const published: [Session, SessionEvent][] = []
++    ctx.on('session/event', (session, event) => void published.push([session, event]))
++
++    const session = ctx.sessions.create(SessionId('external-plugin-live'))
++    const written = session.appendIgnorable('external-plugin/audit', {
++      format: 0,
++      value: 'persist this receipt',
++    })
++    expect(published).toEqual([[session, written]])
++    expect(written).toMatchObject({
++      type: 'external-plugin/audit',
++      seq: 0,
++      data: { format: 0, value: 'persist this receipt' },
++      ignorable: true,
++    })
++
++    const reopened = ctx.sessions.create(SessionId('external-plugin-reopened'), {
++      seed: structuredClone(session.events),
++    })
++    expect(reopened.events[0]).toEqual(written)
++    expect(reopened.events[1]).toMatchObject({ type: 'session/end-seed', seq: 1, data: {} })
++    expect(reopened.surface.nodes).toEqual([])
++  })
++
+   it('creates sessions, emits session/created and session/event', async () => {
+     const ctx = new Context()
+     await ctx.plugin(SessionStore)
+-- 
+2.54.0.windows.1
+

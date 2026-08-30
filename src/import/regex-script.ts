@@ -1,6 +1,6 @@
 /** Shared SillyTavern regex-script parsing. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ImportedRegexScript } from './types.ts'
 
 type JsonObject = { [key: string]: JsonValue }

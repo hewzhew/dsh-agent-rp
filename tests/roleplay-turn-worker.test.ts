@@ -41,7 +41,7 @@ test('runs review before settlement and isolates one Worker failure', async () =
     ['state', 'applied'],
   ])
   assert.equal(session.events.every(event => event.type !== 'agent-rp/turn-worker-result'
-    || !('ignorable' in event)), true)
+    || event.ignorable === true), true)
   assert.deepEqual(await registry.run(input(session)), [])
 })
 

@@ -2,7 +2,7 @@
 
 import type { ImportedCharacterFrontend } from './import/types.ts'
 import type { ImportedRegexScript } from './import/types.ts'
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { SessionPersonaSnapshot } from './persona-library-protocol.ts'
 import type { TavernHelperState } from './tavern-helper.ts'
 import type { PromptRegexTraceRecord } from './frontend-regex.ts'

@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "dshVersion": "0.1.2-alpha.2",
+  "upstream": {
+    "tag": "dsh-v0.1.2-alpha.2",
+    "commit": "0a53fb55bea101816fa226bb964ae2bed71c343b"
+  },
+  "patch": {
+    "id": "ignorable-external-session-events-v1",
+    "file": "0001-feat-session-let-plugins-append-ignorable-events.patch",
+    "sha256": "f91fa332ec0dc7debf2717b0fc47200df0eadd8904c17c724ae9da542e05fd0c",
+    "sourceCommit": "436f111b10aa22de868fb54d4b3bb6b51e2ce9c0",
+    "expectedTree": "9f98525678397452f887caa2f769336acdce16ad"
+  }
+}

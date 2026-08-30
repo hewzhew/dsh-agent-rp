@@ -13,7 +13,8 @@ import {
   type LlmFailure,
   type ResolvedRetryPolicy,
 } from '@deepseek-ai/dsh-llm'
-import { foldSurface, type JsonValue, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { foldSurface, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { jsonrepair } from 'jsonrepair'
 import {
   roleplayActModelDispatch,

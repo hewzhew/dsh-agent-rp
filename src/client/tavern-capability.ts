@@ -1,6 +1,6 @@
 /** Capability routing for authenticated Tavern Helper frame mutations. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { TavernHelperMutationRequest } from '../tavern-helper.ts'
 import { AGENT_RP_CAPABILITIES } from '../extension-capability.ts'
 import { parseExternalWindowRequestPayload } from './external-window.ts'

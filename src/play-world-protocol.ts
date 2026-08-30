@@ -1,6 +1,6 @@
 /** Browser-safe records for executable worlds hosted by one play space. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {
   RoleplayResourceSelection,
   RoleplayWorldCastSlotDetail,

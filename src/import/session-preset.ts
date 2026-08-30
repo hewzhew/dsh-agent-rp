@@ -1,6 +1,7 @@
 /** Durable SillyTavern preset replay from native tool events. */
 
-import type { JsonValue, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { FileAttachmentRef } from './session-character.ts'
 import type { ImportedSillyTavernPreset } from './sillytavern-preset.ts'
 import { configurePreset, parsePresetConfigurationRequest } from '../preset-configuration-core.ts'

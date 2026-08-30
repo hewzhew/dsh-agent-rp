@@ -46,8 +46,8 @@ test('writes conflict-checked state revisions and reconstructs them after reopen
 
   assert.equal(first.revision, 1)
   assert.equal(second.revision, 2)
-  assert.equal('ignorable' in session.events[0]!, false)
-  assert.equal('ignorable' in session.events[1]!, false)
+  assert.equal(session.events[0]?.ignorable, true)
+  assert.equal(session.events[1]?.ignorable, true)
   assert.deepEqual(first.value, { scene: { weather: '雨', hour: 21 }, flags: ['arrived'] })
   assert.throws(() => appendRoleplayState(session, {
     id: 'state:scene',

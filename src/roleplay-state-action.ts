@@ -4,11 +4,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   Session,
-  snapshotJsonValue,
-  type JsonValue,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   appendMvuState,
   applyMvuOperations,

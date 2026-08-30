@@ -1,6 +1,6 @@
 /** Neutral, lossless Character Card import vocabulary. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Character Card generation selected at the import boundary. */
 export type CharacterCardVersion = 1 | 2 | 3

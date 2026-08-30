@@ -1,7 +1,8 @@
 /** Source-neutral, read-only registry of reusable Roleplay resources. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { Session, SessionId, snapshotJsonValue, type JsonValue, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { isDeepStrictEqual } from 'node:util'
 import {
   parseRoleplayResourceDetail,

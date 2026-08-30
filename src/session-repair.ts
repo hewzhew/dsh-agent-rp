@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { lstat, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { constants, zstdCompressSync, zstdDecompressSync, type ZstdOptions } from 'node:zlib'
-import { AGENT_RP_SESSION_EVENT_TYPES } from './session-event-registration.ts'
+import { AGENT_RP_SESSION_EVENT_TYPES } from './session-event-append.ts'
 
 const ZSTD_MAGIC = 0xFD2FB528
 const CHECKSUM_OPTIONS: ZstdOptions = {
@@ -201,12 +201,11 @@ function patchPlaintext(input: Buffer): PlaintextPatch {
       if (record.surfaceOp !== undefined) {
         throw new Error(`拒绝修复带对话表面操作的事件 ${JSON.stringify(type)}`)
       }
-      if (record.ignorable === true) {
+      if (record.ignorable === undefined) {
         repairedEvents += 1
-        const { ignorable: _legacyIgnorable, ...current } = record
-        chunks.push(Buffer.from(`${JSON.stringify(current)}\n`, 'utf8'))
+        chunks.push(Buffer.from(`${JSON.stringify({ ...record, ignorable: true })}\n`, 'utf8'))
       } else {
-        if (record.ignorable !== undefined) {
+        if (record.ignorable !== true) {
           throw new Error(`事件 ${JSON.stringify(type)} 带有非法的 ignorable 标记`)
         }
         alreadySafeEvents += 1

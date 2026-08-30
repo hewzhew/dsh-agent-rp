@@ -1,7 +1,7 @@
 /** Registry and lifecycle boundary for executable play-space worlds. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import type {
   StoryAudience,

@@ -1,6 +1,6 @@
 /** Standalone SillyTavern regex-pack parsing shared by browser hints and Host storage. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseRegexScript } from './import/regex-script.ts'
 import type { ImportedRegexScript } from './import/types.ts'
 

@@ -990,7 +990,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.ok(stageRequests.findLastIndex(request => request.stage === 'history')
     < stageRequests.findIndex(request => request.stage === 'character'))
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
-    || !('ignorable' in event)), true)
+    || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
   assert.equal(calls, 16)

@@ -4,7 +4,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
-const manifestPath = resolve(repositoryRoot, 'host-patches/dsh-alpha-session-event-owners.json')
+const manifestPath = resolve(repositoryRoot, 'host-patches/dsh-alpha-ignorable-session-events.json')
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 const patchPath = resolve(dirname(manifestPath), manifest.patch.file)
 

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
   copyFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -29,50 +28,37 @@ function writeModule(root: string, name: string, source: string): void {
 function createProbeFixture(
   context: TestContext,
   sessionModule: string,
-): { readonly root: string; readonly probe: string; readonly disposeMarker: string } {
+): { readonly root: string; readonly probe: string } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-alpha-source-probe-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const probe = join(root, 'check-dsh-alpha-session-events.mjs')
-  const disposeMarker = join(root, 'fiber-disposed')
   copyFileSync(probeSource, probe)
-  writeModule(root, '@deepseek-ai/cordis', `
-import { writeFileSync } from 'node:fs'
-
-export class Context {
-  async plugin(Plugin) {
-    this.sessions = new Plugin(this)
-    return {
-      dispose: async () => {
-        writeFileSync(process.env.FAKE_DISPOSE_MARKER, 'disposed\\n')
-      },
-    }
-  }
-}
-`)
   writeModule(root, '@deepseek-ai/dsh-session', sessionModule)
-  return { root, probe, disposeMarker }
+  return { root, probe }
 }
 
 function runProbe(fixture: ReturnType<typeof createProbeFixture>) {
   return spawnSync(process.execPath, [fixture.probe], {
     cwd: fixture.root,
-    env: { ...process.env, FAKE_DISPOSE_MARKER: fixture.disposeMarker },
+    env: process.env,
     encoding: 'utf8',
   })
 }
 
-test('alpha source probe verifies registration and releases its Cordis fiber', context => {
+test('alpha source probe verifies replay-safe plugin event appends', context => {
   const fixture = createProbeFixture(context, `
-export default class SessionStore {
-  types = new Set()
-
-  registerEventType(type) {
-    this.types.add(type)
-    return () => this.types.delete(type)
+export const KNOWN_SESSION_EVENT_TYPES = new Set()
+export function SessionId(value) { return value }
+export class Session {
+  constructor(id, events = []) {
+    this.id = id
+    this.events = events
   }
-
-  recognizesEventType(type) {
-    return this.types.has(type)
+  static create(id, events = []) { return new Session(id, events) }
+  appendIgnorable(type, data) {
+    const event = { type, seq: this.events.length, time: 1, data, ignorable: true }
+    this.events.push(event)
+    return event
   }
 }
 `)
@@ -80,14 +66,19 @@ export default class SessionStore {
 
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, 'ready')
-  assert.equal(existsSync(fixture.disposeMarker), true)
 })
 
-test('alpha source probe rejects a SessionStore without external event registration', context => {
-  const fixture = createProbeFixture(context, 'export default class SessionStore {}\n')
+test('alpha source probe rejects a Session without replay-safe plugin event appends', context => {
+  const fixture = createProbeFixture(context, `
+export const KNOWN_SESSION_EVENT_TYPES = new Set()
+export function SessionId(value) { return value }
+export class Session {
+  constructor(id, events = []) { this.id = id; this.events = events }
+  static create(id, events = []) { return new Session(id, events) }
+}
+`)
   const result = runProbe(fixture)
 
   assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /registerEventType/u)
-  assert.equal(existsSync(fixture.disposeMarker), true)
+  assert.match(result.stderr, /appendIgnorable/u)
 })

@@ -7,9 +7,9 @@ import {
 import {
   Session,
   SessionId,
-  type JsonValue,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { FileAttachmentRef } from './session-character.ts'
 import { decodeCharacterLibraryLaunch } from './session-character.ts'
 import {
