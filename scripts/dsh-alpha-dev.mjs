@@ -228,16 +228,19 @@ function installSourceDependencies(dshRoot, links) {
   if (capability !== 'ready') fail('linked DSH Session capability probe did not report ready')
 }
 
-function writeManagedFile(path, content) {
+function assertManagedFileAvailable(path, content) {
   if (existsSync(path) && readFileSync(path, 'utf8') !== content) {
-    fail(`refusing to replace unmanaged profile file ${path}`)
+    fail(`refusing to replace unmanaged profile file ${path}; choose an empty --home directory`)
   }
+}
+
+function writeManagedFile(path, content) {
+  assertManagedFileAvailable(path, content)
   writeFileSync(path, content)
 }
 
-function prepareProfile(home) {
+function profilePlan(home) {
   const profileRoot = resolve(home, 'profiles/web')
-  mkdirSync(profileRoot, { recursive: true })
   const packageJson = JSON.stringify({
     name: 'dsh-profile-web',
     private: true,
@@ -255,17 +258,35 @@ function prepareProfile(home) {
       },
     },
   }, null, 2) + '\n'
-  writeManagedFile(resolve(profileRoot, 'package.json'), packageJson)
-  for (const [name, content] of managedProfileFiles) {
-    writeManagedFile(resolve(profileRoot, name), content)
+  return {
+    profileRoot,
+    files: new Map([
+      ['package.json', packageJson],
+      ...managedProfileFiles,
+    ]),
   }
-  return profileRoot
+}
+
+function assertProfilePlanAvailable(plan) {
+  for (const [name, content] of plan.files) {
+    assertManagedFileAvailable(resolve(plan.profileRoot, name), content)
+  }
+}
+
+function prepareProfile(plan) {
+  mkdirSync(plan.profileRoot, { recursive: true })
+  for (const [name, content] of plan.files) {
+    writeManagedFile(resolve(plan.profileRoot, name), content)
+  }
+  return plan.profileRoot
 }
 
 function main() {
   const options = parseArguments(process.argv.slice(2))
   const patch = checkPatchedDshRoot(options.dshRoot)
   const links = discoverDshPackages(options.dshRoot)
+  const plannedProfile = options.mode === 'preview' ? profilePlan(options.home) : undefined
+  if (plannedProfile !== undefined) assertProfilePlanAvailable(plannedProfile)
   if (options.mode === 'check') {
     process.stdout.write(JSON.stringify({ ready: true, patch, packages: links.size }) + '\n')
     return
@@ -276,7 +297,7 @@ function main() {
     return
   }
   buildHost()
-  const profileRoot = prepareProfile(options.home)
+  const profileRoot = prepareProfile(plannedProfile)
   pnpm([
     'install',
     '--no-lockfile',
