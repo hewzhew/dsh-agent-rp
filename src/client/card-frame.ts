@@ -1,6 +1,6 @@
 /** Browser-side compilation of character display segments into isolated iframe documents. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import {

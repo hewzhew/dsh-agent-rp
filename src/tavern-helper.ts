@@ -1,6 +1,7 @@
 /** Session-owned Tavern Helper variable compatibility. */
 
-import { snapshotJsonValue, type JsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ImportedCharacterFrontend, ImportedTavernHelperScript } from './import/types.ts'
 import { AGENT_RP_CAPABILITIES } from './extension-capability.ts'
 import type { RoleplayTurnSettlementContribution } from './roleplay-runtime.ts'

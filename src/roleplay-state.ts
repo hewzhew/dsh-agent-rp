@@ -1,11 +1,10 @@
 /** Durable native Roleplay state reconstructed from required Session events. */
 
 import {
-  snapshotJsonValue,
-  type JsonValue,
   type Session,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 
 /** Native lifecycle module that owns all source-neutral Roleplay state namespaces. */

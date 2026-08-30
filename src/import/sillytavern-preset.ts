@@ -1,6 +1,6 @@
 /** SillyTavern Chat Completion preset parsing without executing extension code. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseRegexScript } from './regex-script.ts'
 import { parseTavernHelperScripts, tavernHelperExtension, tavernHelperVariables } from './tavern-helper.ts'
 import type { ImportedRegexScript, ImportedTavernHelperScript, TavernHelperImportSummary } from './types.ts'

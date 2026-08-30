@@ -1,6 +1,7 @@
 /** Minimal persistent MVU state for imported Character Cards. */
 
-import { snapshotJsonValue, type JsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { ImportedCharacterCard, ImportedLorebook } from './import/types.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'

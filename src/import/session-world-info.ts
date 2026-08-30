@@ -1,6 +1,7 @@
 /** Durable standalone World Info replay from native tool events. */
 
-import type { JsonValue, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseWorldInfoJson } from './world-info.ts'
 import { WORLD_INFO_IMPORT_DEGRADATIONS } from './types.ts'
 import type { ImportedWorldInfo, WorldInfoImportDegradation } from './types.ts'

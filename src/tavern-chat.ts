@@ -2,7 +2,8 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { isSurfaceEvent, type JsonValue, type SessionEvent, type SurfaceEvent, type SurfaceIntent } from '@deepseek-ai/dsh-session'
+import { isSurfaceEvent, type SessionEvent, type SurfaceEvent, type SurfaceIntent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { TavernChatMessageInput, TavernChatMutationRequest, TavernHiddenMessage } from './tavern-helper.ts'
 
 type JsonRecord = Readonly<Record<string, JsonValue>>

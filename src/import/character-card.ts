@@ -1,6 +1,6 @@
 /** Character Card V1/V2/V3 JSON parser with lossless raw preservation. */
 
-import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {
   CharacterCardVersion,
   CharacterImportDegradation,

@@ -1,6 +1,6 @@
 /** Host-owned IndexedDB storage for isolated SillyTavern script sandboxes. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   parseInstalledStExtensionSettingsIdentity,
   parseTavernExtensionSettingsIdentity,

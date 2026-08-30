@@ -30,7 +30,7 @@ function gitIdentity(path: string, dirtyPaths?: readonly string[]): GitIdentity 
 function browserBuildIdentity(): string {
   const agentRpManifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'))
   const hostPatchManifest = JSON.parse(readFileSync(resolve(
-    packageRoot, 'host-patches/dsh-alpha-session-event-owners.json',
+    packageRoot, 'host-patches/dsh-alpha-ignorable-session-events.json',
   ), 'utf8'))
   const dshManifestPath = realpathSync(resolve(
     packageRoot, 'node_modules/@deepseek-ai/dsh-session/package.json',

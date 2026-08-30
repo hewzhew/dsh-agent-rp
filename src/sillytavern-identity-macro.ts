@@ -1,6 +1,6 @@
 /** Stable SillyTavern identity macro substitution shared by Host and browser views. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Character and player names available to identity macros. */
 export interface SillyTavernIdentityMacroValues {

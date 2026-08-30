@@ -1,6 +1,6 @@
 /** Iterative validation for JSON values crossing isolated browser runtimes. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Validate one finite, acyclic JSON value without recursive stack growth. */
 export function isJsonValue(value: unknown): value is JsonValue {

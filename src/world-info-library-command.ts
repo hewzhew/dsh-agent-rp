@@ -3,7 +3,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { prepareWorldInfoImportResult, type WorldInfoImportMeta } from './import/session-world-info.ts'
 import { WorldInfoLibrary } from './world-info-library.ts'
 import {

@@ -1,7 +1,8 @@
 /** Incremental browser projection of the active Roleplay identity. */
 
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
-import type { JsonValue, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseCharacterCardValue } from './import/character-card.ts'
 import { decodeCharacterLibraryLaunch, type CharacterImportMeta, type CharacterLibraryLaunchRecord } from './import/session-character.ts'
 import { readSillyTavernChatIdentity } from './import/sillytavern-chat-seed.ts'

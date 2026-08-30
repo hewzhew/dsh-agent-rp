@@ -1,7 +1,8 @@
 /** Durable imported-character replay from native tool events. */
 
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { JsonValue, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseCharacterCardValue } from './character-card.ts'
 import { CHARACTER_IMPORT_DEGRADATIONS } from './types.ts'
 import type { CharacterCardPngPayload, CharacterImportDegradation, ImportedCharacterCard } from './types.ts'

@@ -153,7 +153,7 @@ import {
   compileSessionRoleplayTurnPresentationUpdate,
 } from './session-roleplay-turn-presentation.ts'
 import { executeRoleplayStateCommand } from './roleplay-state-command.ts'
-import { registerAgentRpSessionEvents } from './session-event-registration.ts'
+import { hostSupportsAgentRpSessionEvents } from './session-event-append.ts'
 import { ensureDefaultRoleplayTurnMode } from './roleplay-turn-mode.ts'
 import { executeRoleplayTurnModeCommand } from './roleplay-turn-mode-command.ts'
 import {
@@ -1267,7 +1267,7 @@ export function installAgentRp(
           result,
           preset: preset as unknown as import('./import/sillytavern-preset.ts').ImportedSillyTavernPreset,
         }
-        return meta as unknown as import('@deepseek-ai/dsh-session').JsonValue
+        return meta as unknown as import('@deepseek-ai/dsh-util-values').JsonValue
       },
     },
     async execute(args, exec) {
@@ -1323,7 +1323,7 @@ export function installAgentRp(
       presentationMeta: (_args, value) => {
         const { raw, ...result } = value
         const meta: CharacterImportMeta = { format: 0, result, raw }
-        return meta as unknown as import('@deepseek-ai/dsh-session').JsonValue
+        return meta as unknown as import('@deepseek-ai/dsh-util-values').JsonValue
       },
     },
     async execute(args, exec) {
@@ -1402,7 +1402,7 @@ export function installAgentRp(
       presentationMeta: (_args, value) => {
         const { raw, ...result } = value
         const meta: WorldInfoImportMeta = { format: 0, result, raw }
-        return meta as unknown as import('@deepseek-ai/dsh-session').JsonValue
+        return meta as unknown as import('@deepseek-ai/dsh-util-values').JsonValue
       },
     },
     async execute(args, exec) {
@@ -1443,9 +1443,11 @@ async function loadEjsTemplateEngine(ctx: Context): Promise<EjsTemplateEngine | 
  * @param config - character configuration for this profile.
  */
 export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> {
-  registerAgentRpSessionEvents(ctx)
   const resolved = resolveConfig(config)
   if (resolved.mode === 'host') {
+    if (!hostSupportsAgentRpSessionEvents()) {
+      throw new Error('当前 DSH Host 缺少 Agent RP 所需的安全插件事件写入能力')
+    }
     const stExtensionGeneration = new StExtensionGenerationCoordinator()
     const unregisterStExtensionGeneration = registerStExtensionGenerationCoordinator(stExtensionGeneration)
     ctx.effect(() => () => {

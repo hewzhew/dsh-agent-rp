@@ -696,7 +696,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
-    || !('ignorable' in event)), true)
+    || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
   assert.equal(calls, 14)

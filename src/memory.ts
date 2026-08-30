@@ -1,7 +1,8 @@
 /** Durable Agent RP memory reconstructed from native tool events. */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import { Session, SessionId, type JsonValue, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 const PERSISTENT_MEMORY_INTENT = /(?:记住|记得|别忘|不要忘|以后|今后|下次|从现在起|remember|do(?:n['’]?t| not) forget|from now on|next time)/iu
 

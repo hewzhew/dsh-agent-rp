@@ -1,6 +1,6 @@
 /** Browser-safe values for direct World Info imports. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Same-origin upload endpoint served by the Agent RP Host plugin. */
 export const WORLD_INFO_LIBRARY_PATH = '/api/agent-rp/world-info'

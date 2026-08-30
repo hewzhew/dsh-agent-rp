@@ -2,7 +2,8 @@
 
 import { compileStExtensionDocument, parseStExtensionHostMessage } from './st-extension-document.ts'
 import type { InstalledStExtensionRegistry } from './st-extension-registry.ts'
-import type { JsonValue, SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { AgentRpProjection } from '../projection-types.ts'
 import { tavernPageSnapshot } from './tavern-snapshot.ts'
 import type { InstalledStExtensionSurface } from './st-extension-surface.tsx'

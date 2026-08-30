@@ -1,6 +1,6 @@
 /** Host-version-neutral codec for reply-version command results. */
 
-import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 
 export const GENERATION_STATE_RESULT_PREFIX = 'agent-rp-generation-v0:'
 

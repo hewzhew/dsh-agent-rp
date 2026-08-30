@@ -8,7 +8,8 @@ import {
   type ContentBlock,
   type MessageSource,
 } from '@deepseek-ai/dsh-llm'
-import type { JsonValue, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   decodeGenerationCommandResult,
   encodeGenerationCommandResult,

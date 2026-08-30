@@ -1,18 +1,14 @@
-import { Context } from '@deepseek-ai/cordis'
-import SessionStore from '@deepseek-ai/dsh-session'
+import { KNOWN_SESSION_EVENT_TYPES, Session, SessionId } from '@deepseek-ai/dsh-session'
 
 const eventType = 'agent-rp/alpha-source-capability-probe'
-const packageName = '@hewzhew/dsh-agent-rp'
-const ctx = new Context()
-const fiber = await ctx.plugin(SessionStore)
+const session = Session.create(SessionId('agent-rp-alpha-source-capability-probe'))
 
-try {
-  const dispose = ctx.sessions.registerEventType(eventType, packageName)
-  const registered = ctx.sessions.recognizesEventType(eventType)
-  dispose()
-  const released = !ctx.sessions.recognizesEventType(eventType)
-  if (!registered || !released) process.exitCode = 1
-  else process.stdout.write('ready')
-} finally {
-  await fiber.dispose()
+if (typeof session.appendIgnorable !== 'function') {
+  throw new Error('linked DSH Session does not expose appendIgnorable()')
 }
+const written = session.appendIgnorable(eventType, { format: 0 })
+if (written.ignorable !== true) throw new Error('appendIgnorable() did not mark the stored envelope')
+if (KNOWN_SESSION_EVENT_TYPES.has(eventType)) throw new Error('Agent RP probe unexpectedly belongs to the Host vocabulary')
+Session.create(session.id, structuredClone(session.events))
+
+process.stdout.write('ready')

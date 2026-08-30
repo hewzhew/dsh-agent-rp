@@ -1,6 +1,6 @@
 /** Pure validation and state transitions for session Prompt Manager changes. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ActiveSessionPreset } from './import/session-preset.ts'
 import type { ImportedSillyTavernPreset, SillyTavernPresetGeneration } from './import/sillytavern-preset.ts'
 import { presetRegexScripts } from './import/sillytavern-preset.ts'

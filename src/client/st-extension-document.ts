@@ -1,6 +1,6 @@
 /** Isolated singleton document for browser-installed SillyTavern extensions. */
 
-import type { JsonValue } from '@deepseek-ai/dsh-session/types'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { TavernInstalledExtensionPrompt } from '../tavern-helper.ts'
 import type { InstalledStExtensionEntry } from './st-extension-registry.ts'
 import { inlineScriptJson } from './inline-script-json.ts'

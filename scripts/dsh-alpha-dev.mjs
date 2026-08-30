@@ -87,10 +87,10 @@ function parseArguments(args) {
     }
     fail(`unknown argument ${JSON.stringify(arg)}`)
   }
-  const fallbackRoot = resolve(repositoryRoot, '../dsh-alpha-agent-rp')
+  const fallbackRoot = resolve(repositoryRoot, '../dsh-alpha2-agent-rp')
   const requestedRoot = dshRoot ?? (existsSync(fallbackRoot) ? fallbackRoot : undefined)
   if (requestedRoot === undefined) {
-    fail('set DSH_ALPHA_ROOT or pass --dsh-root with the patched DSH alpha source checkout')
+    fail('set DSH_ALPHA_ROOT or pass --dsh-root with the compatible DSH alpha source checkout')
   }
   const resolvedRoot = realpathSync(resolve(requestedRoot))
   const resolvedHome = resolve(home ?? resolve(repositoryRoot, '.runtime/dsh-alpha-home'))
@@ -135,8 +135,10 @@ function checkPatchedDshRoot(dshRoot) {
 }
 
 function discoverDshPackages(dshRoot) {
-  const packagesRoot = resolve(dshRoot, 'packages')
-  if (!existsSync(packagesRoot)) fail(`DSH package root does not exist: ${packagesRoot}`)
+  const sourceRoots = ['packages', 'vendor'].map(name => resolve(dshRoot, name))
+  for (const sourceRoot of sourceRoots) {
+    if (!existsSync(sourceRoot)) fail(`DSH source root does not exist: ${sourceRoot}`)
+  }
   const links = new Map()
   const visit = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -145,7 +147,7 @@ function discoverDshPackages(dshRoot) {
       const manifestPath = resolve(child, 'package.json')
       if (existsSync(manifestPath)) {
         const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-        if (typeof manifest.name === 'string' && manifest.name.startsWith('@deepseek-ai/dsh-')) {
+        if (typeof manifest.name === 'string' && manifest.name.startsWith('@deepseek-ai/')) {
           if (links.has(manifest.name)) fail(`duplicate DSH package ${manifest.name}`)
           links.set(manifest.name, child.replaceAll('\\', '/'))
         }
@@ -153,13 +155,13 @@ function discoverDshPackages(dshRoot) {
       visit(child)
     }
   }
-  visit(packagesRoot)
+  for (const sourceRoot of sourceRoots) visit(sourceRoot)
   const required = new Set(['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
     .flatMap(field => Object.keys(packageManifest[field] ?? {}))
-    .filter(name => name.startsWith('@deepseek-ai/dsh-')))
+    .filter(name => name.startsWith('@deepseek-ai/')))
   const missing = [...required].filter(name => !links.has(name)).sort()
   if (missing.length > 0) fail(`DSH source does not provide: ${missing.join(', ')}`)
-  return new Map([...links].filter(([name]) => required.has(name)))
+  return links
 }
 
 function writePnpmfile(directory, links) {
@@ -201,14 +203,46 @@ function installEsbuildBinary() {
   }
 }
 
-function buildHost() {
+function buildPlugin() {
   const tsdown = resolve(repositoryRoot, 'node_modules/tsdown/dist/run.mjs')
   if (!existsSync(tsdown)) fail('installed dependency graph does not contain tsdown')
-  run(process.execPath, [tsdown, '--config', 'tsdown.host.config.ts'])
+  run(process.execPath, [tsdown])
+}
+
+function missingDshBuildArtifacts(links) {
+  const missing = []
+  for (const [name, packageRoot] of links) {
+    const manifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'))
+    for (const field of ['main', 'types']) {
+      const relative = manifest[field]
+      if (typeof relative === 'string' && !existsSync(resolve(packageRoot, relative))) {
+        missing.push(`${name}:${field}`)
+      }
+    }
+  }
+  return missing
+}
+
+function ensureDshBuildArtifacts(dshRoot, links) {
+  const missing = missingDshBuildArtifacts(links)
+  if (missing.length === 0) return
+  pnpm(['run', 'build:lib'], dshRoot)
+  const remaining = missingDshBuildArtifacts(links)
+  if (remaining.length > 0) {
+    fail(`DSH build did not produce required package artifacts: ${remaining.join(', ')}`)
+  }
+}
+
+function ensureDshWebArtifacts(dshRoot) {
+  const index = resolve(dshRoot, 'apps/web/dist/index.html')
+  if (existsSync(index)) return
+  pnpm(['run', 'build:web'], dshRoot)
+  if (!existsSync(index)) fail(`DSH Web build did not produce ${index}`)
 }
 
 function installSourceDependencies(dshRoot, links) {
   pnpm(['install', '--frozen-lockfile'], dshRoot)
+  ensureDshBuildArtifacts(dshRoot, links)
   const temporary = mkdtempSync(resolve(tmpdir(), 'dsh-agent-rp-alpha-'))
   try {
     const pnpmfile = writePnpmfile(temporary, links)
@@ -216,6 +250,8 @@ function installSourceDependencies(dshRoot, links) {
       'install',
       '--ignore-workspace',
       '--no-lockfile',
+      `--lockfile-dir=${temporary}`,
+      `--virtual-store-dir=${resolve(repositoryRoot, 'node_modules/.pnpm')}`,
       '--ignore-scripts',
       '--config.strict-dep-builds=false',
       `--config.pnpmfile=${pnpmfile}`,
@@ -296,7 +332,8 @@ function main() {
     process.stdout.write(JSON.stringify({ ready: true, patch, packages: links.size }) + '\n')
     return
   }
-  buildHost()
+  ensureDshWebArtifacts(options.dshRoot)
+  buildPlugin()
   const profileRoot = prepareProfile(plannedProfile)
   pnpm([
     'install',
