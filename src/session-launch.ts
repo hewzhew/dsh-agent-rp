@@ -17,7 +17,11 @@ import { readActiveSessionCharacter, type FileAttachmentRef } from './import/ses
 import type { PresetLibrary, PresetLibraryEntry } from './preset-library.ts'
 import { substituteCardMacros } from './prompt.ts'
 import { parseSessionPersona } from './session-persona.ts'
-import type { AgentRpSessionLaunchRequest, LibrarySessionLaunchRequest } from './session-launch-protocol.ts'
+import type {
+  AgentRpSessionLaunchRequest,
+  LibrarySessionLaunchRequest,
+  StoryWorkspaceSessionLaunchRequest,
+} from './session-launch-protocol.ts'
 import type {
   RoleplayResourceKind,
   RoleplayResourceSelection,
@@ -40,6 +44,7 @@ function object(value: unknown, label: string): Record<string, unknown> {
 }
 
 const worldInfoLibraryIdPattern = /^world-info-[a-f0-9]{32}$/u
+const storyWorkspaceIdPattern = /^story-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 
 function parseAdditionalWorldInfoIds(value: unknown, primaryId?: string): readonly string[] | undefined {
   if (value === undefined) return undefined
@@ -197,6 +202,20 @@ export function parseAgentRpSessionLaunchRequest(value: unknown): AgentRpSession
       ...(agentPresetId === undefined ? {} : { agentPresetId }),
     }
   }
+  if (record.kind === 'story-workspace') {
+    if (typeof record.workspaceId !== 'string' || !storyWorkspaceIdPattern.test(record.workspaceId)
+      || Object.keys(record).some(key => !['format', 'sourceSessionId', 'kind', 'workspaceId', 'agentPresetId'].includes(key))) {
+      throw new Error('游玩场地会话启动请求字段无效')
+    }
+    const agentPresetId = parseAgentPresetId(record.agentPresetId)
+    return {
+      format: 0,
+      sourceSessionId: record.sourceSessionId as string,
+      kind: 'story-workspace',
+      workspaceId: record.workspaceId,
+      ...(agentPresetId === undefined ? {} : { agentPresetId }),
+    }
+  }
   if (record.kind === 'rewrite') {
     if (typeof record.turn !== 'number' || !Number.isSafeInteger(record.turn) || record.turn < 1
       || typeof record.text !== 'string' || record.text.trim() === '' || record.text.length > 8_000
@@ -274,7 +293,7 @@ export function prepareAgentRpSession(
   chats: SillyTavernChatLibrary,
   presets: PresetLibrary,
   worldInfos: WorldInfoLibrary,
-  request: LibrarySessionLaunchRequest,
+  request: Exclude<LibrarySessionLaunchRequest, StoryWorkspaceSessionLaunchRequest>,
   resources?: RoleplayResourceCatalog,
 ): PreparedAgentRpSession {
   if (request.kind === 'experience') {

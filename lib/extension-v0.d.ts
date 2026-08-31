@@ -70,6 +70,20 @@ interface RoleplayResourceProvider {
   inspect?(descriptor: RoleplayResourceDescriptor): RoleplayResourceDetail;
   /** Preserve the Session-event prefix and append a snapshot when the selection is not already active. */
   materialize?(input: RoleplayResourceMaterializationInput): RoleplayResourceMaterialization;
+  /** Resolve one actor into a stable model-facing identity without exposing source payloads. */
+  projectActor?(selection: RoleplayResourceSelection, descriptor: RoleplayResourceDescriptor): RoleplayActorProjection;
+}
+/** Host-only actor snapshot stored by a play-space character instance. */
+interface RoleplayActorProjection {
+  readonly name: string;
+  readonly profile: {
+    readonly description: string;
+    readonly personality: string;
+    readonly scenario: string;
+    readonly exampleDialogue: string;
+    readonly systemPrompt: string;
+    readonly postHistoryInstructions: string;
+  };
 }
 /** Source-neutral facts shared with each provider while a new experience is assembled. */
 interface RoleplayResourceMaterializationContext {
@@ -109,6 +123,8 @@ declare class RoleplayResourceCatalog {
   locate(kind: RoleplayResourceKind, id: string): LocatedRoleplayResource | undefined;
   /** Read bounded kind-specific details from the unique owning provider. */
   inspect(kind: RoleplayResourceKind, id: string): RoleplayResourceDetail;
+  /** Resolve one actor selection into a bounded stable identity snapshot. */
+  projectActor(selection: RoleplayResourceSelection): RoleplayActorProjection;
   /** Dispatch one selection to its owning provider and verify append-only Session semantics. */
   materialize(selection: RoleplayResourceSelection, events: readonly SessionEvent[], context: RoleplayResourceMaterializationContext): RoleplayResourceMaterialization;
 }

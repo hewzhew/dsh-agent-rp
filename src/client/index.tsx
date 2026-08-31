@@ -37,6 +37,8 @@ import {
   installStExtensionSurface,
 } from './st-extension-surface.tsx'
 import { StoryWorkspaceEditor } from './story-workspace-editor.tsx'
+import { createStoryWorkspaceNavigation, type StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
+import { installStoryWorkspaceSessionCard } from './story-workspace-session-card.tsx'
 
 interface SidebarDestinationOwnerProps {
   readonly wide: boolean
@@ -2764,10 +2766,13 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
     agentPresetId?: string,
     regexPackIds?: readonly string[],
   ) => Promise<void>
+  readonly startStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
+  readonly continueStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
   readonly renamePreset: (id: string, name: string) => Promise<PresetLibrarySummary>
   readonly deletePreset: (id: string) => Promise<void>
   readonly workspaceSettings: WorkspaceSettingsSource
   readonly workspaceList: WorkspaceListSource
+  readonly storyWorkspaceNavigation: StoryWorkspaceNavigation
 }
 
 type SidebarRoleplayDestinationProps = PropsRuntime<'sidebar.destinations'>
@@ -2847,14 +2852,16 @@ function SidebarRoleplayDestination({
   listPresets, listRegexPacks, importRegexPackFile, deleteRegexPack,
   listAgentCapabilityPresets, importPresetFile, listPersonas, savePersona, deletePersona,
   listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo, renamePreset, deletePreset,
-  startWorldInfoSession,
+  startWorldInfoSession, startStoryWorkspaceSession, continueStoryWorkspaceSession,
   workspaceSettings, workspaceList,
+  storyWorkspaceNavigation,
 }: SidebarRoleplayDestinationProps) {
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const [launchComposerOpen, setLaunchComposerOpen] = useState(false)
   const [migrationOpen, setMigrationOpen] = useState(false)
   const [resourceCenterOpen, setResourceCenterOpen] = useState(false)
   const [storyWorkspaceOpen, setStoryWorkspaceOpen] = useState(false)
+  const [storyWorkspaceInitialId, setStoryWorkspaceInitialId] = useState<string>()
   const [resourceCenterSection, setResourceCenterSection] = useState<'characters' | 'world-info' | 'regex-packs'>('characters')
   const [worldInfoLaunch, setWorldInfoLaunch] = useState<WorldInfoLibraryUpload>()
   const [launchSessionId, setLaunchSessionId] = useState<SessionId | undefined>(undefined)
@@ -2882,6 +2889,7 @@ function SidebarRoleplayDestination({
     && !accessSaving
   const blankSessionReady = currentSession?.blank === true
     && workspaceEnabled
+  const storyWorkspaceLaunchReady = blankSessionReady
   const unavailableReason = currentSessionId === undefined
     ? '先点侧栏的“新会话”，再从这里选择角色或迁移聊天'
     : !currentSession?.blank
@@ -2920,6 +2928,7 @@ function SidebarRoleplayDestination({
   }
   const openStoryWorkspace = (): void => {
     closeWorkbench()
+    setStoryWorkspaceInitialId(undefined)
     setStoryWorkspaceOpen(true)
   }
   const openCurrentSessionTools = (): void => {
@@ -2936,6 +2945,11 @@ function SidebarRoleplayDestination({
     document.addEventListener('keydown', onKeyDown)
     return () => { document.removeEventListener('keydown', onKeyDown) }
   }, [workbenchOpen])
+  useEffect(() => storyWorkspaceNavigation.subscribe(({ workspaceId }) => {
+    setWorkbenchOpen(false)
+    setStoryWorkspaceInitialId(workspaceId)
+    setStoryWorkspaceOpen(true)
+  }), [storyWorkspaceNavigation])
   const widestLeftWithUsableContent = Math.max(0, window.innerWidth - 320)
   const drawerLeft = width <= widestLeftWithUsableContent
     ? width
@@ -3071,9 +3085,9 @@ function SidebarRoleplayDestination({
           }}>
             <span aria-hidden="true" style={{ color, fontSize: '20px', lineHeight: 1 }}>✎</span>
             <span style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ display: 'block', fontSize: '13px' }}>故事工程</strong>
+              <strong style={{ display: 'block', fontSize: '13px' }}>游玩场地</strong>
               <span style={{ display: 'block', fontSize: '11px', lineHeight: 1.5, marginTop: '3px', opacity: .52 }}>
-                多人物认知、大纲、伏笔、分区正文与原著资料
+                可执行世界、人物认知、故事地图、资料与输出布局
               </span>
             </span>
             <span aria-hidden="true" style={{ fontSize: '16px', opacity: .38 }}>›</span>
@@ -3157,10 +3171,20 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
+      {...(storyWorkspaceInitialId === undefined ? {} : { initialWorkspaceId: storyWorkspaceInitialId })}
+      {...(storyWorkspaceLaunchReady && currentSessionId !== undefined ? {
+        launchSourceSessionId: String(currentSessionId),
+        onStartSession: (sourceSessionId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(sourceSessionId as SessionId, workspaceId, request),
+      } : {})}
       {...(currentSessionId === undefined || !isAgentRpCapabilityPresetId(currentSession?.agentPreset)
         ? {}
-        : { sessionId: String(currentSessionId) })}
-      onClose={() => { setStoryWorkspaceOpen(false) }}
+        : {
+            sessionId: String(currentSessionId),
+            onContinueSession: (targetSessionId: string, workspaceId: string, request: string) => continueStoryWorkspaceSession(
+              targetSessionId as SessionId, workspaceId, request,
+            ),
+          })}
+      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined) }}
     />, document.body)}
     {worldInfoLaunch !== undefined && launchSessionId !== undefined && createPortal(<WorldInfoLaunchDialog
       runtimeDiagnostics={runtimeDiagnostics}
@@ -12740,6 +12764,7 @@ export const inject = ['connection', 'conversationEvents', 'slots', 'sessions', 
 
 /** Register the Agent RP header, composer presentation, and import affordance. */
 export function apply(ctx: ClientContext): void {
+  const storyWorkspaceNavigation = createStoryWorkspaceNavigation()
   const installedStExtensions = new InstalledStExtensionRegistry()
   const installedStExtensionSurface = new InstalledStExtensionSurface()
   const installedStSettingsOwner = installedStExtensionSettingsIdentity()
@@ -12766,6 +12791,7 @@ export function apply(ctx: ClientContext): void {
   ctx.provide(AGENT_RP_ST_EXTENSION_SERVICE, installedStExtensions)
   ctx.effect(() => installStExtensionSurface(window, document, installedStExtensionSurface))
   installRoleplayArtifactTail(ctx)
+  installStoryWorkspaceSessionCard(ctx, storyWorkspaceNavigation)
   const runtimeDiagnostics = new AgentRpRuntimeDiagnosticRegistry()
   ctx.effect(() => installAgentRpRuntimeDiagnostic(window, runtimeDiagnostics))
   ctx.effect(() => installAgentRpBrowserCompatibilityDiagnostic(window, document, runtimeDiagnostics))
@@ -13096,6 +13122,27 @@ export function apply(ctx: ClientContext): void {
       sessionId, worldInfo, persona, presetId, worldInfoIds, resourcePermissions, agentPresetId, regexPackIds,
     )
     await archiveConsumedBlankSession(sessionId)
+  }
+  const sendStoryWorkspaceTurn = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
+    const selected = await executeAgentRpCommand(sessionId, `/rp-story-workspace ${JSON.stringify({ format: 0, workspaceId })}`)
+    if (!selected.matched) throw new Error('当前角色会话没有游玩场地命令')
+    const conversation = ctx.sessions.scope(sessionId)?.get('conversation') as IConversation | undefined
+    if (conversation === undefined) throw new Error('角色会话已经打开，但暂时还不能发送这一回合；请稍后重试')
+    await conversation.send(request)
+  }
+  const startStoryWorkspaceFromBlankSession = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
+    const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
+    if (summary === undefined || !summary.blank) throw new Error('只能从尚未开始的会话进入游玩场地')
+    const launchedSessionId = await launchRoleplaySession({
+      format: 0,
+      sourceSessionId: String(sessionId),
+      kind: 'story-workspace',
+      workspaceId,
+    })
+    await archiveConsumedBlankSession(sessionId)
+    const conversation = ctx.sessions.scope(launchedSessionId)?.get('conversation') as IConversation | undefined
+    if (conversation === undefined) throw new Error('游玩会话已经创建，但暂时还不能发送第一回合；请稍后重试')
+    await conversation.send(request)
   }
   const startCharacterFromCurrentSession = async (
     sessionId: SessionId,
@@ -13517,6 +13564,9 @@ export function apply(ctx: ClientContext): void {
     renamePreset: renamePresetLibraryEntry, deletePreset: deletePresetLibraryEntry, listPersonas, savePersona, deletePersona,
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
+    startStoryWorkspaceSession: startStoryWorkspaceFromBlankSession,
+    continueStoryWorkspaceSession: sendStoryWorkspaceTurn,
+    storyWorkspaceNavigation,
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({
     name: 'sidebar.destinations', id: 'agent-rp-workbench', order: 20,

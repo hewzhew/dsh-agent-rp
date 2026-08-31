@@ -21,6 +21,7 @@ import { installStoryWorkspaceHttp } from './story-workspace-http.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 import { executeStoryWorkspaceCommand, readSessionStoryWorkspaceId } from './session-story-workspace.ts'
 import { materializeStoryTurn, runStoryTurnPipeline } from './story-turn-pipeline.ts'
+import { installStoryTurnCompletion } from './story-turn-completion.ts'
 import {
   ROLEPLAY_RESOURCE_CATALOG_KEY,
   RoleplayResourceCatalog,
@@ -747,7 +748,12 @@ export function installAgentRp(
     readonly messages: UserMessage[]
     stExtensionGeneration?: StExtensionGenerationCoordinator
   }>()
-  const storyBriefByAgent = new WeakMap<Agent, { readonly turn: number; readonly text: string }>()
+  const storyBriefByAgent = new WeakMap<Agent, {
+    readonly turn: number
+    readonly step: number
+    readonly finalDraft: string
+    readonly modelContext: string
+  }>()
   const turnCoordinator = new RoleplayTurnCoordinator<Agent>()
   let settlementRuntimeActive = true
   ctx.effect(() => () => {
@@ -1288,6 +1294,11 @@ export function installAgentRp(
     }
     worldbookCharacterDisposers.clear()
   }, 'agent-rp: worldbook character contexts')
+  installStoryTurnCompletion(
+    ctx,
+    sessionId => agentsBySession.get(sessionId),
+    agent => storyBriefByAgent.get(agent),
+  )
   installMvuStreamCompletion(
     ctx,
     sessionId => agentsBySession.get(sessionId),
@@ -1330,13 +1341,19 @@ export function installAgentRp(
           const brief = await runStoryTurnPipeline({
             ctx,
             agent,
+            store: storyWorkspaces,
             workspace: storyWorkspaces.get(workspaceId),
             turn,
             step,
             messages: decision.messages,
             signal,
           })
-          storyBriefByAgent.set(agent, { turn, text: brief.modelContext })
+          storyBriefByAgent.set(agent, {
+            turn,
+            step,
+            finalDraft: brief.finalDraft,
+            modelContext: brief.modelContext,
+          })
         }
       } catch (error: unknown) {
         ctx.logger.warn(`agent-rp: story pipeline skipped: ${error instanceof Error ? error.message : String(error)}`)
@@ -1372,7 +1389,7 @@ export function installAgentRp(
     text: ({ scope }) => {
       if (scope === undefined) return ''
       const agent = agentsByScope.get(scope)
-      return agent === undefined ? '' : storyBriefByAgent.get(agent)?.text ?? ''
+      return agent === undefined ? '' : storyBriefByAgent.get(agent)?.modelContext ?? ''
     },
   })
   ctx.on('agent/request', async ({ agent, turn, step }, next) => {
@@ -1795,10 +1812,11 @@ export async function apply(ctx: Context, config: AgentRpConfig): Promise<void> 
           worldInfoLibrary,
           resourceCatalog,
           server,
+          storyWorkspaces,
         )
         installWorldInfoLibraryHttp(webCtx, worldInfoLibrary, server)
         installWorkspaceSettingsHttp(webCtx, workspaceSettings, server)
-        installStoryWorkspaceHttp(webCtx, storyWorkspaces, server)
+        installStoryWorkspaceHttp(webCtx, storyWorkspaces, server, resourceCatalog)
         installAgentRpCapabilityPresetHttp(webCtx, ctx, server)
         installRoleplayResourceCatalogHttp(webCtx, resourceCatalog, server)
         installNativeIdentityHttp(webCtx, new NativeIdentityStore(webCtx.credentials), server)

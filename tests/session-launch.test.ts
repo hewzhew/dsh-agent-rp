@@ -547,6 +547,12 @@ test('rejects paths and extra browser-owned launch fields', () => {
     turn: 1,
     text: '   ',
   }), /字段无效/u)
+  assert.throws(() => parseAgentRpSessionLaunchRequest({
+    format: 0,
+    sourceSessionId: 'source',
+    kind: 'story-workspace',
+    workspaceId: 'story-------------------------------------',
+  }), /字段无效/u)
 })
 
 test('accepts opt-in memory only for character launches', () => {

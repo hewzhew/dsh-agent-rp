@@ -1,4 +1,5 @@
-import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { defineConfig, type UserConfig } from 'tsdown'
 
 function isHostExternal(id: string): boolean {
@@ -69,6 +70,21 @@ const client: UserConfig = {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },
   plugins: [{
+    name: 'bundle-raw-css',
+    resolveId(id, importer) {
+      if (!id.endsWith('.css?raw')) return null
+      const request = id.slice(0, -4)
+      const path = request.startsWith('.') && importer !== undefined
+        ? resolve(dirname(importer), request)
+        : resolve('node_modules', request)
+      return `\0agent-rp-raw-css:${path}.js`
+    },
+    load(id) {
+      const prefix = '\0agent-rp-raw-css:'
+      if (!id.startsWith(prefix)) return null
+      return `export default ${JSON.stringify(readFileSync(id.slice(prefix.length, -3), 'utf8'))}`
+    },
+  }, {
     name: 'bundle-browser-safe-fflate',
     resolveId(id) {
       return id === 'fflate' ? resolve('node_modules/fflate/esm/browser.js') : null

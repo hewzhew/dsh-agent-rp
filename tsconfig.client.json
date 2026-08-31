@@ -4,6 +4,7 @@
     "types": ["react"]
   },
   "files": [
-    "src/client/index.tsx"
+    "src/client/index.tsx",
+    "src/client/raw-css.d.ts"
   ]
 }
