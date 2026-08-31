@@ -13,7 +13,7 @@ import type { StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
 import css from './story-workspace-session-card.css?raw'
 
 interface StoryWorkspaceSessionCardInjected {
-  readonly openStoryWorkspace: (workspaceId: string) => void
+  readonly openStoryWorkspace: (workspaceId: string, surface: 'play' | 'studio') => void
 }
 
 type StoryWorkspaceSessionCardProps = PropsRuntime<
@@ -64,8 +64,12 @@ function StoryWorkspaceSessionCard({ node, openStoryWorkspace }: StoryWorkspaceS
         暂时无法读取场地概况：{state.message}
       </span>}
     </div>
-    <button type="button" className="agent-rp-story-launch-action"
-      onClick={() => { openStoryWorkspace(workspaceId) }}>打开游玩场地 <span aria-hidden="true">→</span></button>
+    <div className="agent-rp-story-launch-actions">
+      <button type="button" className="agent-rp-story-launch-action"
+        onClick={() => { openStoryWorkspace(workspaceId, 'play') }}>继续游玩 <span aria-hidden="true">→</span></button>
+      <button type="button" className="agent-rp-story-launch-secondary"
+        onClick={() => { openStoryWorkspace(workspaceId, 'studio') }}>编辑场地</button>
+    </div>
   </article>
 }
 
@@ -89,7 +93,7 @@ export function installStoryWorkspaceSessionCard(
     name: 'conversation.chat.node',
     key: 'agent-rp-story-workspace-launch',
     inject: (): StoryWorkspaceSessionCardInjected => ({
-      openStoryWorkspace: workspaceId => { navigation.request({ workspaceId }) },
+      openStoryWorkspace: (workspaceId, surface) => { navigation.request({ workspaceId, surface }) },
     }),
   }, StoryWorkspaceSessionCard))
 }

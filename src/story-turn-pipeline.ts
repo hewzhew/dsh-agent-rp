@@ -117,6 +117,12 @@ export interface StoryTurnFinalSection {
   readonly text: string
 }
 
+/** Private character-state changes retained without rendering them into the visible reply. */
+export interface StoryTurnCharacterPrivateState {
+  readonly characterId: string
+  readonly insights: readonly StoryTurnPrivateInsight[]
+}
+
 /** One exact approved utterance rendered into a public prose section. */
 export interface StoryTurnPublicDialogue {
   readonly characterId: string
@@ -141,6 +147,8 @@ export interface StoryTurnBriefRecord {
   readonly researchCitations?: readonly StoryCitationDraft[]
   /** Structured source of the rendered final draft and later continuity update. */
   readonly finalSections: readonly StoryTurnFinalSection[]
+  /** Character-owned memory updates that never become visible sections. */
+  readonly privateCharacterStates?: readonly StoryTurnCharacterPrivateState[]
   readonly finalDraft: string
   readonly modelContext: string
   /** Exact approved public utterances with their owning character. */
@@ -151,7 +159,7 @@ export interface StoryTurnBriefRecord {
   readonly hostOwnedWorldDraft?: true
 }
 
-/** Exact editable story-document update committed after the visible reply. */
+/** Exact story-state update committed after presentation, including an intentional omission. */
 export interface StoryTurnMaterializedRecord {
   readonly format: 3
   readonly sessionId: string
@@ -498,11 +506,20 @@ function visibleReplySections(
   return sections.length === 0 ? undefined : sections
 }
 
-function privateInsightFacts(sections: readonly StoryTurnFinalSection[]): readonly StoryFactChange[] {
+function privateInsightFacts(
+  states: readonly StoryTurnCharacterPrivateState[],
+): readonly StoryFactChange[] {
+  return states.flatMap(state => state.insights
+    .map(insight => ({ text: insight.text, knownBy: [state.characterId] })))
+}
+
+function legacyPrivateCharacterStates(
+  sections: readonly StoryTurnFinalSection[],
+): readonly StoryTurnCharacterPrivateState[] {
   return sections.flatMap(section => section.kind === 'character'
     && section.characterId !== undefined
     && section.privateInsights !== undefined
-    ? section.privateInsights.map(insight => ({ text: insight.text, knownBy: [section.characterId!] }))
+    ? [{ characterId: section.characterId, insights: section.privateInsights }]
     : [])
 }
 
@@ -1895,6 +1912,7 @@ function renderHostWorldDialogueSections(
   })) return undefined
   const plannedReferences = new Set(director.sections.flatMap(section => section.speech.map(speech => speech.reference)))
   if ([...dialogueByReference.keys()].some(reference => !plannedReferences.has(reference))) return undefined
+  if (![...dialogueByReference.values()].some(dialogue => dialogue !== '')) return undefined
   const firstProse = outputs.find(output => output.enabled && output.kind === 'prose')
   if (firstProse === undefined) return undefined
   const planBySection = new Map(director.sections.map(section => [section.sectionId, section]))
@@ -1907,10 +1925,7 @@ function renderHostWorldDialogueSections(
       const approved = dialogueByReference.get(speech.reference)
       return approved === undefined || approved === '' ? [] : [approved]
     }) ?? []
-    const text = [
-      ...(output.id === firstProse.id ? [worldNarrative] : []),
-      ...dialogue,
-    ].join('\n\n')
+    const text = output.id === firstProse.id ? dialogue.join('\n\n') : ''
     return text === '' ? [] : [{ sectionId: output.id, name: output.name, kind: output.kind, text }]
   })
 }
@@ -2653,38 +2668,14 @@ function omitHostWorldRecap(
 
 function enforceFinalSections(
   editedDrafts: readonly StorySectionDraft[],
-  preparedDrafts: readonly StorySectionDraft[],
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   worldOutcome: string,
-  worldNarrative: string,
 ): readonly StorySectionDraft[] {
-  const enabled = outputs.filter(output => output.enabled)
+  const enabled = outputs.filter(output => output.enabled && output.kind !== 'character')
   if (enabled.length === 0) return editedDrafts
   const editedById = new Map(editedDrafts.map(draft => [draft.sectionId, draft]))
-  const preparedById = new Map(preparedDrafts.map(draft => [draft.sectionId, draft]))
   return enabled.flatMap((output): readonly StorySectionDraft[] => {
     const existing = editedById.get(output.id)
-    if (output.kind === 'character') {
-      const prepared = preparedById.get(output.id)
-      if (prepared === undefined) return []
-      return [{
-        sectionId: output.id,
-        name: output.name,
-        kind: output.kind,
-        ...(output.characterId === undefined ? {} : { characterId: output.characterId }),
-        ...(prepared.privateInsights === undefined ? {} : { privateInsights: prepared.privateInsights }),
-        text: prepared.text,
-      }]
-    }
-    if (output.kind === 'prose' && worldNarrative !== '') {
-      const remainder = existing === undefined ? '' : proseWithoutHostWorldNarrative(existing.text, worldNarrative)
-      return [{
-        sectionId: output.id,
-        name: output.name,
-        kind: output.kind,
-        text: [worldNarrative, remainder].filter(Boolean).join('\n\n'),
-      }]
-    }
     if (output.kind === 'history' && worldOutcome !== '') {
       return [{ sectionId: output.id, name: output.name, kind: output.kind, text: worldOutcome }]
     }
@@ -3210,6 +3201,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const characterDecisionText = characterDecisions.map(record => record.text)
 
   const enabledSections = expandStoryTurnOutputs(input.workspace, enabledCharacters)
+    .filter(section => section.kind !== 'character')
   const storyMap = storyDirectorMap(input.workspace)
   const foreshadowing = storyOpenForeshadowing(input.workspace)
   const hostDirectorAssignment = resolveHostWorldDirectorAssignment(
@@ -3439,14 +3431,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     worldNarrative,
     worldOutcome,
   )
-  const omitWorldProseExtras = worldNarrative !== ''
-    && approvedDialogue.size === 0
-    && characterDecisions.every(record => record.decision.action === '')
   let sectionDrafts: readonly StorySectionDraft[]
   if (hostWorldDialogueSections !== undefined) {
     sectionDrafts = hostWorldDialogueSections
   } else if (enabledSections.length === 0) {
-    sectionDrafts = [{ sectionId: 'director-fallback', name: '正文', kind: 'prose', text: directorBrief }]
+    sectionDrafts = []
   } else {
     sectionDrafts = (await mapStoryPeers(
       enabledSections,
@@ -3455,9 +3444,6 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         input.signal.throwIfAborted()
         if (section.kind === 'history' && worldOutcome !== '') {
           return { sectionId: section.id, name: section.name, kind: section.kind, text: worldOutcome }
-        }
-        if (section.kind === 'prose' && omitWorldProseExtras) {
-          return { sectionId: section.id, name: section.name, kind: section.kind, text: worldNarrative }
         }
         if (section.kind === 'character') {
           const characterId = section.characterId
@@ -3483,11 +3469,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const outputInstruction = section.kind === 'prose' && worldNarrative !== ''
-          ? 'Host 会把 world_narrative 原样放在本分区首段；只返回它之后确有信息增量的角色反应和获准对白，不得复述或改写世界事件。没有额外内容时返回 <omit-section />。'
+          ? '棋盘会直接呈现 world_narrative 对应的规则结果；不要复述它。只返回确有信息增量的公开行动和获准对白，没有额外内容时返回 <omit-section />。'
           : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
           ? 'current_world_outcome 是本轮刚发生的权威结果：prose 必须完整表现这些事件及执行动作的人。'
-          : 'world_narrative 是 Host 生成的权威首段；prose 不得改写、复述或替换它，只能在其后添加确有信息增量的反应。'
+          : 'world_narrative 是棋盘事实约束，不是待粘贴的正文；prose 不得复述它，只能写确有信息增量的反应。'
         const draft = await runStage(input, 'section', generateOptions(
           input,
           reasoning,
@@ -3508,11 +3494,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           ? { sectionId: section.id, name: section.name, kind: section.kind, text: worldNarrative }
           : undefined
         const omitted = draft.text.trim() === '<omit-section />'
-        let text = section.kind === 'prose' && worldNarrative !== ''
-          ? omitted || draft.text.includes(worldNarrative)
-            ? omitted ? worldNarrative : draft.text
-            : [worldNarrative, draft.text].join('\n\n')
-          : omitted && section.kind === 'history'
+        let text = omitted && section.kind === 'history'
             ? historySectionFallback(input.workspace)
             : draft.text
         text = appendMissingApprovedDialogue(text, sectionApprovedDialogue)
@@ -3525,14 +3507,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       },
     )).filter((value): value is StorySectionDraft => value !== undefined)
   }
-  const uneditedDraft = renderSectionDrafts(sectionDrafts).trim() || directorBrief
+  const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
   if (hostWorldDialogueSections === undefined) {
     const edited = await runStage(input, 'editor', generateOptions(
       input,
       reasoning,
       'routine',
-      '你是最终正文编辑 Worker。先按分区职责做跨区编辑：公共场景、行动和对白只保留在 prose；character 只保留会影响后续回合的私有知识、持续意图或已经作出的决定，删除瞬时情绪、对公开肢体动作的猜测、下一项规则动作和仅为换视角复述正文的内容；history 只保留可核对的事实记录。world_narrative 是 Host 生成的权威 prose 首段，必须逐字保留且位于本轮其他场面之前；删除 ordered_sections 中对它的任何改写或复述。current_world_outcome 必须在 history 逐项保留。不能把重点改成下一位人物准备未来动作。相同叙事材料不许在多个分区换句话重演，完全重复或没有独有且持久内容的 character 分区应省略，保留其余分区的原顺序。history 的简洁事实记录即使与正文记述同一事件也承担独立的检索职责，不能因此删除；只删除 history 内部的场景化复述。随后逐句检查 prose：没有新增可观察行动、人物决定、关系变化或必要对白的过渡句应删除；删除“空气安静了一会儿”式空镜、无因由的迟疑和为了显得细腻而补出的手指、目光、换手、敲碰物件、摆姿势、轻笑、抬下巴等微动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；不得新增、恢复、拆分、重写或删除任何获准对白，只能逐字保留 ordered_sections 中仍存在的完整句子。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 不得新增、重复或改序；省略应删除的分区。text 内不能使用二级标题，需要内部标题时从三级标题开始。不要使用 Markdown 围栏。',
+        '你是最终正文编辑 Worker，负责决定用户会看到的文本。人物私有认知和内部历史不会交给你，也不得补写。公共场景、行动和对白只保留在 prose；显式配置的 history 只保留可核对的事实记录。world_narrative 与 current_world_outcome 是棋盘事实约束，不是待粘贴的正文；棋盘已经表达清楚的规则结果不要在 prose 中复述，history 仅在 ordered_sections 明确包含该分区时保留。不能把重点改成下一位人物准备未来动作。相同材料不许跨分区换句话重演。随后逐句检查 prose：没有新增可观察行动、人物决定、关系变化或必要对白的过渡句应删除；删除“空气安静了一会儿”式空镜、无因由的迟疑和为了显得细腻而补出的手指、目光、换手、敲碰物件、摆姿势、轻笑、抬下巴等微动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；不得新增、恢复、拆分、重写或删除任何获准对白，只能逐字保留 ordered_sections 中仍存在的完整句子。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 不得新增、重复或改序；省略应删除的分区。text 内不能使用二级标题，需要内部标题时从三级标题开始。不要使用 Markdown 围栏。',
       [
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
@@ -3553,10 +3535,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const enforcedSections = enforceFinalSections(
     editedSections,
-    sectionDrafts,
     enabledSections,
     worldOutcome,
-    worldNarrative,
   )
   const omitVisibleWorldRecap = approvedDialogue.size > 0 && playerForbidsWorldRecap(playerInput)
   const finalSections = omitVisibleWorldRecap
@@ -3583,6 +3563,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     }]
   })) ?? []
   const context = modelContext(finalDraft)
+  const privateCharacterStates = characterDecisions.flatMap(record => record.decision.insights.length === 0
+    ? []
+    : [{ characterId: record.characterId, insights: record.decision.insights }])
   const record: StoryTurnBriefRecord = {
     format: 1,
     sessionId: String(input.agent.session.id),
@@ -3595,6 +3578,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorBrief,
     ...(research.citations.length === 0 ? {} : { researchCitations: research.citations }),
     finalSections,
+    ...(privateCharacterStates.length === 0 ? {} : { privateCharacterStates }),
     finalDraft,
     modelContext: context,
     ...(publicDialogues.length === 0 ? {} : { publicDialogues }),
@@ -3611,7 +3595,7 @@ function storyTurnMaterializationKey(sessionId: string, turn: number, briefSeq: 
   return `session-${sessionHash}-turn-${String(turn)}-brief-${String(briefSeq)}`
 }
 
-/** Materialize the actually visible reply into global history and one typed story change set. */
+/** Materialize the completed presentation into internal history and one typed story change set. */
 export async function materializeStoryTurn(input: {
   readonly ctx: Context
   readonly agent: Agent
@@ -3629,7 +3613,8 @@ export async function materializeStoryTurn(input: {
       && event.data.workspaceId === input.workspaceId)
   if (briefEvent === undefined) return undefined
   const visibleReply = visibleReplyText(input.agent.session.events, input.turn)
-  if (visibleReply === '') return undefined
+  const intentionallyOmitted = briefEvent.data.finalDraft === ''
+  if (visibleReply === '' && !intentionallyOmitted) return undefined
   const voiceCitations = uniqueCitationDrafts((briefEvent.data.publicDialogues ?? []).flatMap(dialogue =>
     visibleReply.includes(dialogue.dialogue) ? dialogue.voiceCitations ?? [] : []), 12)
   const visibleSections = visibleReplySections(visibleReply, briefEvent.data.finalSections)
@@ -3655,7 +3640,12 @@ export async function materializeStoryTurn(input: {
   let update: ContinuityUpdate
   let continuityResultEventSeq: number | undefined
   let hostOwnedMaterialization = false
-  if (briefEvent.data.hostOwnedWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
+  if (intentionallyOmitted) {
+    update = {
+      history: worldOutcome,
+      changes: { characters: [], facts: [], nodes: [], edges: [] },
+    }
+  } else if (briefEvent.data.hostOwnedWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
     hostOwnedMaterialization = true
     const characterNameById = new Map(participants.map(character => [character.id, character.name]))
     const publicDialogues = (briefEvent.data.publicDialogues ?? []).flatMap(item => {
@@ -3737,7 +3727,9 @@ export async function materializeStoryTurn(input: {
       changes: update.changes,
     }
   }
-  const ownedPrivateFacts = privateInsightFacts(visibleSections ?? [])
+  const ownedPrivateFacts = privateInsightFacts(
+    briefEvent.data.privateCharacterStates ?? legacyPrivateCharacterStates(visibleSections ?? []),
+  )
   if (ownedPrivateFacts.length > 0 || publicDialogueFacts.length > 0) {
     update = {
       ...update,

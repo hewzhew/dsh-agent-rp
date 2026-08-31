@@ -189,7 +189,7 @@ export interface StoryFact {
   readonly source: StoryFactSource
 }
 
-/** One completed story event derived from the actually visible reply. */
+/** One completed story event; evidence is empty when presentation intentionally omitted prose. */
 export interface StoryEvent {
   readonly id: string
   readonly key: string
@@ -199,7 +199,7 @@ export interface StoryEvent {
   readonly evidence: string
   readonly participantIds: readonly string[]
   readonly nodeId?: string
-  /** Authoritative executable-world events represented by this visible story turn. */
+  /** Authoritative executable-world events processed by this story turn. */
   readonly worldEventSequences?: readonly number[]
 }
 
@@ -441,7 +441,7 @@ export interface StoryChangeSet {
   readonly edges: readonly StoryEdgeSuggestion[]
 }
 
-/** One completed visible turn materialized into an event and one typed change set. */
+/** One completed turn materialized into internal history and one typed change set. */
 export interface StoryTurnMaterialization {
   readonly key: string
   readonly turn: number
@@ -449,7 +449,7 @@ export interface StoryTurnMaterialization {
   readonly summary: string
   readonly evidence: string
   readonly participantIds: readonly string[]
-  /** Executable-world events that the visible reply was required to represent. */
+  /** Executable-world events processed by this turn, whether shown or intentionally omitted. */
   readonly worldEventSequences?: readonly number[]
   readonly changes: StoryChangeSet
   /** Local source excerpts used by research or approved dialogue during this turn. */

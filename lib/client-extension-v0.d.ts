@@ -1,4 +1,6 @@
 import { PropsRuntime } from "@deepseek-ai/dsh-client-ui-slots";
+import { JsonValue } from "@deepseek-ai/dsh-util-values";
+
 /** One authoritative event emitted by an executable world. */
 interface PlayWorldEvent {
   readonly id: string;
@@ -7,6 +9,8 @@ interface PlayWorldEvent {
   readonly title: string;
   readonly summary: string;
   readonly actorId?: string;
+  /** Module-owned machine-readable cause and values used by clients and model projections. */
+  readonly data?: JsonValue;
 }
 /** Durable module-owned state attached to one play space. */
 interface PlayWorldSnapshot {

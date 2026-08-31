@@ -2223,7 +2223,7 @@ export class StoryWorkspaceStore {
     return { workspace: this.get(snapshot.id), sync }
   }
 
-  /** Idempotently append one visible turn as an event and one typed story change set. */
+  /** Idempotently append one processed turn as an event and one typed story change set. */
   materializeTurn(id: string, materialization: StoryTurnMaterialization): StoryWorkspaceSnapshot {
     if (!/^[A-Za-z0-9:_-]{1,240}$/u.test(materialization.key)) throw new Error('故事事件 key 无效')
     const current = this.get(id)

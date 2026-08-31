@@ -4,15 +4,15 @@ import type { PlayWorldEvent } from './play-world-protocol.ts'
 import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
 
 /**
- * Return authoritative world events that no completed story turn represents yet.
+ * Return authoritative world events that no completed story turn has processed yet.
  *
  * @param workspace Story workspace containing world and story histories.
- * @returns Unrepresented events in authoritative sequence order.
+ * @returns Unprocessed events in authoritative sequence order.
  */
 export function storyPendingWorldEvents(workspace: StoryWorkspaceSnapshot): readonly PlayWorldEvent[] {
   if (workspace.world === undefined) return []
-  const represented = new Set(workspace.events.flatMap(event => event.worldEventSequences ?? []))
-  return workspace.world.events.filter(event => !represented.has(event.sequence))
+  const processed = new Set(workspace.events.flatMap(event => event.worldEventSequences ?? []))
+  return workspace.world.events.filter(event => !processed.has(event.sequence))
 }
 
 /**

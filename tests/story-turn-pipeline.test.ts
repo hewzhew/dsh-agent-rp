@@ -461,6 +461,8 @@ test('omits character outputs when their isolated character decision is unavaila
       && request.stage === 'character' && request.subjectId === bobId)), true)
   assert.equal(stageRequests.some(request => request.stage === 'section'), false)
   assert.deepEqual(result.finalSections, [])
+  assert.equal(result.finalDraft, '')
+  assert.doesNotMatch(result.modelContext, /下一幕会停电|第三幕打开/u)
 })
 
 test('runs logged story stages while keeping each character request privately scoped', async () => {
@@ -640,8 +642,6 @@ test('runs logged story stages while keeping each character request privately sc
                   },
                 ],
               },
-              { sectionId: aliceCharacterSectionId, characterId: '阿梨' },
-              { sectionId: bobCharacterSectionId, characterId: '柏舟' },
               { sectionId: historySectionId, beats: ['记录已经发生的公开事实。'] },
             ],
           })
@@ -718,7 +718,6 @@ test('runs logged story stages while keeping each character request privately sc
                 sectionId,
                 text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n柏舟说：“编辑器新增的台词。”',
               },
-              { sectionId: aliceCharacterSectionId, text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
               { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
             ],
           })
@@ -939,16 +938,16 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
   assert.doesNotMatch(sectionBodies[0]!, /对白收束/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
-  assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(aliceCharacterSectionId))
-  assert.ok(editorBody.indexOf(aliceCharacterSectionId) < editorBody.indexOf(historySectionId))
-  assert.match(editorBody, new RegExp(`${aliceCharacterSectionId}[\\s\\S]*自己的旧站记忆`, 'u'))
+  assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(historySectionId))
+  assert.doesNotMatch(editorBody, new RegExp(aliceCharacterSectionId, 'u'))
+  assert.doesNotMatch(editorBody, /自己的旧站记忆/u)
   assert.match(editorBody, /先看“徽章”，别忙着猜/u)
   assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
   assert.doesNotMatch(editorBody, /<voice_evidence>/u)
   assert.match(editorSystem, /不得新增、恢复、拆分、重写或删除任何获准对白/u)
-  assert.match(editorSystem, /history 的简洁事实记录.*不能因此删除/u)
+  assert.match(editorSystem, /人物私有认知和内部历史不会交给你/u)
   assert.match(directorBody, /## 结论所引用的原始证据/u)
   assert.match(directorBody, /终章原著/u)
   assert.match(directorSystem, /Host 会把导演遗漏的有效决定补回默认正文分区/u)
@@ -967,12 +966,13 @@ test('runs logged story stages while keeping each character request privately sc
     characterId: section.characterId,
   })), [
     { sectionId, kind: 'prose', characterId: undefined },
-    { sectionId: aliceCharacterSectionId, kind: 'character', characterId: aliceId },
     { sectionId: historySectionId, kind: 'history', characterId: undefined },
   ])
-  assert.deepEqual(result.finalSections.find(section => section.sectionId === aliceCharacterSectionId)?.privateInsights, [
-    { kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' },
-  ])
+  assert.deepEqual(result.privateCharacterStates, [{
+    characterId: aliceId,
+    insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
+  }])
+  assert.doesNotMatch(result.finalDraft, /自己的旧站记忆/u)
   assert.match(result.modelContext, /阿梨看向徽章/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)

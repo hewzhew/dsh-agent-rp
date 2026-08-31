@@ -20,6 +20,28 @@
   box-sizing: border-box;
 }
 
+.story-play-surface-topbar {
+  align-items: center;
+  background: color-mix(in srgb, var(--studio-panel) 78%, var(--studio-bg));
+  border-bottom: 1px solid var(--studio-border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 9px 16px;
+}
+
+.story-play-surface-actions { align-items: center; display: flex; gap: 8px; }
+.story-play-surface-main { flex: 1; min-height: 0; overflow: hidden; }
+.story-play-surface-message {
+  background: color-mix(in srgb, var(--story-accent) 9%, var(--studio-panel));
+  border-top: 1px solid var(--studio-border);
+  font-size: 11px;
+  padding: 8px 16px;
+}
+
+.agent-rp-story-play-surface .story-play-view { padding-top: 20px; }
+.agent-rp-story-play-surface .story-play-heading > div:first-child > span { text-transform: none; }
+
 .story-studio-topbar {
   align-items: center;
   border-bottom: 1px solid var(--studio-border);

@@ -106,6 +106,27 @@
   padding: 8px 14px;
 }
 
+.agent-rp-story-launch-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.agent-rp-story-launch-secondary {
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l2, #3d3e43);
+  border-radius: 11px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  min-height: 38px;
+  padding: 8px 13px;
+}
+
+.agent-rp-story-launch-secondary:hover { background: rgba(255, 255, 255, .05); }
+
 .agent-rp-story-launch-action:hover {
   filter: brightness(1.08);
 }

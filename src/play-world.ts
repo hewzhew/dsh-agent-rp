@@ -249,7 +249,7 @@ export class PlayWorldRegistry {
     const events = record.events.map((item, index) => {
       if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new Error('游玩世界事件无效')
       const event = item as Record<string, unknown>
-      if (Object.keys(event).some(key => !['id', 'sequence', 'type', 'title', 'summary', 'actorId'].includes(key))
+      if (Object.keys(event).some(key => !['id', 'sequence', 'type', 'title', 'summary', 'actorId', 'data'].includes(key))
         || typeof event.id !== 'string' || event.id.trim() === '' || event.id.length > 240
         || event.sequence !== index || typeof event.type !== 'string' || event.type.trim() === '' || event.type.length > 120
         || typeof event.title !== 'string' || event.title.trim() === '' || event.title.length > 240
@@ -257,6 +257,8 @@ export class PlayWorldRegistry {
         || event.actorId !== undefined && (typeof event.actorId !== 'string' || event.actorId.trim() === '' || event.actorId.length > 240)) {
         throw new Error('游玩世界事件无效')
       }
+      const data = event.data === undefined ? undefined : snapshotJsonValue(event.data) as JsonValue | undefined
+      if (event.data !== undefined && data === undefined) throw new Error('游玩世界事件数据不是 JSON')
       return Object.freeze({
         id: event.id,
         sequence: index,
@@ -264,6 +266,7 @@ export class PlayWorldRegistry {
         title: event.title,
         summary: event.summary,
         ...(event.actorId === undefined ? {} : { actorId: event.actorId }),
+        ...(data === undefined ? {} : { data }),
       })
     })
     return Object.freeze({

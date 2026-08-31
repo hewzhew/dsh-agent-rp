@@ -1303,6 +1303,8 @@ interface PlayWorldEvent {
   readonly title: string;
   readonly summary: string;
   readonly actorId?: string;
+  /** Module-owned machine-readable cause and values used by clients and model projections. */
+  readonly data?: JsonValue;
 }
 /** Durable module-owned state attached to one play space. */
 interface PlayWorldSnapshot {

@@ -2883,6 +2883,7 @@ function SidebarRoleplayDestination({
   const [resourceCenterOpen, setResourceCenterOpen] = useState(false)
   const [storyWorkspaceOpen, setStoryWorkspaceOpen] = useState(false)
   const [storyWorkspaceInitialId, setStoryWorkspaceInitialId] = useState<string>()
+  const [storyWorkspaceSurface, setStoryWorkspaceSurface] = useState<'play' | 'studio'>('studio')
   const [resourceCenterSection, setResourceCenterSection] = useState<'characters' | 'world-info' | 'regex-packs'>('characters')
   const [worldInfoLaunch, setWorldInfoLaunch] = useState<WorldInfoLibraryUpload>()
   const [launchSessionId, setLaunchSessionId] = useState<SessionId | undefined>(undefined)
@@ -2964,6 +2965,7 @@ function SidebarRoleplayDestination({
   const openStoryWorkspace = (): void => {
     closeWorkbench()
     setStoryWorkspaceInitialId(undefined)
+    setStoryWorkspaceSurface('studio')
     setStoryWorkspaceOpen(true)
   }
   const openCurrentSessionTools = (): void => {
@@ -2980,9 +2982,10 @@ function SidebarRoleplayDestination({
     document.addEventListener('keydown', onKeyDown)
     return () => { document.removeEventListener('keydown', onKeyDown) }
   }, [workbenchOpen])
-  useEffect(() => storyWorkspaceNavigation.subscribe(({ workspaceId }) => {
+  useEffect(() => storyWorkspaceNavigation.subscribe(({ workspaceId, surface }) => {
     setWorkbenchOpen(false)
     setStoryWorkspaceInitialId(workspaceId)
+    setStoryWorkspaceSurface(surface)
     setStoryWorkspaceOpen(true)
   }), [storyWorkspaceNavigation])
   const widestLeftWithUsableContent = Math.max(0, window.innerWidth - 320)
@@ -3200,6 +3203,7 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
+      initialSurface={storyWorkspaceSurface}
       renderPlayWorldView={(moduleId, owner, fallback) => renderSlot(
         AGENT_RP_PLAY_WORLD_VIEW_SLOT,
         owner,
@@ -3219,7 +3223,7 @@ function SidebarRoleplayDestination({
               targetSessionId as SessionId, workspaceId, request,
             ),
           })}
-      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined) }}
+      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined); setStoryWorkspaceSurface('studio') }}
     />, document.body)}
     {worldInfoLaunch !== undefined && launchSessionId !== undefined && createPortal(<WorldInfoLaunchDialog
       runtimeDiagnostics={runtimeDiagnostics}

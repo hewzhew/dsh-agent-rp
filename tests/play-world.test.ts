@@ -21,9 +21,12 @@ import {
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { installStoryWorkspaceHttp } from '../src/story-workspace-http.ts'
 import { parseAgentRpSessionLaunchRequest } from '../src/session-launch.ts'
+import { appendAgentRpSessionEvent } from '../src/session-event-append.ts'
 import { createStoryWorkspaceSessionSeed, readSessionStoryWorkspaceId } from '../src/session-story-workspace.ts'
 import { acceptStorySuggestionBatch } from '../src/story-suggestion-batch.ts'
 import { advanceStoryWorldByCharacter, materializeStoryTurn, runStoryTurnPipeline } from '../src/story-turn-pipeline.ts'
+import { resolveStoryTurnRequest } from '../src/story-turn-request.ts'
+import { storyPendingWorldEvents } from '../src/story-world-events.ts'
 import type { StoryCharacter, StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import {
   compileStoryCharacterContext,
@@ -336,6 +339,77 @@ test('runs an unrecognized world through browser-safe action ids', (context) => 
   assert.equal(store.worldTurn(finished.id), undefined)
 })
 
+test('commits an intentionally omitted scene without leaving world events or private memory pending', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-omitted-world-scene-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(counterWorldModule())
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '省略规则复述' })
+  const actorId = createStoryCharacterId()
+  const prepared = store.save({ ...editable(created), characters: [character(actorId, '测试人物')] })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    resource: { kind: 'world', id: fixtureWorldResourceId('fixture/counter') },
+    cast: [],
+  })
+  const turn = store.worldTurn(installed.id)
+  assert.ok(turn !== undefined)
+  const advanced = store.dispatchWorldAction(installed.id, {
+    format: 0,
+    revision: installed.revision,
+    cycleId: turn.cycleId,
+    actionId: turn.actions[0]!.id,
+  })
+  const session = Session.create(SessionId('omitted-world-scene'))
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: advanced.id,
+    workspaceRevision: advanced.revision,
+    turn: 1,
+    step: 1,
+    resultEventSeqs: [],
+    worldEventSequences: [0, 1],
+    directorBrief: '仅供内部使用的导演材料。',
+    finalSections: [],
+    privateCharacterStates: [{
+      characterId: actorId,
+      insights: [{ kind: 'decision', text: '下一次仍继续当前计数。' }],
+    }],
+    finalDraft: '',
+    modelContext: '',
+  })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: { stream() { throw new Error('省略正文不应再调用连续性模型') } },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+
+  const materialized = await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: advanced.id,
+    turn: 1,
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(materialized?.continuityResultEventSeq, undefined)
+  assert.match(materialized?.eventSummary ?? '', /计数值变为 1/u)
+  assert.deepEqual(materialized?.changes.facts, [{ text: '下一次仍继续当前计数。', knownBy: [actorId] }])
+  const saved = store.get(advanced.id)
+  assert.equal(saved.events.length, 1)
+  assert.equal(saved.events[0]?.evidence, '')
+  assert.deepEqual(saved.events[0]?.worldEventSequences, [0, 1])
+  assert.deepEqual(storyPendingWorldEvents(saved), [])
+  assert.doesNotMatch(resolveStoryTurnRequest(saved, ''), /尚未写入正文/u)
+  assert.match(compileStoryCharacterContext(saved, actorId, { playerInput: '继续。' }, worlds).privateKnowledge, /继续当前计数/u)
+  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'continuity'), false)
+})
+
 test('assembles declared world cast slots from actor resources without leaking unrelated characters into rules', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-cast-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -455,9 +529,6 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   assert.deepEqual(upgraded.graph, beforeGraph)
   assert.deepEqual(upgraded.outputs.map(output => [output.name, output.kind, output.characterId]), [
     ['正文', 'prose', undefined],
-    ['博丽灵梦视角', 'character', reimuId],
-    ['雾雨魔理沙视角', 'character', marisaId],
-    ['棋局记录', 'history', undefined],
   ])
   assert.deepEqual(upgraded.worldBinding?.resource, { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID })
   assert.equal(upgraded.worldBinding?.moduleId, FLYING_CHESS_WORLD_MODULE_ID)
@@ -899,9 +970,6 @@ test('scaffolds fresh world authoring surfaces without replacing authored work',
   assert.deepEqual(scaffolded.graph.nodes[0]?.participantIds, [reimuId, marisaId])
   assert.deepEqual(scaffolded.outputs.map(output => [output.name, output.kind, output.characterId]), [
     ['正文', 'prose', undefined],
-    ['博丽灵梦视角', 'character', reimuId],
-    ['雾雨魔理沙视角', 'character', marisaId],
-    ['棋局记录', 'history', undefined],
   ])
 
   const authored = store.create({ format: 2, name: '已有创作' })
@@ -1233,8 +1301,19 @@ test('writes a manually completed world result before another character acts', a
     llm: {
       stream(options: { readonly system?: string }) {
         const system = options.system ?? ''
-        if (!system.includes('指定人物认知')) throw new Error('不应调用额外故事阶段：' + system.slice(0, 40))
-        const text = JSON.stringify({ observation: '看见已结算结果。', action: '', speech: null, insights: [] })
+        const text = system.includes('指定人物认知')
+          ? JSON.stringify({ observation: '看见已结算结果。', action: '', speech: null, insights: [] })
+          : system.includes('分区的 prose Worker')
+            ? '灵梦掷出了 1 点，未达到基地飞机起飞所需的 6 点。'
+            : system.includes('最终正文编辑 Worker')
+              ? JSON.stringify({ sections: [{
+                sectionId: proseId,
+                text: '灵梦掷出了 1 点，未达到基地飞机起飞所需的 6 点。',
+              }, {
+                sectionId: historyId,
+                text: '错误的模型历史会被 Host 替换。',
+              }] })
+              : JSON.stringify({ sections: [] })
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
           yield { type: 'text-delta', index: 0, text }
@@ -1270,7 +1349,15 @@ test('writes a manually completed world result before another character acts', a
     && request.subjectId === marisaId)?.dispatch), /thisCharacterRole=observer/u)
   assert.deepEqual(result.worldEventSequences, [1, 2, 3])
   assert.match(result.finalDraft, /棋局开始：博丽灵梦、雾雨魔理沙 已就位。/u)
-  assert.match(result.finalDraft, /博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.match(result.finalDraft, /灵梦掷出了 1 点，未达到基地飞机起飞所需的 6 点/u)
+  assert.match(result.finalDraft, /未达到起飞点数：基地中的飞机需要掷出 6 点才能起飞/u)
+  assert.deepEqual(manuallyAdvanced.world?.events.at(-1)?.data, {
+    kind: 'turn-passed',
+    reason: 'launch-roll-required',
+    rolled: 1,
+    required: 6,
+    nextPlayerId: marisaId,
+  })
   assert.equal(store.get(manuallyAdvanced.id).revision, manuallyAdvanced.revision)
   assert.equal((store.get(manuallyAdvanced.id).world?.state as FlyingChessWorldState).currentPlayerId, marisaId)
 })
@@ -1366,7 +1453,6 @@ test('keeps the exact world outcome while preserving only private-section charac
               : system.includes('剧情导演 Worker')
                 ? JSON.stringify({ sections: [
                   { sectionId: proseId, beats: ['表现刚发生的掷骰结果。'], speech: [] },
-                  { sectionId: characterId, beats: [], speech: [] },
                   { sectionId: historyId, beats: [], speech: [] },
                 ] })
                 : system.includes('剧情连续性记录 Worker')
@@ -1397,15 +1483,14 @@ test('keeps the exact world outcome while preserving only private-section charac
                     },
                   })
                 : system.includes('分区的 prose Worker')
-                  ? '正文故意遗漏刚发生的掷骰结果。'
+                  ? '<omit-section />'
                   : system.includes('分区的 character Worker')
                     ? JSON.stringify({ insights: [{ kind: 'world-action', text: '魔理沙准备在下一回合掷骰。' }] })
                     : system.includes('最终正文编辑 Worker')
                       ? JSON.stringify({ sections: [
-                        { sectionId: proseId, text: '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。' },
                         { sectionId: historyId, text: '错误记录。' },
                       ] })
-                      : '博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。'
+                      : '不应成为可见正文。'
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
           yield { type: 'text-delta', index: 0, text }
@@ -1462,15 +1547,16 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.deepEqual(result.worldEventSequences, [1, 2, 3])
   assert.equal(result.hostOnlyWorldDraft, undefined)
   assert.doesNotMatch(result.directorBrief, /表现刚发生的掷骰结果/u)
-  assert.match(result.finalDraft, /## 对局正文\s+棋局开始：[\s\S]*博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
-  assert.equal(result.finalDraft.match(/博丽灵梦没有可移动的飞机，本回合结束。/gu)?.length, 1)
-  assert.ok(result.finalDraft.indexOf('## 对局正文') < result.finalDraft.indexOf('## 公开回合记录'))
+  assert.doesNotMatch(result.finalDraft, /## 对局正文|没有可移动的飞机|灵梦视角/u)
   assert.match(result.finalDraft, /博丽灵梦掷出 1：第 1 回合掷骰结果为 1/u)
-  assert.match(result.finalDraft, /没有可移动的飞机：博丽灵梦结束本回合/u)
-  assert.match(result.finalDraft, /## 灵梦视角[\s\S]*遇到不利结果时，仍会接受结算并继续这局/u)
+  assert.match(result.finalDraft, /未达到起飞点数：基地中的飞机需要掷出 6 点才能起飞/u)
+  assert.deepEqual(result.privateCharacterStates, [{
+    characterId: reimuId,
+    insights: [{ kind: 'decision', text: '遇到不利结果时，仍会接受结算并继续这局。' }],
+  }])
   assert.doesNotMatch(result.finalDraft, /前几手全是小点|飞机全压在基地|错误记录|魔理沙视角|下一回合掷骰/u)
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'section' ? [event.data.subjectId] : []), [])
+    && event.data.stage === 'section' ? [event.data.subjectId] : []), [proseId])
   session.append('assistant/message', {
     turn: 2,
     step: 1,
@@ -1491,8 +1577,8 @@ test('keeps the exact world outcome while preserving only private-section charac
   const continuityRequest = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity' ? [event.data] : []).at(-1)
   assert.equal(continuityRequest?.dispatch.reasoningEffort, 'low')
-  assert.deepEqual(materialized?.changes.characters, [{ characterId: reimuId, objective: '继续当前棋局' }])
-  assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '继续当前棋局')
+  assert.deepEqual(materialized?.changes.characters, [])
+  assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '')
   assert.equal(store.get(installed.id).characters.find(character => character.id === marisaId)?.state.objective, '')
   assert.deepEqual(materialized?.changes.facts, [{
     text: '遇到不利结果时，仍会接受结算并继续这局。',
@@ -1505,7 +1591,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
   assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [1, 2, 3])
   assert.deepEqual(store.get(installed.id).characters.map(item => item.state), [
-    { location: '', condition: '', objective: '继续当前棋局', notes: '' },
+    { location: '', condition: '', objective: '', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
     { location: '', condition: '', objective: '', notes: '' },
   ])

@@ -1,6 +1,7 @@
 /** First-party compact flying-chess world with host-owned dice and transitions. */
 
 import { randomInt, randomUUID } from 'node:crypto'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   type FlyingChessPiece,
@@ -132,7 +133,7 @@ function normalizeState(value: unknown, context: PlayWorldContext): FlyingChessW
 }
 
 function normalizeEvent(value: unknown, index: number, players: ReadonlySet<string>): PlayWorldEvent {
-  if (!isRecord(value) || !exactKeys(value, ['id', 'sequence', 'type', 'title', 'summary', 'actorId'])
+  if (!isRecord(value) || !exactKeys(value, ['id', 'sequence', 'type', 'title', 'summary', 'actorId', 'data'])
     || typeof value.id !== 'string' || !EVENT_ID_PATTERN.test(value.id)
     || value.sequence !== index + 1 || typeof value.type !== 'string' || value.type.length === 0 || value.type.length > 80
     || typeof value.title !== 'string' || value.title.length === 0 || value.title.length > 120
@@ -140,10 +141,27 @@ function normalizeEvent(value: unknown, index: number, players: ReadonlySet<stri
     || (value.actorId !== undefined && (typeof value.actorId !== 'string' || !players.has(value.actorId)))) {
     throw new Error('飞行棋事件无效')
   }
-  return value as unknown as PlayWorldEvent
+  const data = value.data === undefined ? undefined : snapshotJsonValue(value.data) as JsonValue | undefined
+  if (value.data !== undefined && data === undefined) throw new Error('飞行棋事件数据不是 JSON')
+  return {
+    id: value.id,
+    sequence: value.sequence,
+    type: value.type,
+    title: value.title,
+    summary: value.summary,
+    ...(value.actorId === undefined ? {} : { actorId: value.actorId as string }),
+    ...(data === undefined ? {} : { data }),
+  }
 }
 
-function event(events: readonly PlayWorldEvent[], type: string, title: string, summary: string, actorId?: string): PlayWorldEvent {
+function event(
+  events: readonly PlayWorldEvent[],
+  type: string,
+  title: string,
+  summary: string,
+  actorId?: string,
+  data?: JsonValue,
+): PlayWorldEvent {
   return {
     id: `world-event-${randomUUID()}`,
     sequence: events.length + 1,
@@ -151,7 +169,12 @@ function event(events: readonly PlayWorldEvent[], type: string, title: string, s
     title,
     summary,
     ...(actorId === undefined ? {} : { actorId }),
+    ...(data === undefined ? {} : { data }),
   }
+}
+
+function eventData(event: PlayWorldEvent): Record<string, JsonValue> | undefined {
+  return isRecord(event.data) ? event.data as Record<string, JsonValue> : undefined
 }
 
 function legalPieces(state: FlyingChessWorldState, playerId: string, value: number): readonly FlyingChessPiece[] {
@@ -183,10 +206,16 @@ function eventActor(event: PlayWorldEvent, context: PlayWorldContext): string | 
 function eventNarrative(event: PlayWorldEvent, context: PlayWorldContext): string {
   const actor = eventActor(event, context)
   if (event.type === 'die.rolled' && actor !== undefined) {
-    const value = event.summary.match(/结果为 ([1-6])。/u)?.[1]
+    const value = eventData(event)?.value ?? event.summary.match(/结果为 ([1-6])。/u)?.[1]
     if (value !== undefined) return `${actor}掷出 ${value}。`
   }
   if (event.type === 'turn.passed' && actor !== undefined) {
+    const data = eventData(event)
+    if (data?.reason === 'launch-roll-required'
+      && typeof data.rolled === 'number' && typeof data.required === 'number'
+      && typeof data.nextPlayerId === 'string') {
+      return `基地中的飞机需要掷出 ${String(data.required)} 点才能起飞；本轮是 ${String(data.rolled)} 点，轮到 ${playerName(context, data.nextPlayerId)}。`
+    }
     return `${actor}没有可移动的飞机，本回合结束。`
   }
   if (event.type === 'piece.moved' && actor !== undefined) {
@@ -261,22 +290,7 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
             name: '正文',
             kind: 'prose',
             enabled: true,
-            instructions: '以权威世界叙事为骨架，只补充人物确有信息增量的反应与获准对白。',
-          },
-          ...context.characters.map(character => ({
-            key: `character:${character.id}`,
-            name: `${character.name}视角`,
-            kind: 'character' as const,
-            enabled: true,
-            characterId: character.id,
-            instructions: '只保留会影响后续回合的私有知识、持续意图或已经作出的决定。',
-          })),
-          {
-            key: 'history',
-            name: '棋局记录',
-            kind: 'history',
-            enabled: true,
-            instructions: '按回合保留权威世界结算，便于后续检索。',
+            instructions: '只呈现人物确有信息增量的公开行动与获准对白；棋盘已经表达清楚的规则结果不再复述。',
           },
         ],
       }
@@ -328,12 +342,29 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         const value = rollDie()
         if (!Number.isSafeInteger(value) || value < 1 || value > 6) throw new Error('飞行棋骰子实现返回了无效点数')
         const legal = legalPieces(state, action.actorId, value)
-        const rolled = event(normalized.events, 'die.rolled', `${playerName(context, action.actorId)}掷出 ${String(value)}`, `第 ${String(state.turn)} 回合掷骰结果为 ${String(value)}。`, action.actorId)
+        const rolled = event(normalized.events, 'die.rolled', `${playerName(context, action.actorId)}掷出 ${String(value)}`, `第 ${String(state.turn)} 回合掷骰结果为 ${String(value)}。`, action.actorId, {
+          kind: 'die-roll',
+          value,
+        })
         if (legal.length === 0) {
-          const passed = event([...normalized.events, rolled], 'turn.passed', '没有可移动的飞机', `${playerName(context, action.actorId)}结束本回合。`, action.actorId)
+          const nextPlayerId = nextPlayer(state)
+          const onlyBasePieces = state.pieces
+            .filter(piece => piece.ownerId === action.actorId)
+            .every(piece => piece.status === 'base')
+          const reason = onlyBasePieces && value !== 6 ? 'launch-roll-required' : 'no-legal-move'
+          const passed = event(
+            [...normalized.events, rolled],
+            'turn.passed',
+            reason === 'launch-roll-required' ? '未达到起飞点数' : '没有合法移动',
+            reason === 'launch-roll-required'
+              ? `基地中的飞机需要掷出 6 点才能起飞；本轮掷出 ${String(value)} 点。`
+              : `本轮掷出 ${String(value)} 点，没有可执行的合法移动。`,
+            action.actorId,
+            { kind: 'turn-passed', reason, rolled: value, required: 6, nextPlayerId },
+          )
           return this.normalize({
             ...normalized,
-            state: { ...state, turn: state.turn + 1, currentPlayerId: nextPlayer(state) },
+            state: { ...state, turn: state.turn + 1, currentPlayerId: nextPlayerId },
             events: [...normalized.events, rolled, passed],
           }, context)
         }

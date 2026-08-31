@@ -1,8 +1,9 @@
-/** In-memory navigation from Session surfaces to the full-screen play space. */
+/** In-memory navigation from Session surfaces to one native play or authoring surface. */
 
 /** Browser request to open one exact play space. */
 export interface StoryWorkspaceOpenRequest {
   readonly workspaceId: string
+  readonly surface: 'play' | 'studio'
 }
 
 /** Shared navigation source used by independent Agent RP surfaces. */
