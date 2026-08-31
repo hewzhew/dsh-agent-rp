@@ -1,5 +1,6 @@
-import { JsonValue, SessionEvent } from "@deepseek-ai/dsh-session";
+import { SessionEvent } from "@deepseek-ai/dsh-session";
 import { Context } from "@deepseek-ai/cordis";
+import { JsonValue } from "@deepseek-ai/dsh-util-values";
 import { ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import { Agent } from "@deepseek-ai/dsh-agent";
 
