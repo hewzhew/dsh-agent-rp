@@ -114,6 +114,21 @@ test('defaults the global Debug switch to disabled and validates explicit values
   }), /Agent RP Debug 开关无效/u)
 })
 
+test('bounds the number of recent message rows allowed to retain live light frontends', () => {
+  assert.deepEqual(normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [],
+  }).lightFrontend, { renderDepth: 12 })
+  assert.deepEqual(normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], lightFrontend: { renderDepth: 24 },
+  }).lightFrontend, { renderDepth: 24 })
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], lightFrontend: { renderDepth: 0 },
+  }), /轻前端保留消息数无效/u)
+  assert.throws(() => normalizeAgentRpSettings({
+    workspaceMode: 'all', workspaceIds: [], lightFrontend: { renderDepth: 201 },
+  }), /轻前端保留消息数无效/u)
+})
+
 test('normalizes an explicit state verification model without guessing unavailable routes', () => {
   assert.deepEqual(normalizeAgentRpSettings({
     workspaceMode: 'all', workspaceIds: [],

@@ -105,6 +105,11 @@ export interface AgentRpSettings {
   readonly toolGuidance: ResolvedToolGuidanceConfig
   /** Independent model workers run after the character Agent finishes its visible reply. */
   readonly turnWorkers: RoleplayTurnWorkerSettings
+  /** Browser resource limits for isolated Character Card frontends. */
+  readonly lightFrontend: {
+    /** Number of newest visible message rows whose frontends remain live. */
+    readonly renderDepth: number
+  }
   /** Controls whether user-requested copied diagnostics include local error details. */
   readonly debug: {
     readonly enabled: boolean
@@ -204,6 +209,7 @@ export const DEFAULT_AGENT_RP_SETTINGS: AgentRpSettings = {
     narrativeReview: { enabled: false },
     stateVerification: { model: null, reasoningEffort: null },
   },
+  lightFrontend: { renderDepth: 12 },
   debug: { enabled: false },
 }
 
@@ -387,6 +393,18 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
   }
   const imageGeneration = normalizeImageGenerationSettings(record.imageGeneration)
   const toolGuidance = normalizeToolGuidanceConfig(record.toolGuidance)
+  const lightFrontendRecord = record.lightFrontend
+  if (lightFrontendRecord !== undefined
+    && (typeof lightFrontendRecord !== 'object' || lightFrontendRecord === null || Array.isArray(lightFrontendRecord))) {
+    throw new Error('轻前端设置无效')
+  }
+  const lightFrontendRenderDepth = integer(
+    (lightFrontendRecord as Record<string, unknown> | undefined)?.renderDepth,
+    DEFAULT_AGENT_RP_SETTINGS.lightFrontend.renderDepth,
+    1,
+    200,
+    '轻前端保留消息数',
+  )
   const debugRecord = record.debug
   if (debugRecord !== undefined
     && (typeof debugRecord !== 'object' || debugRecord === null || Array.isArray(debugRecord))) {
@@ -488,6 +506,7 @@ export function normalizeAgentRpSettings(value: unknown): AgentRpSettings {
         reasoningEffort: stateVerificationReasoningEffort,
       },
     },
+    lightFrontend: { renderDepth: lightFrontendRenderDepth },
     debug: { enabled: debugEnabled },
   }
 }
