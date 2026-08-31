@@ -14,6 +14,7 @@ import {
   type LlmFailure,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import { jsonrepair } from 'jsonrepair'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
@@ -543,9 +544,15 @@ function boundedString(value: unknown, subject: string, max = 64 * 1_024): strin
 function jsonObject(text: string, subject: string): Record<string, unknown> {
   const unfenced = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')
   const start = unfenced.indexOf('{')
+  if (start < 0) throw new Error(`${subject}没有 JSON 对象`)
   const end = unfenced.lastIndexOf('}')
-  if (start < 0 || end < start) throw new Error(`${subject}没有 JSON 对象`)
-  const value = JSON.parse(unfenced.slice(start, end + 1)) as unknown
+  let value: unknown
+  try {
+    if (end < start) throw new SyntaxError('JSON object is incomplete')
+    value = JSON.parse(unfenced.slice(start, end + 1)) as unknown
+  } catch {
+    value = JSON.parse(jsonrepair(unfenced.slice(start))) as unknown
+  }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${subject}不是对象`)
   return value as Record<string, unknown>
 }
@@ -1198,6 +1205,15 @@ function textBigrams(text: string): ReadonlySet<string> {
   return new Set(Array.from({ length: Math.max(0, text.length - 1) }, (_value, index) => text.slice(index, index + 2)))
 }
 
+function sharesLongVoiceSpan(left: string, right: string, minimumLength = 7): boolean {
+  if (left.length < minimumLength || right.length < minimumLength) return false
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left]
+  for (let index = 0; index <= shorter.length - minimumLength; index += 1) {
+    if (longer.includes(shorter.slice(index, index + minimumLength))) return true
+  }
+  return false
+}
+
 function substantiallyRestatesText(value: string, source: string, minimumLength = 4): boolean {
   const candidate = normalizedComparableText(value)
   const normalizedSource = normalizedComparableText(source)
@@ -1211,13 +1227,19 @@ function substantiallyRestatesText(value: string, source: string, minimumLength 
   return overlap / comparable >= 0.35
 }
 
+const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
+
+function playerForbidsWorldRecap(playerInput: string): boolean {
+  return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
+}
+
 function suppressForbiddenWorldOutcomeSpeech(
   decision: StoryCharacterDecision,
   playerInput: string,
   worldOutcome: string,
 ): StoryCharacterDecision {
   if (decision.speech === undefined || worldOutcome === ''
-    || !/(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u.test(playerInput)
+    || !playerForbidsWorldRecap(playerInput)
     || !substantiallyRestatesText(decision.speech.focus, worldOutcome)) return decision
   return { ...decision, speech: undefined }
 }
@@ -1231,6 +1253,7 @@ function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCh
   if (candidate.length < 4) return false
   const candidateBigrams = textBigrams(candidate)
   return excerpts.some(excerpt => {
+    if (sharesLongVoiceSpan(candidate, excerpt)) return true
     if (candidate.length >= 8 && (excerpt.includes(candidate) || candidate.includes(excerpt))) return true
     const excerptBigrams = textBigrams(excerpt)
     const overlap = [...candidateBigrams].filter(pair => excerptBigrams.has(pair)).length
@@ -2615,6 +2638,19 @@ function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): s
   return remainder.trim()
 }
 
+function omitHostWorldRecap(
+  sections: readonly StorySectionDraft[],
+  worldNarrative: string,
+  worldOutcome: string,
+): readonly StorySectionDraft[] {
+  return sections.flatMap((section): readonly StorySectionDraft[] => {
+    if (section.kind === 'history' && worldOutcome !== '') return []
+    if (section.kind !== 'prose' || worldNarrative === '') return [section]
+    const text = proseWithoutHostWorldNarrative(section.text, worldNarrative)
+    return text === '' ? [] : [{ ...section, text }]
+  })
+}
+
 function enforceFinalSections(
   editedDrafts: readonly StorySectionDraft[],
   preparedDrafts: readonly StorySectionDraft[],
@@ -3515,19 +3551,28 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       }
     }
   }
-  const finalSections = enforceFinalSections(
+  const enforcedSections = enforceFinalSections(
     editedSections,
     sectionDrafts,
     enabledSections,
     worldOutcome,
     worldNarrative,
   )
+  const omitVisibleWorldRecap = approvedDialogue.size > 0 && playerForbidsWorldRecap(playerInput)
+  const finalSections = omitVisibleWorldRecap
+    ? omitHostWorldRecap(enforcedSections, worldNarrative, worldOutcome)
+    : enforcedSections
   const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldSections = renderHostOnlyWorldSections(enabledSections, worldNarrative, worldOutcome)
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
-  const hostOwnedWorldDraft = hostWorldDialogueSections !== undefined
-    && finalDraft === renderSectionDrafts(hostWorldDialogueSections).trim()
+  const visibleHostWorldDialogueSections = hostWorldDialogueSections === undefined
+    ? undefined
+    : omitVisibleWorldRecap
+      ? omitHostWorldRecap(hostWorldDialogueSections, worldNarrative, worldOutcome)
+      : hostWorldDialogueSections
+  const hostOwnedWorldDraft = visibleHostWorldDialogueSections !== undefined
+    && finalDraft === renderSectionDrafts(visibleHostWorldDialogueSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []

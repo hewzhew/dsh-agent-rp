@@ -29,6 +29,7 @@ import {
   compileStoryCharacterContext,
   compileStoryDirectorWorldContext,
   createStoryCharacterId,
+  createStoryCitationId,
   createStoryFactId,
   createStoryNodeId,
   createStoryOutputId,
@@ -635,6 +636,7 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
   const activeNodeId = createStoryNodeId()
+  const sourceId = createStorySourceId()
   const withCharacters = store.save({
     ...editable(created),
     graph: {
@@ -658,6 +660,13 @@ test('advances a host-owned flying-chess world only through typed actions', (con
       character(reimuId, '博丽灵梦', '博丽神社的巫女，负责维护博丽大结界、解决异变与退治造成麻烦的妖怪。'),
       character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使，擅长以光与热为主的华丽高火力魔法。'),
     ],
+    sources: [{
+      id: sourceId,
+      name: '飞行棋资料',
+      kind: 'original',
+      enabled: true,
+      content: '两人在神社玩飞行棋。',
+    }],
   })
 
   const installed = store.installWorld(withCharacters.id, {
@@ -809,7 +818,18 @@ test('advances a host-owned flying-chess world only through typed actions', (con
     webResearch: [],
   }), /引用未知、重复或过多的世界事件/u)
   const accepted = acceptStorySuggestionBatch(firstTurn, firstEventId)
-  const withAcceptedDirection = store.save({ ...editable(firstTurn), graph: accepted.graph })
+  const withAcceptedDirection = store.save({
+    ...editable(firstTurn),
+    graph: accepted.graph,
+    citations: [...firstTurn.citations, {
+      id: createStoryCitationId(),
+      sourceId,
+      locator: '第 1 段',
+      quote: '两人在神社玩飞行棋。',
+      note: '本轮研究依据',
+      target: { kind: 'event', eventId: firstEventId },
+    }],
+  })
   const secondTurn = store.materializeTurn(withAcceptedDirection.id, {
     key: 'session-play:turn-2',
     turn: 2,
@@ -842,6 +862,8 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(restarted.world?.events.length, 1)
   assert.equal((restarted.world?.state as FlyingChessWorldState).turn, 1)
   assert.equal(restarted.events.length, 0)
+  assert.equal(restarted.citations.length, 1)
+  assert.equal(restarted.citations[0]?.target, undefined)
   assert.equal(restarted.facts.some(fact => fact.source.kind === 'event'), false)
   assert.deepEqual(restarted.characters.map(item => item.state), [
     { location: '', condition: '', objective: '', notes: '' },
@@ -976,6 +998,7 @@ test('keeps executable world state out of whole-workspace edits', async (context
     'turn/start',
     'turn/end',
   ])
+  assert.equal(prepared.seed[0]?.ignorable, true)
   const launched = Session.create(SessionId('play-world-launch'), prepared.seed)
   assert.deepEqual(launched.deriveMessages(), [])
   assert.equal(launched.events.findLast(event => event.type === 'turn/end')?.data.turn, 1)
@@ -1575,7 +1598,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
         } else if (system.includes('剧情研究 Worker')) {
           text = JSON.stringify({ findings: [], followUps: [] })
         } else if (system.includes('指定人物认知')) {
-          text = body.includes('# 人物：博丽灵梦') && body.includes('不要复述棋局事实')
+          text = body.includes('# 人物：博丽灵梦') && body.includes('只评价规则结果')
             ? JSON.stringify({
               observation: '本轮规则结果已经公开。',
               action: '',
@@ -1667,14 +1690,14 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     step: 1,
     messages: [createUserMessage({
       source: { kind: 'user' },
-      content: [{ type: 'text', text: '魔理沙追问灵梦指的是哪句话，请让灵梦回答。' }],
+      content: [{ type: 'text', text: '魔理沙追问灵梦指的是哪句话，请让灵梦回答；不要复述棋局事实。' }],
     })],
     signal: new AbortController().signal,
   })
 
-  assert.match(result.finalDraft, /博丽灵梦掷出 1。博丽灵梦没有可移动的飞机，本回合结束。/u)
+  assert.doesNotMatch(result.finalDraft, /博丽灵梦掷出 1|没有可移动的飞机/u)
   assert.match(result.finalDraft, /“你自己把两句话接在一起，还问我是哪句？”/u)
-  assert.match(result.finalDraft, /## 公开回合记录/u)
+  assert.doesNotMatch(result.finalDraft, /## 公开回合记录/u)
   assert.equal(result.hostOnlyWorldDraft, undefined)
   assert.equal(result.hostOwnedWorldDraft, true)
   assert.deepEqual(result.publicDialogues, [{
@@ -1851,7 +1874,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     step: 1,
     messages: [createUserMessage({
       source: { kind: 'user' },
-      content: [{ type: 'text', text: '继续当前人物的合法回合；不要复述棋局事实。' }],
+      content: [{ type: 'text', text: '只评价规则结果；不要复述棋局事实。' }],
     })],
     signal: new AbortController().signal,
   })

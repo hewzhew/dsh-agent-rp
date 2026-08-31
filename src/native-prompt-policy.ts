@@ -166,6 +166,7 @@ export function nativePromptPolicyResourceProvider(): RoleplayResourceProvider {
           type: 'agent-rp/native-prompt-policy-seed' as const,
           seq: input.events.length,
           time: Date.now(),
+          ignorable: true,
           data: structuredClone(policy),
         }],
       }

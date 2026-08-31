@@ -97,6 +97,7 @@ function utf8Prefix(value: string, maxBytes: number): string {
 const STORY_WEB_SOURCE_BYTES = 96 * 1_024
 const STORY_WEB_OUTPUT_BYTES = 48 * 1_024
 const MEDIAWIKI_SECTION_LIMIT = 48
+const MEDIAWIKI_SECTION_CONCURRENCY = 4
 const MEDIAWIKI_FALLBACK_STATUS = new Set([403, 468])
 const WEB_HTML_RAW_ELEMENTS = new Set(['script', 'style', 'noscript', 'template', 'iframe', 'object', 'embed'])
 const WEB_HTML_BREAK_ELEMENTS = new Set([
@@ -283,6 +284,28 @@ function mediaWikiPageTitle(value: string): string | undefined {
     : title.replaceAll('_', ' ')
 }
 
+function likelyMediaWikiPage(value: string): boolean {
+  const url = new URL(value)
+  return url.hostname.split('.').some(part => part.includes('wiki'))
+    || /\/wiki\//u.test(url.pathname)
+    || url.searchParams.has('title')
+}
+
+function semanticDialogueScore(value: string): number {
+  const lines = value.split(/\r?\n/gu).map(line => line.trim()).filter(Boolean)
+  const direct = lines.filter(line => /^[^：:｜|]{1,80}(?:：|:|｜)\s*[「『“"][^」』”"]+[」』”"]?$/u.test(line)).length
+  const shortLineCounts = new Map<string, number>()
+  for (const line of lines) {
+    if (line.length <= 40 && !/[。！？!?「」『』“”"]/u.test(line)) {
+      shortLineCounts.set(line, (shortLineCounts.get(line) ?? 0) + 1)
+    }
+  }
+  const alternating = lines.slice(0, -1).filter((line, index) =>
+    (shortLineCounts.get(line) ?? 0) >= 2
+    && /[。！？!?「」『』“”]/u.test(lines[index + 1] ?? '')).length
+  return direct * 3 + alternating
+}
+
 function mediaWikiApiUrl(pageUrl: string, title: string, prop: 'sections' | 'text', section?: string): string {
   const url = new URL('/api.php', pageUrl)
   url.searchParams.set('action', 'parse')
@@ -347,13 +370,17 @@ async function fetchStoryMediaWikiPage(
   const selected = ['0', ...topLevel.slice(0, MEDIAWIKI_SECTION_LIMIT).map(section => section.index)]
   const renderedSections: string[] = []
   let truncated = topLevel.length > MEDIAWIKI_SECTION_LIMIT
-  for (const section of selected) {
-    const payload = await fetchMediaWikiJson(web, mediaWikiApiUrl(pageUrl, title, 'text', section), signal)
-    const html = mediaWikiSectionHtml(payload)
-    if (html === undefined) return undefined
-    const rendered = renderStoryWebPageBody({ kind: 'html', content: html })
-    if (rendered.content !== '') renderedSections.push(rendered.content)
-    truncated ||= rendered.truncated
+  for (let offset = 0; offset < selected.length; offset += MEDIAWIKI_SECTION_CONCURRENCY) {
+    const batch = await Promise.all(selected.slice(offset, offset + MEDIAWIKI_SECTION_CONCURRENCY).map(async section => {
+      const payload = await fetchMediaWikiJson(web, mediaWikiApiUrl(pageUrl, title, 'text', section), signal)
+      const html = mediaWikiSectionHtml(payload)
+      return html === undefined ? undefined : renderStoryWebPageBody({ kind: 'html', content: html })
+    }))
+    if (batch.some(item => item === undefined)) return undefined
+    for (const rendered of batch) {
+      if (rendered!.content !== '') renderedSections.push(rendered!.content)
+      truncated ||= rendered!.truncated
+    }
   }
   const rendered = renderedSections.join('\n\n')
   truncated ||= Buffer.byteLength(rendered, 'utf8') > STORY_WEB_OUTPUT_BYTES
@@ -369,9 +396,13 @@ export async function fetchStoryWebPage(ctx: Context, value: string, signal?: Ab
   const fetched = await web.fetch({ url: requestedUrl }, signal)
   const url = normalizeStoryWebUrl(fetched.url)
   if (url === undefined) throw new Error('网页读取服务返回了无效的最终 URL')
-  if (MEDIAWIKI_FALLBACK_STATUS.has(fetched.statusCode)) {
+  const rendered = renderStoryWebPageBody(fetched.body)
+  const missingDialogueStructure = fetched.statusCode >= 200 && fetched.statusCode < 300
+    && likelyMediaWikiPage(url) && semanticDialogueScore(rendered.content) === 0
+  if (MEDIAWIKI_FALLBACK_STATUS.has(fetched.statusCode) || missingDialogueStructure) {
     const mediaWiki = await fetchStoryMediaWikiPage(web, url, signal)
-    if (mediaWiki !== undefined) {
+    if (mediaWiki !== undefined && (MEDIAWIKI_FALLBACK_STATUS.has(fetched.statusCode)
+      || semanticDialogueScore(mediaWiki.content) > semanticDialogueScore(rendered.content))) {
       return {
         requestedUrl,
         url,
@@ -381,7 +412,6 @@ export async function fetchStoryWebPage(ctx: Context, value: string, signal?: Ab
       }
     }
   }
-  const rendered = renderStoryWebPageBody(fetched.body)
   return {
     requestedUrl,
     url,

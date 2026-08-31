@@ -688,14 +688,14 @@ test('runs logged story stages while keeping each character request privately sc
               lines: [
                 { reference: `${sectionId}:2`, move: 'correct', seedLineIds: candidateSeeds, mechanics: '直接指出观察仍不成立', leftImplicit: '刻痕模糊会怎样影响结论。', dialogue: '先把刻痕看清楚。' },
               ],
-            })
+            }).slice(0, -1)
           } else {
             voiceBody = body
             voiceSystem = system
             text = JSON.stringify({
               lines: [
                 { reference: `${sectionId}:1`, move: 'warn', seedLineIds: contextSeedIds.slice(0, 1), mechanics: '错误引用对方台词', leftImplicit: '对方已经知道的观察缺口。', dialogue: '借了对方的声音。' },
-                { reference: `${sectionId}:1`, move: 'challenge', seedLineIds: candidateSeeds, mechanics: '擅自改变既定动作', leftImplicit: '为什么需要先观察。', dialogue: '把提醒改成质疑。' },
+                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '沿用原句前半段再更换结尾', leftImplicit: '为什么需要先观察。', dialogue: '没看清就别急着走了。' },
                 { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '用对称处境反问对方', leftImplicit: '刻痕模糊会怎样影响结论。', dialogue: '你拿这话说我，自己的徽章不是也没看清吗？' },
               ],
             })
@@ -765,6 +765,7 @@ test('runs logged story stages while keeping each character request privately sc
   const briefEvent = session.events.find(event => event.type === 'agent-rp/story-turn-brief')
 
   assert.equal(calls, 16)
+  assert.equal(voiceReviewCalls, 3)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
   assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 3)
@@ -909,7 +910,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceSystem, /不能为了凑数量把多条原句的结构拼成一段/u)
   assert.match(voiceReviewBody, /你拿这话说我，自己的徽章不是也没看清吗/u)
   assert.match(voiceReviewBody, /候选 1/u)
-  assert.doesNotMatch(voiceReviewBody, /借了对方的声音|把提醒改成质疑/u)
+  assert.doesNotMatch(voiceReviewBody, /借了对方的声音|没看清就别急着走了/u)
   assert.match(voiceReviewBody, /句法与接话机制/u)
   assert.match(voiceReviewBody, /刻意留给听者补全/u)
   assert.doesNotMatch(voiceReviewBody, /## 对话示例|先把眼前的事说清楚/u)

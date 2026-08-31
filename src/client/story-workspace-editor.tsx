@@ -319,6 +319,46 @@ function storyTurnProgressText(
     : `${storyTurnStageLabels[latest.stage]}完成，正在进入下一阶段`
 }
 
+function storyTurnDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1_000))
+  if (seconds < 60) return `${String(seconds)} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder === 0 ? `${String(minutes)} 分钟` : `${String(minutes)} 分 ${String(remainder)} 秒`
+}
+
+function StoryTurnTimingDetails({
+  workspace,
+  progress,
+}: {
+  readonly workspace: StoryWorkspaceSnapshot | undefined
+  readonly progress: AgentRpStoryTurnProgress | undefined
+}): React.JSX.Element | undefined {
+  if (workspace === undefined || progress === undefined || progress.workspaceId !== workspace.id
+    || progress.requests.length === 0) return undefined
+  const finished = progress.requests.filter(request => request.durationMs !== undefined)
+  const firstStart = Math.min(...progress.requests.map(request => request.startedAt))
+  const lastFinish = Math.max(...progress.requests.map(request => request.finishedAt ?? request.startedAt))
+  const wallMs = Math.max(0, lastFinish - firstStart)
+  const workerMs = finished.reduce((total, request) => total + (request.durationMs ?? 0), 0)
+  return <details className="story-studio-turn-timing">
+    <summary>用时 {storyTurnDuration(wallMs)} · Worker 累计 {storyTurnDuration(workerMs)}</summary>
+    <div className="story-studio-turn-timing-panel">
+      <header><strong>本轮模型阶段</strong><span>并行阶段的累计用时会大于总用时</span></header>
+      {progress.requests.map(request => {
+        const subject = storyTurnSubjectName(workspace, request.subjectId)
+        const status = request.status === 'running'
+          ? '进行中'
+          : request.status === 'failed' ? '已降级' : '完成'
+        return <div className="story-studio-turn-timing-row" key={request.requestId}>
+          <span>{storyTurnStageLabels[request.stage]}{subject === undefined ? '' : ` · ${subject}`}</span>
+          <span>{request.durationMs === undefined ? status : `${storyTurnDuration(request.durationMs)} · ${status}`}</span>
+        </div>
+      })}
+    </div>
+  </details>
+}
+
 function canBecomeActiveNode(node: StoryNode): boolean {
   return node.kind === 'beat' && node.lifecycle === 'canonical' && node.status !== 'dropped'
 }
@@ -3484,7 +3524,7 @@ export function StoryWorkspaceEditor({ accent, initialWorkspaceId, sessionId, st
       </aside>
     </div>
     <footer className="story-studio-statusbar">
-      <strong>回合写作</strong><span className="story-studio-turn-progress" role="status">{storyTurnProgressText(workspace, storyTurn)}</span><span>{sessionAction === 'continue'
+      <strong>回合写作</strong><span className="story-studio-turn-progress" role="status">{storyTurnProgressText(workspace, storyTurn)}</span><StoryTurnTimingDetails workspace={workspace} progress={storyTurn} /><span>{sessionAction === 'continue'
         ? '可以在当前会话继续'
         : sessionAction !== 'start' || launchTargetId === undefined
           ? '启用会话工作区后可以开始'

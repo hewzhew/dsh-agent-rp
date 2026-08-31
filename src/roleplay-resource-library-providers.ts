@@ -249,6 +249,7 @@ export function roleplayLibraryResourceProviders(libraries: {
           type: 'agent-rp/persona-seed' as const,
           seq: input.events.length,
           time: Date.now(),
+          ignorable: true,
           data: {
             format: 0 as const,
             persona: { id: persona.id, name: persona.name, description: persona.description },

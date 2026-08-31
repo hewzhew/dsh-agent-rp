@@ -2091,7 +2091,8 @@ export class StoryWorkspaceStore {
     })
     const citations = current.citations.map(citation => {
       if (citation.target?.kind === 'node' && removedNodeIds.has(citation.target.nodeId)
-        || citation.target?.kind === 'fact' && removedFactIds.has(citation.target.factId)) {
+        || citation.target?.kind === 'fact' && removedFactIds.has(citation.target.factId)
+        || citation.target?.kind === 'event') {
         const { target: _target, ...retained } = citation
         return retained
       }

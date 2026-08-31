@@ -885,6 +885,15 @@
 }
 .story-studio-statusbar strong { color: inherit; font-weight: 600; }
 .story-studio-turn-progress { color: var(--story-accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.story-studio-turn-timing { flex: none; position: relative; }
+.story-studio-turn-timing > summary { cursor: pointer; list-style: none; white-space: nowrap; }
+.story-studio-turn-timing > summary::-webkit-details-marker { display: none; }
+.story-studio-turn-timing-panel { background: var(--studio-panel); border: 1px solid var(--studio-border); border-radius: 12px; bottom: calc(100% + 9px); box-shadow: 0 12px 32px rgb(0 0 0 / 24%); display: grid; left: 0; max-height: min(420px, 60vh); min-width: 320px; overflow: auto; padding: 8px; position: absolute; width: min(460px, 70vw); z-index: 20; }
+.story-studio-turn-timing-panel header { display: grid; gap: 2px; padding: 5px 7px 8px; }
+.story-studio-turn-timing-panel header span { color: var(--studio-muted); font-size: 9px; }
+.story-studio-turn-timing-row { align-items: center; border-top: 1px solid var(--studio-border); display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) auto; padding: 7px; }
+.story-studio-turn-timing-row span:first-child { color: var(--studio-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.story-studio-turn-timing-row span:last-child { white-space: nowrap; }
 .story-studio-status-message { color: var(--story-accent); margin-left: auto; }
 .story-studio-status-error { color: var(--dsw-alias-state-danger, #e26773); margin-left: auto; }
 

@@ -53,10 +53,16 @@ test('projects live story stages and resets progress at the next turn', () => {
     turn: 4,
     step: 1,
     status: 'running',
-    requests: [{ requestId: 'history-1', stage: 'history', subjectId: 'reimu', status: 'running' }],
+    requests: [{
+      requestId: 'history-1',
+      stage: 'history',
+      subjectId: 'reimu',
+      startedAt: historyRequest.time,
+      status: 'running',
+    }],
   })
 
-  state = definition.apply(state, appendAgentRpSessionEvent(session, 'agent-rp/story-stage-result', {
+  const historyResult = appendAgentRpSessionEvent(session, 'agent-rp/story-stage-result', {
     format: 0,
     requestId: 'history-1',
     requestSeq: historyRequest.seq,
@@ -65,11 +71,15 @@ test('projects live story stages and resets progress at the next turn', () => {
       failure: 'provider',
       detail: { code: 'RATE_LIMIT', message: '请求过快', status: 429, providerRetryAfterMs: 1_000 },
     },
-  }))
+  })
+  state = definition.apply(state, historyResult)
   assert.deepEqual(definition.wire.view(state).storyTurn?.requests[0], {
     requestId: 'history-1',
     stage: 'history',
     subjectId: 'reimu',
+    startedAt: historyRequest.time,
+    finishedAt: historyResult.time,
+    durationMs: historyResult.time - historyRequest.time,
     status: 'failed',
     failure: 'provider',
     detail: { code: 'RATE_LIMIT', message: '请求过快', status: 429, providerRetryAfterMs: 1_000 },
@@ -102,7 +112,7 @@ test('projects live story stages and resets progress at the next turn', () => {
   }))
   assert.equal(definition.wire.view(state).storyTurn?.status, 'complete')
 
-  state = definition.apply(state, appendAgentRpSessionEvent(session, 'agent-rp/story-stage-request', {
+  const characterRequest = appendAgentRpSessionEvent(session, 'agent-rp/story-stage-request', {
     format: 0,
     requestId: 'character-2',
     sessionId: String(session.id),
@@ -113,8 +123,15 @@ test('projects live story stages and resets progress at the next turn', () => {
     stage: 'character',
     subjectId: 'marisa',
     dispatch: { provider: 'test', model: 'test', messages: [] },
-  }))
+  })
+  state = definition.apply(state, characterRequest)
   assert.deepEqual(definition.wire.view(state).storyTurn?.requests, [
-    { requestId: 'character-2', stage: 'character', subjectId: 'marisa', status: 'running' },
+    {
+      requestId: 'character-2',
+      stage: 'character',
+      subjectId: 'marisa',
+      startedAt: characterRequest.time,
+      status: 'running',
+    },
   ])
 })

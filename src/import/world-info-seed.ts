@@ -39,6 +39,7 @@ function worldInfoLibrarySeedEvent(
     type: 'agent-rp/world-info-library-seed',
     seq,
     time,
+    ignorable: true,
     data,
   }
 }
@@ -96,6 +97,7 @@ export function createWorldInfoLibrarySessionSeed(
       type: 'agent-rp/persona-seed',
       seq: events.length,
       time,
+      ignorable: true,
       data: { format: 0, persona },
     })
   }

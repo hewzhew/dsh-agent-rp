@@ -176,6 +176,7 @@ export function createPresetSessionSeed(
     type: 'agent-rp/sillytavern-preset-seed',
     seq: events.length,
     time: Date.now(),
+    ignorable: true,
     data: {
       format: 0,
       source: { attachmentConsumer: 'dsh-agent-rp', attachments: [attachment] },

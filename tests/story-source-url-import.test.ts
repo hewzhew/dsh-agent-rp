@@ -156,6 +156,63 @@ test('imports known pages with revision guards, provenance, and explicit voice e
   assert.doesNotMatch(voice[0]?.text ?? '', /不能冒充原作/u)
 })
 
+test('recovers speaker-labelled dialogue from a successful MediaWiki page through its bounded API', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-mediawiki-source-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: 'MediaWiki 对话资料' })
+  const requestedUrl = 'https://thwiki.example.test/游戏对话:测试作品/博丽灵梦'
+  const calls: string[] = []
+  const route = storyWorkspaceRoute(store, {
+    async fetch(request: { readonly url: string }) {
+      calls.push(request.url)
+      const url = new URL(request.url)
+      if (url.pathname !== '/api.php') {
+        return {
+          url: request.url,
+          statusCode: 200,
+          body: { kind: 'text' as const, content: '测试作品 游戏对话 見れば判るわよ 村里出大事了' },
+          truncated: false,
+        }
+      }
+      const prop = url.searchParams.get('prop')
+      const section = url.searchParams.get('section')
+      const payload = prop === 'sections'
+        ? { parse: { sections: [{ index: '1', level: '2' }] } }
+        : section === '0'
+          ? { parse: { text: '<p>测试作品</p>' } }
+          : { parse: { text: '<p>雾雨魔理沙：「村里出大事了！」</p><p>博丽灵梦：「这不是看一眼就知道了吗！」</p>' } }
+      return {
+        url: request.url,
+        statusCode: 200,
+        body: { kind: 'text' as const, content: JSON.stringify(payload) },
+        truncated: false,
+      }
+    },
+  })
+  const path = `/api/agent-rp/story-workspaces/${encodeURIComponent(created.id)}/sources/url`
+  const response = await invoke(route, 'POST', path, {
+    format: 0,
+    revision: created.revision,
+    url: requestedUrl,
+    name: '原作对话',
+    kind: 'original',
+  })
+
+  assert.equal(response.status, 201)
+  assert.equal(calls.length, 4)
+  assert.equal(calls.filter(url => new URL(url).pathname === '/api.php').length, 3)
+  const workspace = response.body.workspace as StoryWorkspaceSnapshot
+  assert.match(workspace.sources[0]?.content ?? '', /雾雨魔理沙：「村里出大事了！」/u)
+  assert.match(workspace.sources[0]?.content ?? '', /博丽灵梦：「这不是看一眼就知道了吗！」/u)
+  const voice = searchStoryVoiceSourceExcerpts(workspace.sources, ['博丽灵梦'], {
+    primary: '看一眼就知道',
+    context: '村里出大事',
+  })
+  assert.equal(voice.length, 1)
+  assert.match(voice[0]?.text ?? '', /这不是看一眼就知道了吗/u)
+})
+
 test('rejects unsafe, unavailable, and unsuccessful URL imports without changing the workspace', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-url-source-reject-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })

@@ -75,6 +75,7 @@ export function createCharacterCardSessionSeed(
     type: 'agent-rp/character-card-seed',
     seq: 0,
     time,
+    ignorable: true,
     data: {
       format: 0,
       source: fromLibrary
@@ -88,6 +89,7 @@ export function createCharacterCardSessionSeed(
       type: 'agent-rp/persona-seed',
       seq: events.length,
       time,
+      ignorable: true,
       data: { format: 0, persona },
     })
   }

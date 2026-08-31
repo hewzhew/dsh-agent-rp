@@ -95,6 +95,7 @@ export function appendRoleplayExperienceSelection(
     type: 'agent-rp/experience-selection' as const,
     seq: events.length,
     time: Date.now(),
+    ignorable: true,
     data,
   }])
 }

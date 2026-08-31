@@ -42,6 +42,9 @@ export interface AgentRpStoryTurnProgress {
     readonly requestId: string
     readonly stage: AgentRpStoryTurnStage
     readonly subjectId?: string
+    readonly startedAt: number
+    readonly finishedAt?: number
+    readonly durationMs?: number
     readonly status: 'running' | 'succeeded' | 'failed'
     readonly failure?: 'aborted' | 'provider' | 'unknown'
     readonly detail?: AgentRpStoryTurnFailureDetail

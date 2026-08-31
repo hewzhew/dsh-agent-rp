@@ -200,6 +200,7 @@ export function createSillyTavernChatSeed(
     type: 'agent-rp/sillytavern-chat-import',
     seq: 0,
     time: Date.now(),
+    ignorable: true,
     data: metadata(chat, attachment),
   }]
   let turn = 0

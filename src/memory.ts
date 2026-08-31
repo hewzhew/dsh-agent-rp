@@ -483,6 +483,7 @@ export function appendAgentRpMemorySeed(
     type: 'agent-rp/memory-seed',
     seq: seed.length,
     time,
+    ignorable: true,
     data: {
       format: 0,
       sourceSessionId,

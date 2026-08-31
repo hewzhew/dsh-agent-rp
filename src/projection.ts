@@ -186,6 +186,11 @@ function validStoryTurnProgress(value: unknown): boolean {
     return typeof item.requestId === 'string'
       && typeof item.stage === 'string' && STORY_TURN_STAGES.has(item.stage)
       && (item.subjectId === undefined || typeof item.subjectId === 'string')
+      && typeof item.startedAt === 'number' && Number.isSafeInteger(item.startedAt) && item.startedAt >= 0
+      && (item.finishedAt === undefined || (typeof item.finishedAt === 'number'
+        && Number.isSafeInteger(item.finishedAt) && item.finishedAt >= item.startedAt))
+      && (item.durationMs === undefined || (typeof item.durationMs === 'number'
+        && Number.isSafeInteger(item.durationMs) && item.durationMs >= 0))
       && (item.status === 'running' || item.status === 'succeeded' || item.status === 'failed')
       && (item.failure === undefined || (item.status === 'failed'
         && (item.failure === 'aborted' || item.failure === 'provider' || item.failure === 'unknown')))
@@ -211,6 +216,7 @@ function applyStoryTurnProgress(
       requestId: event.data.requestId,
       stage: event.data.stage,
       ...(event.data.subjectId === undefined ? {} : { subjectId: event.data.subjectId }),
+      startedAt: event.time,
       status: 'running' as const,
     }
     if (current === undefined || !sameStoryTurn(current, event.data)) {
@@ -241,10 +247,15 @@ function applyStoryTurnProgress(
               requestId: request.requestId,
               stage: request.stage,
               ...(request.subjectId === undefined ? {} : { subjectId: request.subjectId }),
+              startedAt: request.startedAt,
+              finishedAt: event.time,
+              durationMs: Math.max(0, event.time - request.startedAt),
               status,
             }
           : {
               ...request,
+              finishedAt: event.time,
+              durationMs: Math.max(0, event.time - request.startedAt),
               status,
               failure: event.data.result.failure,
               ...(validStoryTurnFailureDetail(event.data.result.detail)
@@ -1444,7 +1455,7 @@ export function createAgentRpProjectionDefinition(
     }
   },
   },
-  stateVersion: 17,
+  stateVersion: 18,
   }
   return {
     ...definition,

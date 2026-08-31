@@ -47,6 +47,7 @@ export function appendSessionRegexPack(
     type: 'agent-rp/regex-pack-seed' as const,
     seq: events.length,
     time: Date.now(),
+    ignorable: true,
     data: snapshot,
   }])
 }

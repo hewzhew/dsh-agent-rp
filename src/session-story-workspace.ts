@@ -97,6 +97,7 @@ export function createStoryWorkspaceSessionSeed(
         type: 'agent-rp/story-workspace-selection',
         seq: 0,
         time,
+        ignorable: true,
         data: { format: 0, workspaceId: workspace.id, source: 'launch' },
       },
       { type: 'turn/start', seq: 1, time, data: { turn: 1 } },
