@@ -1,8 +1,7 @@
 import { SessionEvent } from "@deepseek-ai/dsh-session";
-import { Context } from "@deepseek-ai/cordis";
 import { JsonValue } from "@deepseek-ai/dsh-util-values";
+import { Context } from "@deepseek-ai/cordis";
 import { ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
-import { JsonValue as JsonValue$1 } from "@deepseek-ai/dsh-session/types";
 import { Agent } from "@deepseek-ai/dsh-agent";
 
 /** Reusable resource categories that can be selected independently for an experience. */
@@ -1319,7 +1318,7 @@ interface PlayWorldSnapshot {
 interface PlayWorldBinding {
   readonly resource?: RoleplayResourceSelection;
   readonly moduleId: string;
-  readonly configuration: JsonValue$1;
+  readonly configuration: JsonValue;
   readonly sourceReferences: readonly RoleplayResourceSelection[];
   readonly sourceIds: readonly string[];
   readonly cast: readonly PlayWorldCastBinding[];
