@@ -40,8 +40,8 @@ function fail(message) {
 
 function parseArguments(args) {
   const mode = args[0] ?? 'setup'
-  if (!['check', 'setup', 'preview'].includes(mode)) {
-    fail(`unknown mode ${JSON.stringify(mode)}; expected check, setup, or preview`)
+  if (!['check', 'setup', 'verify', 'preview'].includes(mode)) {
+    fail(`unknown mode ${JSON.stringify(mode)}; expected check, setup, verify, or preview`)
   }
   let dshRoot = process.env.DSH_ALPHA_ROOT
   let home = process.env.DSH_ALPHA_HOME
@@ -209,6 +209,19 @@ function buildPlugin() {
   run(process.execPath, [tsdown])
 }
 
+function typecheckPlugin() {
+  const tsc = resolve(repositoryRoot, 'node_modules/typescript/bin/tsc')
+  if (!existsSync(tsc)) fail('installed dependency graph does not contain TypeScript')
+  for (const config of ['tsconfig.host.json', 'tsconfig.client.json']) {
+    run(process.execPath, [tsc, '-p', config, '--noEmit'])
+  }
+}
+
+function checkLinkedSessionCapability() {
+  const capability = run(process.execPath, [capabilityChecker], { capture: true })
+  if (capability !== 'ready') fail('linked DSH Session capability probe did not report ready')
+}
+
 function missingDshBuildArtifacts(links) {
   const missing = []
   for (const [name, packageRoot] of links) {
@@ -260,8 +273,7 @@ function installSourceDependencies(dshRoot, links) {
   } finally {
     rmSync(temporary, { recursive: true, force: true })
   }
-  const capability = run(process.execPath, [capabilityChecker], { capture: true })
-  if (capability !== 'ready') fail('linked DSH Session capability probe did not report ready')
+  checkLinkedSessionCapability()
 }
 
 function assertManagedFileAvailable(path, content) {
@@ -330,6 +342,13 @@ function main() {
   installSourceDependencies(options.dshRoot, links)
   if (options.mode === 'setup') {
     process.stdout.write(JSON.stringify({ ready: true, patch, packages: links.size }) + '\n')
+    return
+  }
+  if (options.mode === 'verify') {
+    buildPlugin()
+    typecheckPlugin()
+    checkLinkedSessionCapability()
+    process.stdout.write(JSON.stringify({ ready: true, patch, packages: links.size, verified: true }) + '\n')
     return
   }
   ensureDshWebArtifacts(options.dshRoot)

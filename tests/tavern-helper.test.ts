@@ -47,11 +47,11 @@ import { inspectLorebook } from '../src/import/lorebook.ts'
 
 function captureAgentRpEvents(session: Session): SessionEvent[] {
   const events: SessionEvent[] = []
-  const append = session.append.bind(session) as (...args: unknown[]) => SessionEvent
-  Object.defineProperty(session, 'append', {
+  const appendIgnorable = session.appendIgnorable.bind(session) as (...args: unknown[]) => SessionEvent
+  Object.defineProperty(session, 'appendIgnorable', {
     configurable: true,
     value(...args: unknown[]) {
-      const event = append(...args)
+      const event = appendIgnorable(...args)
       if (event.type.startsWith('agent-rp/')) events.push(event)
       return event
     },

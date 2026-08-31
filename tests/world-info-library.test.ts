@@ -111,7 +111,7 @@ test('projects the isolated EJS runtime error for Debug-gated World Info reports
   session.append('command/done', { commandId, ...result })
 
   const definition = createAgentRpProjectionDefinition(await EjsTemplateEngine.create())
-  let state = definition.init()
+  let state = definition.init(session.header)
   for (const event of session.events) state = definition.apply(state, event)
   const entry = definition.wire.view(state).worldInfo.books[0]?.entries[0]
   assert.equal(entry?.reason, 'template-error')
