@@ -1700,6 +1700,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
   assert.match(voiceDraftBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
   assert.match(voiceDraftBody, /\[目标人物\]\[示例\] 灵梦｜你自己说过的话，还要问我？/u)
+  assert.equal(voiceDraftBody.match(/你自己说过的话，还要问我/gu)?.length, 1)
   assert.deepEqual(stageRequests.flatMap(request =>
     (request.stage === 'research' || request.stage === 'director' || request.stage === 'section' || request.stage === 'editor')
       ? [request.stage]
@@ -1795,6 +1796,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.equal(typeof reimuOriginalSeed, 'string')
   assert.equal(reimuTranslationSeed, reimuOriginalSeed)
   assert.doesNotMatch(sourcedVoiceBody, new RegExp(`character:${reimuId}:example-dialogue`, 'u'))
+  assert.doesNotMatch(sourcedVoiceBody, /你自己说过的话，还要问我/u)
   const sourcedReimuCharacterBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'character'
     && request.subjectId === reimuId)?.dispatch.messages)
   assert.doesNotMatch(sourcedReimuCharacterBody, /博麗霊夢|霧雨魔理沙|自分で二つの話/u)

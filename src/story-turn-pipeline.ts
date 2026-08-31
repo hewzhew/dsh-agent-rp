@@ -18,6 +18,7 @@ import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActMode
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
+  compileStoryCharacterVoiceContext,
   resolveStoryPlayWorldContext,
   compileStoryDirectorWorldContext,
   storyDirectorMap,
@@ -3279,7 +3280,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         context: contextVoiceQuery,
       })
       if (character === undefined || selectedVoiceEvidence.length === 0) continue
-      const characterContext = compileStoryCharacterContext(input.workspace, character.id, { playerInput })
+      const characterContext = input.store === undefined
+        ? compileStoryCharacterVoiceContext(input.workspace, character.id, { playerInput })
+        : compileStoryCharacterVoiceContext(input.workspace, character.id, { playerInput }, input.store.worlds)
       const selectedVoiceReferences = selectedVoiceEvidence.flatMap(item => item.evidence.map(evidenceItem => evidenceItem.reference))
       const speechDecision: StoryDirectorDecision = {
         sections: [{ ...section, beats: [], speech: [{ ...speech, voiceEvidence: selectedVoiceReferences }] }],

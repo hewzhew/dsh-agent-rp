@@ -2633,12 +2633,12 @@ export class StoryWorkspaceStore {
   }
 }
 
-/** Compile a character Worker input without director-only or other-character facts. */
-export function compileStoryCharacterContext(
+function compileStoryCharacterContextDocument(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
   scene: StoryPublicSceneContext,
-  worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
+  worlds: PlayWorldRegistry,
+  includeExampleDialogue: boolean,
 ): StoryCharacterContext {
   const character = workspace.characters.find(candidate => candidate.id === characterId)
   if (character === undefined) throw new Error(`故事工作室中没有人物 ${JSON.stringify(characterId)}`)
@@ -2660,7 +2660,9 @@ export function compileStoryCharacterContext(
     ...(character.profile.description.trim() === '' ? [] : ['## 人物描述', character.profile.description]),
     ...(character.profile.personality.trim() === '' ? [] : ['## 性格与行为', character.profile.personality]),
     ...(character.profile.scenario.trim() === '' ? [] : ['## 入场情境', character.profile.scenario]),
-    ...(character.profile.exampleDialogue.trim() === '' ? [] : ['## 对话示例', character.profile.exampleDialogue]),
+    ...(!includeExampleDialogue || character.profile.exampleDialogue.trim() === ''
+      ? []
+      : ['## 对话示例', character.profile.exampleDialogue]),
     ...(Object.values(character.state).every(value => value.trim() === '') ? [] : [
       '## 当前场地状态',
       [
@@ -2689,6 +2691,26 @@ export function compileStoryCharacterContext(
     playerInput,
     text,
   }
+}
+
+/** Compile a character Worker input without director-only or other-character facts. */
+export function compileStoryCharacterContext(
+  workspace: StoryWorkspaceSnapshot,
+  characterId: string,
+  scene: StoryPublicSceneContext,
+  worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
+): StoryCharacterContext {
+  return compileStoryCharacterContextDocument(workspace, characterId, scene, worlds, true)
+}
+
+/** Compile the same isolated context for voice drafting without bypassing selected voice evidence. */
+export function compileStoryCharacterVoiceContext(
+  workspace: StoryWorkspaceSnapshot,
+  characterId: string,
+  scene: StoryPublicSceneContext,
+  worlds: PlayWorldRegistry = DEFAULT_PLAY_WORLD_REGISTRY,
+): StoryCharacterContext {
+  return compileStoryCharacterContextDocument(workspace, characterId, scene, worlds, false)
 }
 
 /** Compile authoritative world state for director and continuity Workers. */
