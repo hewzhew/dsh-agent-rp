@@ -21,11 +21,10 @@ export interface StoryWorkspaceLaunchSource {
   readonly temporary: boolean
 }
 
-/** Launch, retirement, and first-turn operations supplied by the client shell. */
-export interface StoryWorkspaceLaunchOperations {
+/** Session launch and source retirement operations supplied by the client shell. */
+export interface StoryWorkspaceOpenOperations {
   launch(sourceSessionId: SessionId): Promise<SessionId>
   archive(sourceSessionId: SessionId): Promise<void>
-  send(sessionId: SessionId): Promise<void>
 }
 
 /**
@@ -54,20 +53,21 @@ export async function acquireStoryWorkspaceLaunchSource(
 }
 
 /**
- * Start a play-space Session through a selected Host Workspace and retire only
- * a consumed blank or temporary source.
+ * Open a play-space Session through a selected Host Workspace and retire only
+ * a consumed blank or temporary source. The launched Session remains blank so
+ * the native DSH composer owns the player's first free-form input.
  * @param sessions - Client Session service.
  * @param workspace - Explicit Host Workspace selected by the player.
  * @param currentSessionId - Current Session, when one is selected.
- * @param operations - Seeded launch, source archival, and first-turn delivery.
- * @returns after the first turn has been submitted to the launched Session.
+ * @param operations - Seeded launch and source archival operations.
+ * @returns the launched Session selected by the client shell.
  */
-export async function startStoryWorkspaceSessionFromHostWorkspace(
+export async function openStoryWorkspaceSessionFromHostWorkspace(
   sessions: StoryWorkspaceLaunchSessionService,
   workspace: Pick<WorkspaceView, 'workspaceId' | 'sessionIds'>,
   currentSessionId: SessionId | undefined,
-  operations: StoryWorkspaceLaunchOperations,
-): Promise<void> {
+  operations: StoryWorkspaceOpenOperations,
+): Promise<SessionId> {
   const source = await acquireStoryWorkspaceLaunchSource(sessions, workspace, currentSessionId)
   let launchedSessionId: SessionId
   try {
@@ -79,5 +79,5 @@ export async function startStoryWorkspaceSessionFromHostWorkspace(
   if (source.temporary || sessions.list.getSnapshot().byId[source.sessionId]?.blank === true) {
     await operations.archive(source.sessionId)
   }
-  await operations.send(launchedSessionId)
+  return launchedSessionId
 }

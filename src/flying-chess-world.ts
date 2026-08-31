@@ -449,6 +449,39 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         }),
       }
     },
+    projectSurface(snapshot, context) {
+      const normalized = this.normalize(snapshot, context)
+      const state = normalized.state as FlyingChessWorldState
+      const currentName = playerName(context, state.currentPlayerId)
+      const latest = normalized.events.at(-1)
+      const status = state.winnerId === undefined
+        ? `第 ${String(state.turn)} 回合 · ${currentName}`
+        : `${playerName(context, state.winnerId)}获胜`
+      const summary = state.pendingRoll === undefined
+        ? latest?.summary ?? '棋局已经准备好。'
+        : `骰点是 ${String(state.pendingRoll.value)}；请选择一架高亮的飞机。`
+      const arrived = state.pieces.filter(piece => piece.status === 'home').length
+      const viewportData = snapshotJsonValue(state) as JsonValue | undefined
+      if (viewportData === undefined) throw new Error('飞行棋场地视图无效')
+      return {
+        title: normalized.title,
+        status,
+        summary,
+        facts: [
+          { label: '回合', value: String(state.turn) },
+          { label: '行动', value: currentName },
+          { label: '已到达', value: `${String(arrived)}/${String(state.pieces.length)}` },
+        ],
+        viewport: { kind: 'flying-chess/board-v0', data: viewportData },
+        composerSuggestions: state.pendingRoll !== undefined || latest === undefined
+          ? []
+          : [{
+              id: `after-event:${String(latest.sequence)}`,
+              label: '写写大家的反应',
+              draft: `写写“${latest.title}”之后，场上的人物各自有什么反应。`,
+            }],
+      }
+    },
     projectForCharacter(snapshot, characterId, context) {
       const normalized = this.normalize(snapshot, context)
       if (!context.characters.some(character => character.id === characterId)) throw new Error('飞行棋投影指向未知人物')

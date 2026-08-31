@@ -19,6 +19,7 @@ import type {
   PlayWorldModuleDescriptor,
   PlayWorldPromptProjection,
   PlayWorldSnapshot,
+  PlayWorldSurfaceProjection,
   PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 
@@ -112,6 +113,8 @@ export interface PlayWorldModule {
   dispatch(snapshot: PlayWorldSnapshot, action: unknown, context: PlayWorldContext): PlayWorldSnapshot
   /** Return only the legal choices for the character currently controlling the world. */
   characterTurn(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldCharacterTurn | undefined
+  /** Project compact status, an optional viewport, and native-composer suggestions for the Session UI. */
+  projectSurface(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldSurfaceProjection
   /** Project only knowledge available to one character Worker. */
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project authoritative state for the director Worker. */
@@ -181,6 +184,44 @@ export function projectPlayWorldTurn(turn: PlayWorldCharacterTurn | undefined): 
     })
   })
   return Object.freeze({ cycleId, characterId, instruction, actions: Object.freeze(actions) })
+}
+
+/** Validate one module-owned native Session surface before sending it to a browser. */
+export function projectPlayWorldSurface(surface: PlayWorldSurfaceProjection): PlayWorldSurfaceProjection {
+  const title = requiredProjectionText(surface.title, '游玩世界场地标题', 160)
+  const status = requiredProjectionText(surface.status, '游玩世界场地状态', 300)
+  const summary = requiredProjectionText(surface.summary, '游玩世界场地摘要', 2_000)
+  if (!Array.isArray(surface.facts) || surface.facts.length > 16
+    || !Array.isArray(surface.composerSuggestions) || surface.composerSuggestions.length > 12) {
+    throw new Error('游玩世界场地投影无效')
+  }
+  const facts = surface.facts.map((fact, index) => Object.freeze({
+    label: requiredProjectionText(fact.label, `游玩世界场地事实 ${String(index + 1)} 标题`, 80),
+    value: requiredProjectionText(fact.value, `游玩世界场地事实 ${String(index + 1)} 内容`, 200),
+  }))
+  const suggestionIds = new Set<string>()
+  const composerSuggestions = surface.composerSuggestions.map((suggestion) => {
+    const id = requiredProjectionText(suggestion.id, '游玩世界输入建议 id', 120)
+    if (suggestionIds.has(id)) throw new Error(`游玩世界输入建议 ${JSON.stringify(id)} 重复`)
+    suggestionIds.add(id)
+    return Object.freeze({
+      id,
+      label: requiredProjectionText(suggestion.label, `游玩世界输入建议 ${JSON.stringify(id)} 标题`, 120),
+      draft: requiredProjectionText(suggestion.draft, `游玩世界输入建议 ${JSON.stringify(id)} 内容`, 4_000),
+    })
+  })
+  const viewport = surface.viewport === undefined ? undefined : Object.freeze({
+    kind: requiredProjectionText(surface.viewport.kind, '游玩世界视图类型', 120),
+    data: surface.viewport.data,
+  })
+  return Object.freeze({
+    title,
+    status,
+    summary,
+    facts: Object.freeze(facts),
+    ...(viewport === undefined ? {} : { viewport }),
+    composerSuggestions: Object.freeze(composerSuggestions),
+  })
 }
 
 /** Installed world modules keyed by stable module id. */

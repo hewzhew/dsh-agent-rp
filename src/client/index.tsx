@@ -27,6 +27,7 @@ import {
 import {
   AGENT_RP_PLAY_WORLD_VIEW_SLOT,
   AGENT_RP_ST_EXTENSION_SERVICE,
+  AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
   AGENT_RP_WORKBENCH_SECTION_SLOT,
 } from '../client-extension-v0.ts'
 import DOMPurify from 'dompurify'
@@ -47,8 +48,9 @@ import {
 } from './st-extension-surface.tsx'
 import { StoryWorkspaceEditor } from './story-workspace-editor.tsx'
 import { createStoryWorkspaceNavigation, type StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
-import { startStoryWorkspaceSessionFromHostWorkspace } from './story-workspace-launch-source.ts'
+import { openStoryWorkspaceSessionFromHostWorkspace } from './story-workspace-launch-source.ts'
 import { installStoryWorkspaceSessionCard } from './story-workspace-session-card.tsx'
+import { StoryWorldSurface } from './story-world-surface.tsx'
 
 interface SidebarDestinationOwnerProps {
   readonly wide: boolean
@@ -640,6 +642,7 @@ type HeaderProps = PropsRuntime<'conversation.session.header.actions'> & {
 }
 
 type ComposerDockProps = PropsRuntime<'conversation.composer.dock'>
+  & PropsRenderSlots<typeof AGENT_RP_WORLD_SURFACE_VIEW_SLOT>
 
 type GenerationTailProps = Pick<TurnTailOwnerProps, 'seq' | 'turn'> & {
   readonly sessionId: SessionId
@@ -2787,8 +2790,7 @@ type SidebarRoleplayWorkbenchProps = Pick<HeaderProps,
     agentPresetId?: string,
     regexPackIds?: readonly string[],
   ) => Promise<void>
-  readonly startStoryWorkspaceSession: (hostWorkspaceId: string, workspaceId: string, request: string) => Promise<void>
-  readonly continueStoryWorkspaceSession: (sessionId: SessionId, workspaceId: string, request: string) => Promise<void>
+  readonly openStoryWorkspaceSession: (hostWorkspaceId: string, workspaceId: string) => Promise<void>
   readonly renamePreset: (id: string, name: string) => Promise<PresetLibrarySummary>
   readonly deletePreset: (id: string) => Promise<void>
   readonly workspaceSettings: WorkspaceSettingsSource
@@ -2873,7 +2875,7 @@ function SidebarRoleplayDestination({
   listPresets, listRegexPacks, importRegexPackFile, deleteRegexPack,
   listAgentCapabilityPresets, importPresetFile, listPersonas, savePersona, deletePersona,
   listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo, renamePreset, deletePreset,
-  startWorldInfoSession, startStoryWorkspaceSession, continueStoryWorkspaceSession,
+  startWorldInfoSession, openStoryWorkspaceSession,
   workspaceSettings, workspaceList,
   storyWorkspaceNavigation,
 }: SidebarRoleplayDestinationProps) {
@@ -2883,7 +2885,6 @@ function SidebarRoleplayDestination({
   const [resourceCenterOpen, setResourceCenterOpen] = useState(false)
   const [storyWorkspaceOpen, setStoryWorkspaceOpen] = useState(false)
   const [storyWorkspaceInitialId, setStoryWorkspaceInitialId] = useState<string>()
-  const [storyWorkspaceSurface, setStoryWorkspaceSurface] = useState<'play' | 'studio'>('studio')
   const [resourceCenterSection, setResourceCenterSection] = useState<'characters' | 'world-info' | 'regex-packs'>('characters')
   const [worldInfoLaunch, setWorldInfoLaunch] = useState<WorldInfoLibraryUpload>()
   const [launchSessionId, setLaunchSessionId] = useState<SessionId | undefined>(undefined)
@@ -2922,9 +2923,9 @@ function SidebarRoleplayDestination({
   const storyWorkspaceLaunchUnavailableReason = settingsSnapshot.status === 'loading'
     ? '正在读取可用的会话工作区…'
     : settingsSnapshot.status === 'error'
-      ? '会话工作区设置暂时不可用，请稍后重试。'
+      ? '会话工作区设置暂时不可用'
       : storySessionWorkspaces.length === 0
-        ? '先在 Agent RP 工作台为一个 DSH 工作区启用入口，再从这里开始游玩。'
+        ? '请先为一个 DSH 工作区启用 Agent RP 入口'
         : undefined
   const unavailableReason = currentSessionId === undefined
     ? '先点侧栏的“新会话”，再从这里选择角色或迁移聊天'
@@ -2965,7 +2966,6 @@ function SidebarRoleplayDestination({
   const openStoryWorkspace = (): void => {
     closeWorkbench()
     setStoryWorkspaceInitialId(undefined)
-    setStoryWorkspaceSurface('studio')
     setStoryWorkspaceOpen(true)
   }
   const openCurrentSessionTools = (): void => {
@@ -2983,9 +2983,9 @@ function SidebarRoleplayDestination({
     return () => { document.removeEventListener('keydown', onKeyDown) }
   }, [workbenchOpen])
   useEffect(() => storyWorkspaceNavigation.subscribe(({ workspaceId, surface }) => {
+    if (surface !== 'studio') return
     setWorkbenchOpen(false)
     setStoryWorkspaceInitialId(workspaceId)
-    setStoryWorkspaceSurface(surface)
     setStoryWorkspaceOpen(true)
   }), [storyWorkspaceNavigation])
   const widestLeftWithUsableContent = Math.max(0, window.innerWidth - 320)
@@ -3203,7 +3203,6 @@ function SidebarRoleplayDestination({
     />, document.body)}
     {storyWorkspaceOpen && createPortal(<StoryWorkspaceEditor
       accent={color}
-      initialSurface={storyWorkspaceSurface}
       renderPlayWorldView={(moduleId, owner, fallback) => renderSlot(
         AGENT_RP_PLAY_WORLD_VIEW_SLOT,
         owner,
@@ -3213,17 +3212,19 @@ function SidebarRoleplayDestination({
       launchTargets={storySessionWorkspaces}
       {...(defaultStorySessionWorkspaceId === undefined ? {} : { defaultLaunchTargetId: defaultStorySessionWorkspaceId })}
       {...(storyWorkspaceLaunchUnavailableReason === undefined ? {} : { launchUnavailableReason: storyWorkspaceLaunchUnavailableReason })}
-      onStartSession={(hostWorkspaceId: string, workspaceId: string, request: string) => startStoryWorkspaceSession(hostWorkspaceId, workspaceId, request)}
+      onOpenSession={(hostWorkspaceId, workspaceId) => openStoryWorkspaceSession(hostWorkspaceId, workspaceId)}
       {...(currentSessionId === undefined || !currentRoleplaySession
         ? {}
-        : {
-            sessionId: String(currentSessionId),
-            storyTurn: (currentSession?.projectionValues?.agentRp as AgentRpProjection | undefined)?.storyTurn,
-            onContinueSession: (targetSessionId: string, workspaceId: string, request: string) => continueStoryWorkspaceSession(
-              targetSessionId as SessionId, workspaceId, request,
-            ),
-          })}
-      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined); setStoryWorkspaceSurface('studio') }}
+        : (() => {
+            const agentRp = currentSession?.projectionValues?.agentRp as AgentRpProjection | undefined
+            const sessionWorkspaceId = agentRp?.storyWorkspaceId ?? agentRp?.storyTurn?.workspaceId
+            return {
+              sessionId: String(currentSessionId),
+              ...(sessionWorkspaceId === undefined ? {} : { sessionWorkspaceId }),
+              storyTurn: agentRp?.storyTurn,
+            }
+          })())}
+      onClose={() => { setStoryWorkspaceOpen(false); setStoryWorkspaceInitialId(undefined) }}
     />, document.body)}
     {worldInfoLaunch !== undefined && launchSessionId !== undefined && createPortal(<WorldInfoLaunchDialog
       runtimeDiagnostics={runtimeDiagnostics}
@@ -11389,9 +11390,10 @@ function roleplayComposerDockComponent(
   runTavernModelList: RunTavernModelList,
   runTavernTrigger: RunTavernTrigger,
   runPresetConfiguration: RunPresetConfiguration,
+  storyWorkspaceNavigation: StoryWorkspaceNavigation,
 ): (props: ComposerDockProps) => JSX.Element | null {
   return function RoleplayComposerDock({
-    inputActions, sessionId, useChat, useProjection, useSessions, useSession,
+    input, inputActions, renderSlot, sessionId, useChat, useProjection, useSessions, useSession,
   }: ComposerDockProps) {
   const summary = useSessions(state => state.byId[sessionId])
   const projected = useProjection('agentRp')
@@ -12352,6 +12354,7 @@ function roleplayComposerDockComponent(
   const worldInfoBooks = projection?.worldInfo.books ?? []
   const worldEngineResources = summarizeWorldEngineResources(worldInfoBooks)
   const worldEngineReasons = worldEngineResources.reasons
+  const storyWorkspaceId = projection?.storyWorkspaceId ?? projection?.storyTurn?.workspaceId
   useAgentRpRuntimeDiagnosticContribution(
     runtimeDiagnostics,
     'roleplay-session',
@@ -12476,7 +12479,21 @@ function roleplayComposerDockComponent(
     data-agent-rp-world-engine-template-unsupported={worldEngineFailures.templateUnsupported}
     data-agent-rp-world-engine-template-error={worldEngineFailures.templateError}
     style={{ alignItems: 'center', display: 'flex', gap: '4px', minWidth: 0 }}>
-    {statusPanelHost !== undefined && createPortal(<TavernStatusPanels projection={projection} />, statusPanelHost)}
+    {statusPanelHost !== undefined && createPortal(<>
+      {storyWorkspaceId !== undefined && <StoryWorldSurface
+        workspaceId={storyWorkspaceId}
+        refreshKey={`${projection.storyTurn?.turn ?? 0}:${projection.storyTurn?.step ?? 0}:${projection.storyTurn?.status ?? 'idle'}`}
+        draft={input.draft}
+        setDraft={inputActions.setDraft}
+        navigation={storyWorkspaceNavigation}
+        renderPlayWorldView={(moduleId, owner, fallback) => renderSlot(
+          AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
+          owner,
+          { entryKey: moduleId, fallback },
+        )}
+      />}
+      <TavernStatusPanels projection={projection} />
+    </>, statusPanelHost)}
     {storedCharacterRuntime?.status === 'error' && <span role="status"
       title={storedCharacterRuntime.error} style={{
         color: 'var(--dsw-alias-state-warning, #d6a955)', fontSize: '11px', lineHeight: 1.45, padding: '3px 6px',
@@ -13147,16 +13164,10 @@ export function apply(ctx: ClientContext): void {
     )
     await archiveConsumedBlankSession(sessionId)
   }
-  const sendStoryWorkspaceTurn = async (sessionId: SessionId, workspaceId: string, request: string): Promise<void> => {
-    const selected = await executeAgentRpCommand(sessionId, `/rp-story-workspace ${JSON.stringify({ format: 0, workspaceId })}`)
-    if (!selected.matched) throw new Error('当前角色会话没有游玩场地命令')
-    const conversation = ctx.sessions.scope(sessionId)?.get('conversation') as IConversation | undefined
-    if (conversation === undefined) throw new Error('角色会话已经打开，但暂时还不能发送这一回合；请稍后重试')
-    await conversation.send(request)
-  }
   const launchStoryWorkspaceFromSession = async (sessionId: SessionId, workspaceId: string): Promise<SessionId> => {
-    const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
-    if (summary === undefined) throw new Error('用于启动游玩场地的来源会话当前不可用')
+    if (ctx.sessions.list.getSnapshot().byId[sessionId] === undefined) {
+      throw new Error('用于打开游玩场地的来源会话当前不可用')
+    }
     return launchRoleplaySession({
       format: 0,
       sourceSessionId: String(sessionId),
@@ -13164,10 +13175,9 @@ export function apply(ctx: ClientContext): void {
       workspaceId,
     })
   }
-  const startStoryWorkspaceInHostWorkspace = async (
+  const openStoryWorkspaceInHostWorkspace = async (
     hostWorkspaceId: string,
     workspaceId: string,
-    request: string,
   ): Promise<void> => {
     const hostWorkspace = ctx.workspaces.list.getSnapshot().items
       .find(item => String(item.workspaceId) === hostWorkspaceId)
@@ -13176,18 +13186,13 @@ export function apply(ctx: ClientContext): void {
     if (settings.status !== 'ready' || !allowsAgentRpEntry(settings.value, hostWorkspace.workspaceId)) {
       throw new Error('选择的会话工作区尚未启用 Agent RP 入口')
     }
-    await startStoryWorkspaceSessionFromHostWorkspace(
+    await openStoryWorkspaceSessionFromHostWorkspace(
       ctx.sessions,
       hostWorkspace,
       ctx.sessions.list.getSnapshot().current,
       {
         launch: sourceSessionId => launchStoryWorkspaceFromSession(sourceSessionId, workspaceId),
         archive: archiveConsumedBlankSession,
-        send: async sessionId => {
-          const conversation = ctx.sessions.scope(sessionId)?.get('conversation') as IConversation | undefined
-          if (conversation === undefined) throw new Error('游玩会话已经创建，但暂时还不能发送第一回合；请稍后重试')
-          await conversation.send(request)
-        },
       },
     )
   }
@@ -13611,8 +13616,7 @@ export function apply(ctx: ClientContext): void {
     renamePreset: renamePresetLibraryEntry, deletePreset: deletePresetLibraryEntry, listPersonas, savePersona, deletePersona,
     listWorldInfos, importWorldInfoFile, setWorldInfoDefault, deleteWorldInfo,
     startWorldInfoSession: startWorldInfoFromBlankSession,
-    startStoryWorkspaceSession: startStoryWorkspaceInHostWorkspace,
-    continueStoryWorkspaceSession: sendStoryWorkspaceTurn,
+    openStoryWorkspaceSession: openStoryWorkspaceInHostWorkspace,
     storyWorkspaceNavigation,
   }
   ctx.slots.inject('sidebar.destinations', () => ctx.slots.register({
@@ -13707,9 +13711,12 @@ export function apply(ctx: ClientContext): void {
     runImageGeneration={runImageGeneration} />))
   ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
     name: 'conversation.composer.dock', id: 'agent-rp-status', order: -100,
+    children: {
+      [AGENT_RP_WORLD_SURFACE_VIEW_SLOT]: { kind: 'keyed', scope: 'root' },
+    },
   }, roleplayComposerDockComponent(
     ctx, runtimeDiagnostics, workspaceSettings, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
-    runTavernTrigger, configurePreset,
+    runTavernTrigger, configurePreset, storyWorkspaceNavigation,
   )))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock', id: 'agent-rp-sillytavern-import-hint', order: -10,

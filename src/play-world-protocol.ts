@@ -101,6 +101,33 @@ export interface PlayWorldActionDescriptor {
   readonly description: string
 }
 
+/** One short fact displayed in the native Session world surface. */
+export interface PlayWorldSurfaceFact {
+  readonly label: string
+  readonly value: string
+}
+
+/** One optional prompt that only fills the native DSH composer. */
+export interface PlayWorldComposerSuggestion {
+  readonly id: string
+  readonly label: string
+  readonly draft: string
+}
+
+/** Module-owned browser projection hosted beside the native DSH conversation. */
+export interface PlayWorldSurfaceProjection {
+  readonly title: string
+  readonly status: string
+  readonly summary: string
+  readonly facts: readonly PlayWorldSurfaceFact[]
+  /** Stable renderer kind plus browser-safe module data; the Host owns placement and collapse behavior. */
+  readonly viewport?: {
+    readonly kind: string
+    readonly data: JsonValue
+  }
+  readonly composerSuggestions: readonly PlayWorldComposerSuggestion[]
+}
+
 /** Current Host-advertised turn projected without module-owned action payloads. */
 export interface PlayWorldTurnProjection {
   readonly cycleId: string

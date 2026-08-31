@@ -15,6 +15,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   createDefaultPlayWorldRegistry,
+  projectPlayWorldSurface,
   projectPlayWorldTurn,
   type PlayWorldContext,
   type PlayWorldModule,
@@ -30,6 +31,7 @@ import type {
   PlayWorldResourceDescriptor,
   PlayWorldRestartRequest,
   PlayWorldSnapshot,
+  PlayWorldSurfaceProjection,
   PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import {
@@ -1980,6 +1982,17 @@ export class StoryWorkspaceStore {
     if (!this.worlds.has(current.world.moduleId)) return undefined
     const module = this.worlds.get(current.world.moduleId)
     return projectPlayWorldTurn(module.characterTurn(current.world, playWorldContext(
+      current.characters,
+      current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId),
+    )))
+  }
+
+  /** Project the installed world's compact native Session surface. */
+  worldSurface(id: string): PlayWorldSurfaceProjection | undefined {
+    const current = this.get(id)
+    if (current.world === undefined || !this.worlds.has(current.world.moduleId)) return undefined
+    const module = this.worlds.get(current.world.moduleId)
+    return projectPlayWorldSurface(module.projectSurface(current.world, playWorldContext(
       current.characters,
       current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId),
     )))

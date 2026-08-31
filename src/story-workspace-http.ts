@@ -27,6 +27,7 @@ import {
   type PlayWorldCastUpdateRequest,
   type PlayWorldInstallRequest,
   type PlayWorldRestartRequest,
+  type PlayWorldSurfaceProjection,
   type PlayWorldTurnProjection,
 } from './play-world-protocol.ts'
 import { createStorySourceId, StoryWorkspaceStore } from './story-workspace.ts'
@@ -136,6 +137,7 @@ function workspaceResponse(ctx: Context, store: StoryWorkspaceStore, workspace: 
   readonly format: 1
   readonly workspace: StoryWorkspaceSnapshot
   readonly worldTurn: PlayWorldTurnProjection | null
+  readonly worldSurface: PlayWorldSurfaceProjection | null
   readonly worldModuleAvailable: boolean | null
   readonly webFetchAvailable: boolean
   readonly webSearchAvailable: boolean
@@ -144,6 +146,7 @@ function workspaceResponse(ctx: Context, store: StoryWorkspaceStore, workspace: 
     format: 1,
     workspace,
     worldTurn: store.worldTurn(workspace.id) ?? null,
+    worldSurface: store.worldSurface(workspace.id) ?? null,
     worldModuleAvailable: workspace.world === undefined ? null : store.worlds.has(workspace.world.moduleId),
     webFetchAvailable: storyWebFetchAvailable(ctx),
     webSearchAvailable: storyWebSearchAvailable(ctx),

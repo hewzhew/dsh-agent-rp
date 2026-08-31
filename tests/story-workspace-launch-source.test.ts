@@ -4,7 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import {
   acquireStoryWorkspaceLaunchSource,
-  startStoryWorkspaceSessionFromHostWorkspace,
+  openStoryWorkspaceSessionFromHostWorkspace,
   type StoryWorkspaceLaunchSessionService,
 } from '../src/client/story-workspace-launch-source.ts'
 
@@ -57,44 +57,42 @@ test('story Workspace launch source creates a standard source without a current 
   assert.equal(service.calls.length, 1)
 })
 
-test('story Workspace launch retires a temporary source before sending the first turn', async () => {
+test('story Workspace launch retires a temporary source and leaves the native composer untouched', async () => {
   const service = sessions({ [createdId]: { blank: true } })
   const launchedId = SessionId('session-launched')
   const order: string[] = []
 
-  await startStoryWorkspaceSessionFromHostWorkspace(service, workspace([]), undefined, {
+  const result = await openStoryWorkspaceSessionFromHostWorkspace(service, workspace([]), undefined, {
     launch: async sourceSessionId => {
       order.push(`launch:${sourceSessionId}`)
       return launchedId
     },
     archive: async sourceSessionId => { order.push(`archive:${sourceSessionId}`) },
-    send: async sessionId => { order.push(`send:${sessionId}`) },
   })
 
+  assert.equal(result, launchedId)
   assert.deepEqual(order, [
     `launch:${createdId}`,
     `archive:${createdId}`,
-    `send:${launchedId}`,
   ])
 })
 
 test('story Workspace launch keeps an active source and cleans a temporary launch failure', async () => {
   const active = sessions({ [memberId]: { blank: false } })
   const activeArchive: SessionId[] = []
-  await startStoryWorkspaceSessionFromHostWorkspace(active, workspace([memberId]), memberId, {
-    launch: async () => SessionId('session-active-launch'),
+  const activeLaunchedId = SessionId('session-active-launch')
+  assert.equal(await openStoryWorkspaceSessionFromHostWorkspace(active, workspace([memberId]), memberId, {
+    launch: async () => activeLaunchedId,
     archive: async id => { activeArchive.push(id) },
-    send: async () => undefined,
-  })
+  }), activeLaunchedId)
   assert.deepEqual(activeArchive, [])
 
   const temporary = sessions({ [createdId]: { blank: true } })
   const temporaryArchive: SessionId[] = []
   await assert.rejects(
-    startStoryWorkspaceSessionFromHostWorkspace(temporary, workspace([]), undefined, {
+    openStoryWorkspaceSessionFromHostWorkspace(temporary, workspace([]), undefined, {
       launch: async () => { throw new Error('launch failed') },
       archive: async id => { temporaryArchive.push(id) },
-      send: async () => { throw new Error('must not send') },
     }),
     /launch failed/u,
   )

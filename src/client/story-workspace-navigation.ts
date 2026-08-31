@@ -3,7 +3,7 @@
 /** Browser request to open one exact play space. */
 export interface StoryWorkspaceOpenRequest {
   readonly workspaceId: string
-  readonly surface: 'play' | 'studio'
+  readonly surface: 'world' | 'studio'
 }
 
 /** Shared navigation source used by independent Agent RP surfaces. */

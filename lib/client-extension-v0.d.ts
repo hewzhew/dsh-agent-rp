@@ -41,6 +41,8 @@ declare const AGENT_RP_CLIENT_EXTENSION_API_VERSION: 0;
 declare const AGENT_RP_WORKBENCH_SECTION_SLOT: "agent-rp.workbench.section";
 /** Module-id-keyed browser view rendered inside an installed executable world. */
 declare const AGENT_RP_PLAY_WORLD_VIEW_SLOT: "agent-rp.play-world.view";
+/** Module-id-keyed compact viewport hosted beside the native DSH conversation. */
+declare const AGENT_RP_WORLD_SURFACE_VIEW_SLOT: "agent-rp.world-surface.view";
 /** Client Cordis service used by independent plugins to install ST extension bundles. */
 declare const AGENT_RP_ST_EXTENSION_SERVICE: "agentRpStExtensions";
 /** One installed ST extension contributed by a trusted DSH client plugin. */
@@ -106,10 +108,18 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'root';
       owner: AgentRpPlayWorldViewOwnerProps;
     };
+    /** Trusted client plugins can render a compact viewport inside the native Session world surface. */
+    'agent-rp.world-surface.view': {
+      kind: 'keyed';
+      scope: 'root';
+      owner: AgentRpPlayWorldViewOwnerProps;
+    };
   }
 }
 /** Props received by a registered Agent RP workbench section component. */
 type AgentRpWorkbenchSectionProps = PropsRuntime<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>;
 /** Props received by a client view registered under its Host world module id. */
 type AgentRpPlayWorldViewProps = PropsRuntime<typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>;
-export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_PLAY_WORLD_VIEW_SLOT, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpPlayWorldViewCharacter, AgentRpPlayWorldViewOwnerProps, AgentRpPlayWorldViewProps, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps };
+/** Props received by a compact native Session viewport registered under its Host world module id. */
+type AgentRpWorldSurfaceViewProps = PropsRuntime<typeof AGENT_RP_WORLD_SURFACE_VIEW_SLOT>;
+export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_PLAY_WORLD_VIEW_SLOT, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AGENT_RP_WORLD_SURFACE_VIEW_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpPlayWorldViewCharacter, AgentRpPlayWorldViewOwnerProps, AgentRpPlayWorldViewProps, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps, AgentRpWorldSurfaceViewProps };

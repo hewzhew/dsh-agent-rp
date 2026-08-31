@@ -61,6 +61,8 @@ export interface AgentRpProjection {
   readonly turnMode: 'conversation' | 'agent'
   /** Latest story-workspace turn, updated while its logged stages run. */
   readonly storyTurn?: AgentRpStoryTurnProgress
+  /** Story workspace currently selected for this Session, including an idle freshly launched play space. */
+  readonly storyWorkspaceId?: string
   /** Character name used by the prompt and card macros. */
   readonly characterName: string
   /** Lossless card title when the card supplies a shorter runtime nickname. */

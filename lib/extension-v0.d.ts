@@ -1330,6 +1330,30 @@ interface PlayWorldCastBinding {
   readonly slotId: string;
   readonly characterId: string;
 }
+/** One short fact displayed in the native Session world surface. */
+interface PlayWorldSurfaceFact {
+  readonly label: string;
+  readonly value: string;
+}
+/** One optional prompt that only fills the native DSH composer. */
+interface PlayWorldComposerSuggestion {
+  readonly id: string;
+  readonly label: string;
+  readonly draft: string;
+}
+/** Module-owned browser projection hosted beside the native DSH conversation. */
+interface PlayWorldSurfaceProjection {
+  readonly title: string;
+  readonly status: string;
+  readonly summary: string;
+  readonly facts: readonly PlayWorldSurfaceFact[];
+  /** Stable renderer kind plus browser-safe module data; the Host owns placement and collapse behavior. */
+  readonly viewport?: {
+    readonly kind: string;
+    readonly data: JsonValue;
+  };
+  readonly composerSuggestions: readonly PlayWorldComposerSuggestion[];
+}
 /** Character-specific model input produced without revealing private world state. */
 interface PlayWorldPromptProjection {
   readonly title: string;
@@ -1476,6 +1500,8 @@ interface PlayWorldModule {
   dispatch(snapshot: PlayWorldSnapshot, action: unknown, context: PlayWorldContext): PlayWorldSnapshot;
   /** Return only the legal choices for the character currently controlling the world. */
   characterTurn(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldCharacterTurn | undefined;
+  /** Project compact status, an optional viewport, and native-composer suggestions for the Session UI. */
+  projectSurface(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldSurfaceProjection;
   /** Project only knowledge available to one character Worker. */
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Project authoritative state for the director Worker. */

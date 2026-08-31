@@ -31,6 +31,28 @@ test('projects the selected turn mode through the required Session event capabil
   assert.equal(view.turnMode, 'agent')
 })
 
+test('keeps the selected story workspace visible while the Session is idle', () => {
+  const definition = createAgentRpProjectionDefinition()
+  let state = definition.init(Session.create(SessionId('projection-story-workspace')).header)
+  state = definition.apply(state, {
+    type: 'agent-rp/story-workspace-selection',
+    seq: 0,
+    time: 1,
+    ignorable: true,
+    data: { format: 0, workspaceId: 'workspace-1', source: 'launch' },
+  })
+  assert.equal(definition.wire.view(state).storyWorkspaceId, 'workspace-1')
+
+  state = definition.apply(state, {
+    type: 'agent-rp/story-workspace-selection',
+    seq: 2,
+    time: 2,
+    ignorable: true,
+    data: { format: 0, sourceEventSeq: 1 },
+  })
+  assert.equal(definition.wire.view(state).storyWorkspaceId, undefined)
+})
+
 test('projects live story stages and resets progress at the next turn', () => {
   const session = Session.create(SessionId('projection-story-progress'))
   const definition = createAgentRpProjectionDefinition()

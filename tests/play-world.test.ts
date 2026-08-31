@@ -146,6 +146,16 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
         }],
       }
     },
+    projectSurface(snapshot, context) {
+      const state = this.normalize(snapshot, context).state as { readonly step: number }
+      return {
+        title: name,
+        status: `计数 ${String(state.step)}`,
+        summary: '测试世界场地摘要。',
+        facts: [],
+        composerSuggestions: [],
+      }
+    },
     projectForCharacter(snapshot, _characterId, context) {
       const state = this.normalize(snapshot, context).state as { readonly step: number }
       return { title: name, text: `计数为 ${String(state.step)}。` }
@@ -679,6 +689,13 @@ test('serves and dispatches third-party world turns without action payloads', as
     instruction: '请选择第 1 次推进。',
     actions: [{ id: 'advance:0', label: '推进', description: '让 Host 将计数增加一。' }],
   })
+  assert.deepEqual((read.body as { readonly worldSurface?: unknown }).worldSurface, {
+    title: '计数世界',
+    status: '计数 0',
+    summary: '测试世界场地摘要。',
+    facts: [],
+    composerSuggestions: [],
+  })
   const rejected = await invokeStoryWorkspaceRoute(route, 'POST', `${path}/world/actions`, {
     format: 0,
     revision: installed.revision,
@@ -694,6 +711,7 @@ test('serves and dispatches third-party world turns without action payloads', as
   assert.equal(advanced.status, 200)
   assert.equal(((advanced.body as { readonly workspace: StoryWorkspaceSnapshot }).workspace.world?.state as { readonly step: number }).step, 1)
   assert.equal((advanced.body as { readonly worldTurn: { readonly cycleId: string } }).worldTurn.cycleId, 'counter:1')
+  assert.equal((advanced.body as { readonly worldSurface: { readonly status: string } }).worldSurface.status, '计数 1')
 })
 
 test('advances a host-owned flying-chess world only through typed actions', (context) => {

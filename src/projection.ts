@@ -91,6 +91,7 @@ const projectionSchema = {
       || typeof record.characterName !== 'string'
       || (record.turnMode !== 'conversation' && record.turnMode !== 'agent')
       || (record.storyTurn !== undefined && !validStoryTurnProgress(record.storyTurn))
+      || (record.storyWorkspaceId !== undefined && typeof record.storyWorkspaceId !== 'string')
       || (record.originalCharacterName !== undefined && typeof record.originalCharacterName !== 'string')
       || typeof record.description !== 'string'
       || typeof record.personality !== 'string'
@@ -295,9 +296,10 @@ type ImportCall = 'character-card' | 'world-info' | 'preset'
 interface AgentRpProjectionState {
   readonly character: Omit<AgentRpProjection, 'worldInfoCount' | 'worldInfo' | 'presetLibrary' | 'lastRequest'
   | 'generations' | 'auxiliaryGenerations' | 'presentation' | 'nativeStates' | 'turnMode' | 'hostCapabilities'
-  | 'regexPacks' | 'storyTurn'>
+  | 'regexPacks' | 'storyTurn' | 'storyWorkspaceId'>
   readonly turnMode: RoleplayTurnMode
   readonly storyTurn?: AgentRpProjection['storyTurn']
+  readonly storyWorkspaceId?: string
   readonly cardWorldInfoCount: number
   readonly cardLorebook?: SessionLorebookSource
   readonly standaloneWorldInfos: Readonly<Record<string, SessionLorebookSource>>
@@ -343,6 +345,7 @@ const projectionStateSchema = {
     if (typeof record.character !== 'object' || record.character === null || Array.isArray(record.character)
       || (record.turnMode !== 'conversation' && record.turnMode !== 'agent')
       || (record.storyTurn !== undefined && !validStoryTurnProgress(record.storyTurn))
+      || (record.storyWorkspaceId !== undefined && typeof record.storyWorkspaceId !== 'string')
       || typeof record.cardWorldInfoCount !== 'number' || !Number.isSafeInteger(record.cardWorldInfoCount)
       || record.cardWorldInfoCount < 0
       || typeof record.standaloneWorldInfos !== 'object' || record.standaloneWorldInfos === null
@@ -897,6 +900,11 @@ export function createAgentRpProjectionDefinition(
     }
     const storyTurn = applyStoryTurnProgress(withSurface.storyTurn, event)
     if (storyTurn !== withSurface.storyTurn) return { ...withSurface, storyTurn }
+    if (event.type === 'agent-rp/story-workspace-selection') {
+      if (event.data.workspaceId !== undefined) return { ...withSurface, storyWorkspaceId: event.data.workspaceId }
+      const { storyWorkspaceId: _storyWorkspaceId, ...withoutStoryWorkspace } = withSurface
+      return withoutStoryWorkspace
+    }
     if (event.type === 'agent-rp/turn-mode') {
       return { ...withSurface, turnMode: parseRoleplayTurnModeRecord(event.data).mode }
     }
@@ -1401,6 +1409,7 @@ export function createAgentRpProjectionDefinition(
       hostCapabilities: { sessionEvents: true },
       turnMode: state.turnMode,
       ...(state.storyTurn === undefined ? {} : { storyTurn: state.storyTurn }),
+      ...(state.storyWorkspaceId === undefined ? {} : { storyWorkspaceId: state.storyWorkspaceId }),
       nativeStates: state.nativeStates.map(stateValue => ({
         id: stateValue.id,
         revision: stateValue.revision,

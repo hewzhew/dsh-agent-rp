@@ -13,7 +13,7 @@ import type { StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
 import css from './story-workspace-session-card.css?raw'
 
 interface StoryWorkspaceSessionCardInjected {
-  readonly openStoryWorkspace: (workspaceId: string, surface: 'play' | 'studio') => void
+  readonly openStoryWorkspace: (workspaceId: string, surface: 'world' | 'studio') => void
 }
 
 type StoryWorkspaceSessionCardProps = PropsRuntime<
@@ -66,7 +66,7 @@ function StoryWorkspaceSessionCard({ node, openStoryWorkspace }: StoryWorkspaceS
     </div>
     <div className="agent-rp-story-launch-actions">
       <button type="button" className="agent-rp-story-launch-action"
-        onClick={() => { openStoryWorkspace(workspaceId, 'play') }}>继续游玩 <span aria-hidden="true">→</span></button>
+        onClick={() => { openStoryWorkspace(workspaceId, 'world') }}>展开场地 <span aria-hidden="true">→</span></button>
       <button type="button" className="agent-rp-story-launch-secondary"
         onClick={() => { openStoryWorkspace(workspaceId, 'studio') }}>编辑场地</button>
     </div>
