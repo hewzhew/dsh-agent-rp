@@ -37,7 +37,7 @@ export interface AgentRpStoryTurnProgress {
   readonly workspaceId: string
   readonly turn: number
   readonly step: number
-  readonly status: 'running' | 'prepared' | 'complete'
+  readonly status: 'running' | 'prepared' | 'complete' | 'aborted' | 'failed'
   readonly requests: readonly {
     readonly requestId: string
     readonly stage: AgentRpStoryTurnStage

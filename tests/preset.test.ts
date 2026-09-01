@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRegistry from '@deepseek-ai/dsh-tools'
 import { isAgentRpCapabilityComposition } from '../src/agent-capability-preset.ts'
 import { resolveConfig } from '../src/config.ts'
 import { installAgentRp } from '../src/index.ts'
@@ -132,6 +135,52 @@ test('mounts public Agent RP commands', async (context) => {
   context.after(async () => {
     await preset.dispose()
     await root.fiber.dispose()
+  })
+})
+
+test('preserves a scoped worker persona during Agent RP prompt assembly', async (context) => {
+  const root = new Context()
+  await root.plugin(LlmRuntime)
+  await root.plugin(SystemPrompt, { persona: '部署默认人物' })
+  await root.plugin(ToolRegistry)
+  await root.plugin(AgentRegistry)
+  root.provide('commands' as never, { register: () => () => {} } as never)
+  root.provide('attachments' as never, {} as never)
+  root.provide('credentials' as never, {} as never)
+  const presetKey = {}
+  const preset = createScope(root, presetKey)
+  const characterLibraryRoot = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-worker-persona-'))
+  let agentParentCtx: Context | undefined
+  await preset.ctx.plugin({
+    inject: ['llm', 'systemPrompt', 'tools'],
+    apply(pluginCtx: Context) {
+      installAgentRp(pluginCtx, resolveConfig({ mode: 'character' }), { characterLibraryRoot })
+      agentParentCtx = pluginCtx
+    },
+  })
+  assert.ok(agentParentCtx)
+
+  const session = Session.create(SessionId('scoped-worker-persona'))
+  const agent = { id: session.id, session } as Agent
+  const agentScope = createScope(agentParentCtx, agent, { parent: presetKey })
+  Object.assign(agent, { ctx: agentScope.ctx })
+  const unregister = root.agents.register(agent)
+  agentScope.ctx.systemPrompt.section({
+    name: 'deployment:persona',
+    order: agentScope.ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA'),
+    text: '只执行指定人物的结构化判断。',
+  })
+
+  const assembly = await root.systemPrompt.assemble({ scope: agent })
+  assert.equal(assembly.sections.find(section => section.name === 'deployment:persona')?.text,
+    '只执行指定人物的结构化判断。')
+
+  context.after(async () => {
+    unregister()
+    await agentScope.dispose()
+    await preset.dispose()
+    await root.fiber.dispose()
+    rmSync(characterLibraryRoot, { recursive: true, force: true })
   })
 })
 

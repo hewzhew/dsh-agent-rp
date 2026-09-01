@@ -8,9 +8,11 @@ import {
 import {
   AGENT_RP_CLIENT_EXTENSION_API_VERSION,
   AGENT_RP_PLAY_WORLD_VIEW_SLOT,
+  AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
   AGENT_RP_WORKBENCH_SECTION_SLOT,
   type AgentRpPlayWorldViewProps,
   type AgentRpWorkbenchSectionProps,
+  type AgentRpWorldSurfaceViewProps,
 } from '../src/client-extension-v0.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -23,6 +25,8 @@ type TestWorkbenchProps = PropsRuntime<'test.agent-rp-workbench'>
   & PropsRenderSlots<typeof AGENT_RP_WORKBENCH_SECTION_SLOT>
 type TestWorldViewHostProps = PropsRuntime<'test.agent-rp-workbench'>
   & PropsRenderSlots<typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>
+type TestWorldSurfaceHostProps = PropsRuntime<'test.agent-rp-workbench'>
+  & PropsRenderSlots<typeof AGENT_RP_WORLD_SURFACE_VIEW_SLOT>
 
 test('lets an independent client plugin join and leave the Agent RP workbench lifecycle', () => {
   assert.equal(AGENT_RP_CLIENT_EXTENSION_API_VERSION, 0)
@@ -129,5 +133,49 @@ test('routes browser-safe world state and legal actions to a module-id-keyed vie
   disposeWorkbench()
   assert.equal(slots.spec(AGENT_RP_PLAY_WORLD_VIEW_SLOT), undefined)
   assert.deepEqual(slots.entriesOfSlot(AGENT_RP_PLAY_WORLD_VIEW_SLOT), [])
+  disposeExternal()
+})
+
+test('keeps the compact Session world surface read-only', () => {
+  const slots = new SlotCore()
+  slots.register({
+    name: 'root',
+    children: { 'test.agent-rp-workbench': { kind: 'single', scope: 'root' } },
+  } as never, (() => null) as never)
+  const owner = {
+    world: {
+      format: 0 as const,
+      instanceId: 'fixture-instance',
+      moduleId: 'fixture.worldbook',
+      moduleVersion: 1,
+      title: 'Fixture world',
+      state: { publicCounter: 2 },
+      events: [],
+    },
+    characters: [{ id: 'character-a', name: '灵梦' }],
+    turn: null,
+  }
+  const disposeHost = slots.register({
+    name: 'test.agent-rp-workbench',
+    children: { [AGENT_RP_WORLD_SURFACE_VIEW_SLOT]: { kind: 'keyed', scope: 'root' } },
+  }, ({ renderSlot }: TestWorldSurfaceHostProps) => renderSlot(
+    AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
+    owner,
+    { entryKey: owner.world.moduleId },
+  ))
+  const ExternalWorldSurface = (props: AgentRpWorldSurfaceViewProps) => {
+    assert.equal(props.world.moduleId, 'fixture.worldbook')
+    assert.equal('dispatchAction' in props, false)
+    return null
+  }
+  const disposeExternal = slots.register({
+    name: AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
+    key: 'fixture.worldbook',
+  }, ExternalWorldSurface)
+
+  ExternalWorldSurface(owner as AgentRpWorldSurfaceViewProps)
+  assert.deepEqual(slots.spec(AGENT_RP_WORLD_SURFACE_VIEW_SLOT), { kind: 'keyed', scope: 'root' })
+
+  disposeHost()
   disposeExternal()
 })

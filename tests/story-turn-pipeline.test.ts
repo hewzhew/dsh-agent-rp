@@ -7,7 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { StoryCharacter, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
+import { STORY_AUTO_ADVANCE_INPUT, type StoryCharacter, type StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { appendAgentRpSessionEvent } from '../src/session-event-append.ts'
 import {
   compileStoryCharacterContext,
@@ -19,6 +19,7 @@ import {
 import {
   expandStoryTurnOutputs,
   materializeStoryTurn,
+  recoverStoppedStoryTurns,
   runStoryTurnPipeline,
   storyWebFetchAvailable,
   storyWebSearchAvailable,
@@ -41,6 +42,36 @@ const bobCharacterSectionId = `${characterSectionId}:${bobId}`
 const historySectionId = 'output-00000000-0000-4000-8000-000000000003'
 const sourceId = 'source-00000000-0000-4000-8000-000000000001'
 const originalSourceId = 'source-00000000-0000-4000-8000-000000000002'
+
+test('recovers a story turn closed only by its parent Agent boundary', async () => {
+  const session = Session.create(SessionId('story-turn-stop-recovery'))
+  session.append('turn/start', { turn: 4 })
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-start', {
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: 'workspace-1',
+    workspaceRevision: 7,
+    turn: 4,
+    step: 1,
+  })
+  session.append('turn/end', { turn: 4, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+  let flushes = 0
+  const ctx = { sessions: { flush: async () => { flushes += 1; return true } } } as unknown as Context
+  const agent = { id: session.id, session } as Agent
+
+  assert.deepEqual(await recoverStoppedStoryTurns({ ctx, agent }), [{
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: 'workspace-1',
+    workspaceRevision: 7,
+    turn: 4,
+    step: 1,
+    outcome: 'aborted',
+  }])
+  assert.equal(flushes, 1)
+  assert.deepEqual(await recoverStoppedStoryTurns({ ctx, agent }), [])
+  assert.equal(flushes, 1)
+})
 
 test('reports optional Host web research services without making a network request', () => {
   assert.equal(storyWebSearchAvailable({
@@ -429,7 +460,7 @@ test('omits character outputs when their isolated character decision is unavaila
     workspace: inputWorkspace,
     turn: 1,
     step: 1,
-    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }] })],
     signal: new AbortController().signal,
   })
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
@@ -463,6 +494,176 @@ test('omits character outputs when their isolated character decision is unavaila
   assert.deepEqual(result.finalSections, [])
   assert.equal(result.finalDraft, '')
   assert.doesNotMatch(result.modelContext, /下一幕会停电|第三幕打开/u)
+})
+
+test('delegates isolated character decisions to durable DSH Subagent sessions', async () => {
+  const session = Session.create(SessionId('story-character-subagents'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const inputWorkspace: StoryWorkspaceSnapshot = {
+    ...base,
+    pipeline: { ...base.pipeline, researchMaxPasses: 1 },
+    outputs: [],
+    sources: [],
+  }
+  const requests: Array<{
+    readonly label?: string
+    readonly prompt: readonly { readonly type: string; readonly text?: string }[]
+    readonly persona?: string
+    readonly toolFilter?: { readonly allow?: readonly string[] }
+    readonly outputSchema?: unknown
+  }> = []
+  const disposed: string[] = []
+  const subagents = {
+    getProvider(name: string) {
+      return name === 'spawn' ? { name: 'spawn' } : undefined
+    },
+    async start(_name: string, request: typeof requests[number]) {
+      requests.push(request)
+      const childId = `story-child-${String(requests.length)}`
+      return {
+        id: SessionId(childId),
+        result: Promise.resolve({
+          output: [],
+          structured: { observation: '', action: '', speech: null, insights: [] },
+          stopReason: 'completed' as const,
+        }),
+        async dispose() { disposed.push(childId) },
+      }
+    },
+  }
+  let directCharacterCalls = 0
+  const fake = {
+    get(name: string) {
+      return name === 'subagents' ? subagents : undefined
+    },
+    logger: { warn() {} },
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        if (system.includes('指定人物认知')) directCharacterCalls += 1
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : system.includes('剧情研究 Worker')
+            ? JSON.stringify({ findings: [], followUps: [] })
+            : system.includes('剧情导演 Worker')
+              ? JSON.stringify({ sections: [] })
+              : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    workspace: inputWorkspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '看看徽章。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(directCharacterCalls, 0)
+  assert.deepEqual(requests.map(request => request.label), ['人物推演 · 阿梨', '人物推演 · 柏舟'])
+  assert.deepEqual(requests.map(request => request.toolFilter), [{ allow: [] }, { allow: [] }])
+  assert.equal(requests.every(request => request.outputSchema !== undefined), true)
+  assert.equal(requests.every(request => request.persona?.includes('指定人物认知') === true), true)
+  const prompts = requests.map(request => request.prompt.map(block => block.text ?? '').join('\n'))
+  assert.equal(prompts.every(prompt => prompt.includes('<worker_instructions>')
+    && prompt.includes('structured_output 工具')), true)
+  assert.match(prompts[0]!, /阿梨知道徽章/u)
+  assert.doesNotMatch(prompts[0]!, /柏舟藏起了车票|只有柏舟看见站牌背面反光/u)
+  assert.match(prompts[1]!, /柏舟藏起了车票/u)
+  assert.doesNotMatch(prompts[1]!, /阿梨知道徽章/u)
+  assert.deepEqual(disposed, ['story-child-1', 'story-child-2'])
+  const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+  assert.equal(characterRequests.length, 2)
+  assert.equal(characterRequests.every(request => request.execution?.kind === 'subagent'
+    && request.execution.provider === 'spawn'), true)
+  const characterResults = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.stage === 'character' ? [event.data] : [])
+  assert.deepEqual(characterResults.map(result => result.childSessionId), ['story-child-1', 'story-child-2'])
+  assert.equal(characterResults.every(result => result.result.kind === 'success'), true)
+})
+
+test('records prose-only character Subagent replies as invalid instead of silently accepting them', async () => {
+  const session = Session.create(SessionId('story-character-subagent-prose'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const starts: string[] = []
+  const disposed: string[] = []
+  const subagents = {
+    getProvider(name: string) {
+      return name === 'spawn' ? { name: 'spawn' } : undefined
+    },
+    async start(_name: string) {
+      const childId = `prose-child-${String(starts.length + 1)}`
+      starts.push(childId)
+      return {
+        id: SessionId(childId),
+        result: Promise.resolve({
+          output: [{ type: 'text' as const, text: '（叹气）又没能起飞。' }],
+          stopReason: 'error' as const,
+        }),
+        async dispose() { disposed.push(childId) },
+      }
+    },
+  }
+  const fake = {
+    get(name: string) {
+      return name === 'subagents' ? subagents : undefined
+    },
+    logger: { warn() {} },
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    workspace: { ...base, pipeline: { ...base.pipeline, researchMaxPasses: 1 }, outputs: [], sources: [] },
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(starts.length, 4)
+  assert.deepEqual(disposed, starts)
+  const characterResults = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.stage === 'character' ? [event.data.result] : [])
+  assert.equal(characterResults.length, 4)
+  assert.equal(characterResults.every(stageResult => stageResult.kind === 'failure'
+    && stageResult.detail?.code === 'STORY_WORKER_INVALID_OUTPUT'), true)
+  assert.equal(result.finalSections.length, 0)
+  assert.equal(result.finalDraft, '')
 })
 
 test('runs logged story stages while keeping each character request privately scoped', async () => {
@@ -640,6 +841,9 @@ test('runs logged story stages while keeping each character request privately sc
                   {
                     characterId: aliceId,
                   },
+                  {
+                    characterId: bobId,
+                  },
                 ],
               },
               { sectionId: historySectionId, beats: ['记录已经发生的公开事实。'] },
@@ -708,7 +912,7 @@ test('runs logged story stages while keeping each character request privately sc
             ? JSON.stringify({ insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }] })
             : body.includes('kind=\\"history\\"')
               ? '<omit-section />'
-              : '尚显重复的粗稿。尚显重复的粗稿。\n\n「先看“徽章”，别忙着猜。」\n\n柏舟说：“谁都能说的胜利台词。”'
+              : '尚显重复的粗稿。尚显重复的粗稿。\n\n阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」\n\n柏舟说：“谁都能说的胜利台词。”'
         } else {
           editorBody = body
           editorSystem = system
@@ -716,7 +920,7 @@ test('runs logged story stages while keeping each character request privately sc
             sections: [
               {
                 sectionId,
-                text: '雨停后，阿梨看向徽章，柏舟移开视线。\n\n柏舟说：“编辑器新增的台词。”',
+                text: '雨停后，阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」\n\n柏舟说：“编辑器新增的台词。”',
               },
               { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
             ],
@@ -750,10 +954,29 @@ test('runs logged story stages while keeping each character request privately sc
     source: { kind: 'plugin', plugin: 'dsh-agent-rp-runtime' },
     content: [{ type: 'text', text: 'Current runtime context: 这不是玩家要求。' }],
   })
+  const currentWorkspace = workspace()
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: currentWorkspace.id,
+    workspaceRevision: currentWorkspace.revision,
+    turn: 0,
+    step: 1,
+    resultEventSeqs: [],
+    directorBrief: '',
+    finalSections: [],
+    finalDraft: '',
+    modelContext: '',
+    publicDialogues: [{
+      characterId: bobId,
+      dialogue: '“旧话到这里已经说完了。”',
+      move: 'tease',
+    }],
+  })
   const input = {
     ctx: fake,
     agent,
-    workspace: workspace(),
+    workspace: currentWorkspace,
     turn: 1,
     step: 1,
     messages: [message, runtimeContext],
@@ -761,24 +984,25 @@ test('runs logged story stages while keeping each character request privately sc
   }
 
   const result = await runStoryTurnPipeline(input)
-  const briefEvent = session.events.find(event => event.type === 'agent-rp/story-turn-brief')
+  const briefEvent = session.events.findLast(event => event.type === 'agent-rp/story-turn-brief')
 
   assert.equal(calls, 16)
   assert.equal(voiceReviewCalls, 3)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 3)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 8)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 0)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 11)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
     .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.reasoningEffort === 'off'), true)
+    .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.maxTokens === 2_048), true)
-  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 13)
+    .every(request => request.dispatch.maxTokens === 8_192), true)
+  assert.equal(maxTokenBudgets.filter(budget => budget === 8_192).length, 11)
+  assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 5)
   assert.equal(characterBodies.length, 2)
   assert.equal(historyBodies.length, 2)
   assert.match(webQuery, /官方设定与原著章节/u)
@@ -820,8 +1044,12 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(characterBodies[0]!, /<voice_evidence>|local:source-|#seed-/u)
   assert.match(characterSystems[0]!, /不得自行掷骰、移动棋子、切换回合/u)
   assert.match(characterSystems[0]!, /不要写完整正文或逐字对白/u)
-  assert.match(characterSystems[0]!, /不能仅因反应不会形成长期知识.*一律判为沉默/u)
-  assert.match(characterSystems[0]!, /玩家明确要求把权威结果写成角色场面/u)
+  assert.match(characterSystems[0]!, /只有这次结果真正回答、推翻或改变了一句尚未收束的公开发言/u)
+  assert.match(characterSystems[0]!, /已有相邻公开对白.*respondsTo.*最后一个仍有效的前提/u)
+  assert.match(characterSystems[0]!, /玩家输入为空.*不构成要求人物表演/u)
+  assert.match(characterSystems[0]!, /closed 的打趣、回答和陈述已经完成/u)
+  assert.match(characterBodies[0]!, /<recent_public_exchange>[\s\S]*status=closed/u)
+  assert.match(characterBodies[0]!, /柏舟[\s\S]*move=tease[\s\S]*旧话到这里已经说完了/u)
   assert.match(characterSystems[0]!, /respondsTo.*move.*focus.*effect/u)
   assert.match(characterSystems[0]!, /focus 不是完整论点/u)
   assert.match(characterSystems[0]!, /一个对象、区别、态度或直接答案/u)
@@ -852,6 +1080,9 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(sectionSystems[1]!, /时间线、前情或档案/u)
   assert.match(sectionSystems[1]!, /非空内容，不能返回 <omit-section \/>/u)
   assert.match(sectionBodies[0]!, /获准对白：阿梨｜「先看“徽章”，别忙着猜。」/u)
+  assert.doesNotMatch(sectionBodies[0]!, /记录已经发生的公开事实/u)
+  assert.doesNotMatch(sectionBodies[1]!, /阿梨先观察徽章|获准对白：阿梨/u)
+  assert.doesNotMatch(sectionBodies.join('\n'), /<world_state>/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /<voice_evidence>|先把眼前的事说清楚/u)
   assert.match(voiceBody, new RegExp(`speech:${sectionId}:1`, 'u'))
   assert.ok(voiceBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
@@ -913,20 +1144,17 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceReviewBody, /句法与接话机制/u)
   assert.match(voiceReviewBody, /刻意留给听者补全/u)
   assert.doesNotMatch(voiceReviewBody, /## 对话示例|先把眼前的事说清楚/u)
-  assert.match(voiceReviewSystem, /匿名替换检验/u)
-  assert.match(voiceReviewSystem, /熟人交谈中的下一轮立刻说出口/u)
-  assert.match(voiceReviewSystem, /解释性分句.*说明过度/u)
-  assert.match(voiceReviewSystem, /leftImplicit.*没有被换句话塞回 dialogue/u)
-  assert.match(voiceReviewSystem, /复杂的 mechanics 或更多 seed 不构成质量加分/u)
-  assert.match(voiceReviewSystem, /\[目标人物\].*此人物自己的原句/u)
-  assert.match(voiceReviewSystem, /\[对话上下文\].*不能拿来模仿/u)
-  assert.match(voiceReviewSystem, /素材归属检验/u)
-  assert.match(voiceReviewSystem, /任意竞争者、朋友或对手/u)
-  assert.match(voiceReviewSystem, /仅复述公开世界事实/u)
-  assert.match(voiceReviewSystem, /绝不参与创作/u)
-  assert.match(voiceReviewSystem, /只能逐字返回 draft_candidates/u)
-  assert.match(voiceReviewSystem, /多个候选合格时优先选择留白真实/u)
-  assert.match(voiceReviewSystem, /审校不拥有也不返回说话动作/u)
+  assert.match(voiceReviewSystem, /匿名替换/u)
+  assert.match(voiceReviewSystem, /默认拒绝/u)
+  assert.match(voiceReviewSystem, /先检查话轮/u)
+  assert.match(voiceReviewSystem, /删掉任一解释性分句.*必须拒绝/u)
+  assert.match(voiceReviewSystem, /seed 证明的是接话时机、省略和分句关系/u)
+  assert.match(voiceReviewSystem, /不是可替换名词复用的句型模板/u)
+  assert.match(voiceReviewSystem, /醒目措辞或完整修辞骨架/u)
+  assert.match(voiceReviewSystem, /匿名替换/u)
+  assert.match(voiceReviewSystem, /任意朋友、对手或竞争者/u)
+  assert.match(voiceReviewSystem, /沉默优于为热闹批准套话/u)
+  assert.match(voiceReviewSystem, /只能从同一人物的候选中逐字选一句/u)
   assert.match(voiceRetrySystem, /唯一一次退回重写/u)
   assert.match(voiceRetrySystem, /自然话轮/u)
   assert.match(voiceRetrySystem, /leftImplicit/u)
@@ -946,19 +1174,21 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
   assert.doesNotMatch(editorBody, /<voice_evidence>/u)
-  assert.match(editorSystem, /不得新增、恢复、拆分、重写或删除任何获准对白/u)
+  assert.match(editorSystem, /每个获准引号内容必须逐字保留一次/u)
+  assert.match(editorSystem, /允许编辑它周围的说话人标识和叙述衔接/u)
   assert.match(editorSystem, /人物私有认知和内部历史不会交给你/u)
   assert.match(directorBody, /## 结论所引用的原始证据/u)
   assert.match(directorBody, /终章原著/u)
-  assert.match(directorSystem, /Host 会把导演遗漏的有效决定补回默认正文分区/u)
+  assert.match(directorSystem, /Host 会尊重省略/u)
+  assert.match(directorSystem, /不得把两份独立决定排成伪造的一问一答/u)
   assert.deepEqual(briefEvent?.data.researchCitations, [{
     sourceId: originalSourceId,
     locator: '终章设定 · 第 1 段',
     quote: '鸦青印记只在列车终章显现。',
     note: '本回合研究 Worker 引用',
   }])
-  assert.match(result.finalDraft, /阿梨看向徽章/u)
-  assert.match(result.finalDraft, /「先看“徽章”，别忙着猜。」/u)
+  assert.match(result.finalDraft, /阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」/u)
+  assert.doesNotMatch(result.finalDraft, /^「先看“徽章”，别忙着猜。」$/mu)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
   assert.deepEqual(result.finalSections.map(section => ({
     sectionId: section.sectionId,
@@ -973,12 +1203,17 @@ test('runs logged story stages while keeping each character request privately sc
     insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
   }])
   assert.doesNotMatch(result.finalDraft, /自己的旧站记忆/u)
-  assert.match(result.modelContext, /阿梨看向徽章/u)
+  assert.match(result.modelContext, /阿梨把徽章转向窗光/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
+  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-turn-start'
+    ? [{ workspaceId: event.data.workspaceId, turn: event.data.turn, step: event.data.step }]
+    : []), [{ workspaceId: currentWorkspace.id, turn: 1, step: 1 }])
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 16)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 16)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-brief').length, 1)
+  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-turn-brief'
+    ? [event.data.turn]
+    : []), [0, 1])
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
   assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-fetch-request').length, 1)
@@ -986,6 +1221,18 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+  const stageRequestEvents = new Map(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [[event.seq, event.data] as const]
+    : []))
+  assert.equal(session.events.flatMap(event => event.type === 'agent-rp/story-stage-result' ? [event.data] : [])
+    .every(stageResult => {
+      const request = stageRequestEvents.get(stageResult.requestSeq)
+      return request !== undefined && stageResult.sessionId === request.sessionId
+        && stageResult.workspaceId === request.workspaceId
+        && stageResult.workspaceRevision === request.workspaceRevision
+        && stageResult.turn === request.turn && stageResult.step === request.step
+        && stageResult.stage === request.stage && stageResult.subjectId === request.subjectId
+    }), true)
   assert.deepEqual(stageRequests.filter(request => request.stage === 'history').map(request => request.subjectId), [aliceId, bobId])
   assert.equal(stageRequests.some(request => request.stage === 'section'
     && request.subjectId?.startsWith(`${characterSectionId}:`)), false)
@@ -996,6 +1243,7 @@ test('runs logged story stages while keeping each character request privately sc
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
   assert.equal(calls, 16)
+  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-start').length, 1)
 })
 
 test('stops malformed research output and falls back to exact local evidence', async () => {
@@ -1335,6 +1583,12 @@ test('materializes continuity from the actually visible reply instead of the pre
   assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('继续当前棋局'))?.knownBy, [marisaId])
   assert.deepEqual(result?.changes.facts.find(fact => fact.text.includes('都看见雨停'))?.knownBy, [reimuId, marisaId])
   assert.equal(result?.format, 3)
+  assert.equal(result?.publicTrace?.stages.length, 1)
+  assert.equal(result?.publicTrace?.stages[0]?.stage, 'continuity')
+  assert.equal(result?.publicTrace?.stages[0]?.status, 'succeeded')
+  assert.ok((result?.publicTrace?.stages[0]?.durationMs ?? -1) >= 0)
+  assert.deepEqual(result?.publicTrace?.worldEvents, [])
+  assert.doesNotMatch(JSON.stringify(result?.publicTrace), /requestBody|private|流水线准备稿/u)
   assert.deepEqual(result?.researchCitations, [{
     sourceId: localSourceId,
     locator: '徽章篇 · 第 4 段',

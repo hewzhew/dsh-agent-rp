@@ -10,7 +10,7 @@ import {
 import { LEGACY_AGENT_RP_EVENT_TYPES } from '../src/session-repair.ts'
 
 test('keeps the complete Agent RP vocabulary on the replay-safe writer', () => {
-  assert.equal(AGENT_RP_SESSION_EVENT_TYPES.length, 37)
+  assert.equal(AGENT_RP_SESSION_EVENT_TYPES.length, 39)
   assert.deepEqual([...LEGACY_AGENT_RP_EVENT_TYPES], [...AGENT_RP_SESSION_EVENT_TYPES])
 })
 

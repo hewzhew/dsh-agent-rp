@@ -53,10 +53,26 @@ test('keeps the selected story workspace visible while the Session is idle', () 
   assert.equal(definition.wire.view(state).storyWorkspaceId, undefined)
 })
 
-test('projects live story stages and resets progress at the next turn', () => {
+test('projects a story turn from its durable start through materialization', () => {
   const session = Session.create(SessionId('projection-story-progress'))
   const definition = createAgentRpProjectionDefinition()
   let state = definition.init(session.header)
+  const turnStart = appendAgentRpSessionEvent(session, 'agent-rp/story-turn-start', {
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: 'workspace-1',
+    workspaceRevision: 2,
+    turn: 4,
+    step: 1,
+  })
+  state = definition.apply(state, turnStart)
+  assert.deepEqual(definition.wire.view(state).storyTurn, {
+    workspaceId: 'workspace-1',
+    turn: 4,
+    step: 1,
+    status: 'running',
+    requests: [],
+  })
   const historyRequest = appendAgentRpSessionEvent(session, 'agent-rp/story-stage-request', {
     format: 0,
     requestId: 'history-1',
@@ -88,6 +104,13 @@ test('projects live story stages and resets progress at the next turn', () => {
     format: 0,
     requestId: 'history-1',
     requestSeq: historyRequest.seq,
+    sessionId: String(session.id),
+    workspaceId: 'workspace-1',
+    workspaceRevision: 2,
+    turn: 4,
+    step: 1,
+    stage: 'history',
+    subjectId: 'reimu',
     result: {
       kind: 'failure',
       failure: 'provider',
@@ -156,4 +179,30 @@ test('projects live story stages and resets progress at the next turn', () => {
       status: 'running',
     },
   ])
+  const stopped = appendAgentRpSessionEvent(session, 'agent-rp/story-turn-stopped', {
+    format: 0,
+    sessionId: String(session.id),
+    workspaceId: 'workspace-1',
+    workspaceRevision: 3,
+    turn: 5,
+    step: 1,
+    outcome: 'aborted',
+  })
+  state = definition.apply(state, stopped)
+  assert.deepEqual(definition.wire.view(state).storyTurn, {
+    workspaceId: 'workspace-1',
+    turn: 5,
+    step: 1,
+    status: 'aborted',
+    requests: [{
+      requestId: 'character-2',
+      stage: 'character',
+      subjectId: 'marisa',
+      startedAt: characterRequest.time,
+      finishedAt: stopped.time,
+      durationMs: stopped.time - characterRequest.time,
+      status: 'failed',
+      failure: 'aborted',
+    }],
+  })
 })

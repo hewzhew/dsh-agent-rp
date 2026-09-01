@@ -3,6 +3,12 @@
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type {
+  SubagentResult,
+  SubagentRun,
+  SubagentRuntime,
+  SubagentStartRequest,
+} from '@deepseek-ai/dsh-subagent'
 import {
   BlockAssembler,
   createUserMessage,
@@ -10,12 +16,14 @@ import {
   errorChain,
   isHarnessError,
   LlmError,
+  type ContentBlock,
   type GenerateOptions,
   type LlmFailure,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { jsonrepair } from 'jsonrepair'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
+import type { PlayWorldCharacterTurn } from './play-world.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
@@ -24,6 +32,7 @@ import {
   compileStoryDirectorWorldContext,
   storyDirectorMap,
   storyFactKnownBy,
+  storyFactIsDialogueTranscript,
   storyOpenForeshadowing,
   storyParticipantCharacters,
   storyPublicHistory,
@@ -42,6 +51,7 @@ import type {
   StoryTurnMaterialization,
   StoryWorkspaceSnapshot,
 } from './story-workspace-protocol.ts'
+import { STORY_AUTO_ADVANCE_INPUT } from './story-workspace-protocol.ts'
 import { searchStoryWorkspaceSourceExcerpts, type StorySourceExcerpt } from './story-research.ts'
 import {
   normalizeStoryVoiceSpeakerName,
@@ -70,6 +80,27 @@ export { storyWebFetchAvailable, storyWebSearchAvailable } from './story-web.ts'
 /** Ordered model responsibilities before the visible character request. */
 export type StoryTurnStage = 'world-action' | 'cast' | 'history' | 'research' | 'character' | 'director' | 'section' | 'voice' | 'editor' | 'continuity'
 
+/** Durable identity of one accepted story turn before its first Worker starts. */
+export interface StoryTurnStartRecord {
+  readonly format: 0
+  readonly sessionId: string
+  readonly workspaceId: string
+  readonly workspaceRevision: number
+  readonly turn: number
+  readonly step: number
+}
+
+/** Durable terminal state for a story turn that did not produce a brief. */
+export interface StoryTurnStoppedRecord {
+  readonly format: 0
+  readonly sessionId: string
+  readonly workspaceId: string
+  readonly workspaceRevision: number
+  readonly turn: number
+  readonly step: number
+  readonly outcome: 'aborted' | 'failed'
+}
+
 /** Exact auxiliary request dispatched by the story pipeline. */
 export interface StoryTurnStageRequestRecord {
   readonly format: 0
@@ -82,6 +113,8 @@ export interface StoryTurnStageRequestRecord {
   readonly stage: StoryTurnStage
   readonly subjectId?: string
   readonly dispatch: RoleplayActModelDispatch
+  /** Official child-Agent backend used for this request, when delegated. */
+  readonly execution?: { readonly kind: 'subagent'; readonly provider: string }
 }
 
 /** Terminal output or stable failure for one story-pipeline request. */
@@ -89,6 +122,15 @@ export interface StoryTurnStageResultRecord {
   readonly format: 0
   readonly requestId: string
   readonly requestSeq: number
+  readonly sessionId: string
+  readonly workspaceId: string
+  readonly workspaceRevision: number
+  readonly turn: number
+  readonly step: number
+  readonly stage: StoryTurnStage
+  readonly subjectId?: string
+  /** Durable child Session containing the delegated Agent's complete private run. */
+  readonly childSessionId?: string
   readonly result:
     | { readonly kind: 'success'; readonly text: string }
     | {
@@ -127,8 +169,33 @@ export interface StoryTurnCharacterPrivateState {
 export interface StoryTurnPublicDialogue {
   readonly characterId: string
   readonly dialogue: string
+  /** Public speech act retained so the next turn can distinguish an open prompt from a completed remark. */
+  readonly move?: StoryVoiceMove
   /** Local source windows containing the target-character seeds used for this utterance. */
   readonly voiceCitations?: readonly StoryCitationDraft[]
+}
+
+/** Privacy-safe receipt for one Worker used by the visible turn. */
+export interface StoryTurnPublicStageTrace {
+  readonly stage: StoryTurnStage
+  readonly subjectId?: string
+  readonly status: 'succeeded' | 'failed'
+  readonly durationMs: number
+  readonly failure?: string
+}
+
+/** Public executable-world event shown beside the resulting prose. */
+export interface StoryTurnPublicWorldEvent {
+  readonly type: string
+  readonly title: string
+  readonly summary: string
+  readonly actorId?: string
+}
+
+/** Public execution receipt retained without Worker prompts, outputs, or private character state. */
+export interface StoryTurnPublicTrace {
+  readonly stages: readonly StoryTurnPublicStageTrace[]
+  readonly worldEvents: readonly StoryTurnPublicWorldEvent[]
 }
 
 /** Final draft and provenance used for the authoritative visible reply. */
@@ -142,6 +209,8 @@ export interface StoryTurnBriefRecord {
   readonly resultEventSeqs: readonly number[]
   /** Exact executable-world events produced before this draft, when present. */
   readonly worldEventSequences?: readonly number[]
+  /** Public rule evidence projected separately from the visible prose. */
+  readonly publicWorldEvents?: readonly StoryTurnPublicWorldEvent[]
   readonly directorBrief: string
   /** Exact local excerpts exposed to the director through the research stage. */
   readonly researchCitations?: readonly StoryCitationDraft[]
@@ -157,6 +226,8 @@ export interface StoryTurnBriefRecord {
   readonly hostOnlyWorldDraft?: true
   /** The final draft contains only Host-authored world prose, approved dialogue, and history. */
   readonly hostOwnedWorldDraft?: true
+  /** World events, approved dialogue, and private records fully determine materialization without another model call. */
+  readonly deterministicWorldMaterialization?: true
 }
 
 /** Exact story-state update committed after presentation, including an intentional omission. */
@@ -173,6 +244,8 @@ export interface StoryTurnMaterializedRecord {
   readonly changes: StoryChangeSet
   readonly researchCitations?: readonly StoryCitationDraft[]
   readonly voiceCitations?: readonly StoryCitationDraft[]
+  /** Public receipt rendered after the visible reply. */
+  readonly publicTrace?: StoryTurnPublicTrace
 }
 
 /** Logged network-search request generated from an enabled Web source. */
@@ -239,6 +312,10 @@ export interface StoryWebFetchResultRecord {
 
 declare module '@deepseek-ai/dsh-session' {
   interface SessionEventMap {
+    /** Ignorable durable identity of one accepted story turn. */
+    'agent-rp/story-turn-start': StoryTurnStartRecord
+    /** Ignorable terminal state for an aborted or failed story turn. */
+    'agent-rp/story-turn-stopped': StoryTurnStoppedRecord
     /** Ignorable exact request sent to one story-pipeline Worker. */
     'agent-rp/story-stage-request': StoryTurnStageRequestRecord
     /** Ignorable terminal result from one story-pipeline Worker. */
@@ -333,6 +410,19 @@ interface StoryCharacterDecisionRecord {
   readonly text: string
 }
 
+interface StoryRecentPublicExchangeLine {
+  readonly characterId: string
+  readonly characterName: string
+  readonly dialogue: string
+  readonly move?: StoryVoiceMove
+}
+
+interface StoryRecentPublicExchange {
+  readonly turn: number
+  readonly status: 'open' | 'closed'
+  readonly lines: readonly StoryRecentPublicExchangeLine[]
+}
+
 interface StoryDirectorSpeechAssignment {
   readonly reference: string
   readonly characterId: string
@@ -364,6 +454,49 @@ interface StoryDirectorDecision {
 }
 
 type StoryVoiceMove = 'answer' | 'assert' | 'challenge' | 'correct' | 'command' | 'question' | 'warn' | 'tease' | 'refuse' | 'inform' | 'propose'
+
+const STORY_VOICE_MOVES = [
+  'answer', 'assert', 'challenge', 'correct', 'command', 'question', 'warn', 'tease', 'refuse', 'inform', 'propose',
+] as const satisfies readonly StoryVoiceMove[]
+
+const STORY_CHARACTER_DECISION_SCHEMA: NonNullable<SubagentStartRequest['outputSchema']> = {
+  type: 'object',
+  properties: {
+    observation: { type: 'string' },
+    action: { type: 'string' },
+    speech: {
+      oneOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          properties: {
+            respondsTo: { type: 'string' },
+            move: { type: 'string', enum: [...STORY_VOICE_MOVES] },
+            focus: { type: 'string' },
+            effect: { type: 'string' },
+          },
+          required: ['respondsTo', 'move', 'focus', 'effect'],
+          additionalProperties: false,
+        },
+      ],
+    },
+    insights: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['knowledge', 'intention', 'decision', 'world-action'] },
+          text: { type: 'string' },
+          futureChoice: { type: 'string' },
+        },
+        required: ['kind', 'text', 'futureChoice'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['observation', 'action', 'speech', 'insights'],
+  additionalProperties: false,
+}
 
 /** One private character record accepted before public prose editing. */
 export interface StoryTurnPrivateInsight {
@@ -460,9 +593,30 @@ export interface RunStoryTurnPipelineInput {
 }
 
 function messageText(messages: readonly UserMessage[]): string {
-  return messages.filter(message => message.source.kind === 'user')
+  const text = messages.filter(message => message.source.kind === 'user')
     .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
     .join('\n').trim()
+  return text === STORY_AUTO_ADVANCE_INPUT ? '' : text
+}
+
+function isAutomaticStoryAdvance(messages: readonly UserMessage[]): boolean {
+  return messages.filter(message => message.source.kind === 'user')
+    .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
+    .join('\n').trim() === STORY_AUTO_ADVANCE_INPUT
+}
+
+const WORLD_ADVANCE_PAUSE_PATTERN = /(?:棋局|世界|规则)(?:的)?(?:状态)?(?:保持|维持)?不变|(?:不要|别|禁止|暂不|先不|先别|暂停|停止)(?:再|立刻|现在|马上|自动|新的|任何|本轮|这轮|\s){0,5}(?:推进|继续|执行|运行|掷骰|投骰|移动|世界动作|规则动作|棋局)|(?:无需|不必)(?:再|立刻|现在|自动|新的|本轮|这轮|\s){0,5}(?:推进|执行|掷骰|投骰|移动|世界动作|规则动作)/u
+const WORLD_ADVANCE_REQUEST_PATTERN = /(?:继续|推进|开始|进入|完成|进行|玩)(?:这|本|下|下一)?(?:一)?(?:回合|轮|局|棋局)|(?:继续|推进)(?:棋局|世界)|(?:棋局|世界)[^。！？；\r\n]{0,4}(?:继续|推进)|(?:掷|投)(?:骰|色子)|(?:移动|推进)(?:棋|飞机|棋子)|(?:让|由)[^。！？；\r\n]{0,12}(?:行动|走棋)/u
+const DIALOGUE_BEAT_PATTERN = /(?:说|回答|答道|追问|发问|开口|回应|对话|交谈|吐槽|解释|反驳|承认|拒绝|提议|提醒|警告|命令|告诉)/u
+
+function playerPausesWorldAdvance(playerInput: string): boolean {
+  return WORLD_ADVANCE_PAUSE_PATTERN.test(playerInput)
+}
+
+function playerDirectionAdvancesWorld(playerInput: string): boolean {
+  if (playerPausesWorldAdvance(playerInput)) return false
+  if (WORLD_ADVANCE_REQUEST_PATTERN.test(playerInput)) return true
+  return !DIALOGUE_BEAT_PATTERN.test(playerInput)
 }
 
 function visibleReplyText(events: readonly SessionEvent[], turn: number): string {
@@ -471,6 +625,58 @@ function visibleReplyText(events: readonly SessionEvent[], turn: number): string
     && candidate.data.message.content.some(block => block.type === 'text' && block.text.trim() !== ''))
   if (event?.type !== 'assistant/message') return ''
   return event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim()
+}
+
+const REPLY_SEEKING_VOICE_MOVES = new Set<StoryVoiceMove>(['command', 'question', 'propose'])
+
+function recentPublicExchange(
+  events: readonly SessionEvent[],
+  turn: number,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): StoryRecentPublicExchange | undefined {
+  const previous = events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
+    event.type === 'agent-rp/story-turn-brief' && event.data.format === 1 && event.data.turn < turn)
+  const dialogues = previous?.data.publicDialogues ?? []
+  if (previous === undefined || dialogues.length === 0) return undefined
+  const characterNameById = new Map(characters.map(character => [character.id, character.name]))
+  const lines = dialogues.flatMap(dialogue => {
+    const characterName = characterNameById.get(dialogue.characterId)
+    return characterName === undefined ? [] : [{
+      characterId: dialogue.characterId,
+      characterName,
+      dialogue: dialogue.dialogue,
+      ...(dialogue.move === undefined ? {} : { move: dialogue.move }),
+    }]
+  })
+  if (lines.length === 0) return undefined
+  const last = lines.at(-1)!
+  const status = previous.data.turn === turn - 1
+    && last.move !== undefined && REPLY_SEEKING_VOICE_MOVES.has(last.move)
+    ? 'open'
+    : 'closed'
+  return { turn: previous.data.turn, status, lines }
+}
+
+function renderRecentPublicExchange(exchange: StoryRecentPublicExchange | undefined): string {
+  if (exchange === undefined) return '（无）'
+  return [
+    `sessionTurn=${String(exchange.turn)}\tstatus=${exchange.status}`,
+    ...exchange.lines.map(line => [
+      line.characterId,
+      line.characterName,
+      `move=${line.move ?? 'unknown'}`,
+      line.dialogue,
+    ].join('\t')),
+  ].join('\n')
+}
+
+function recentPublicProse(workspace: StoryWorkspaceSnapshot): string {
+  const passages = [...workspace.events].reverse()
+    .flatMap(event => event.evidence.trim() === '' ? [] : [event.evidence.trim()])
+    .slice(0, 3)
+    .reverse()
+  const text = passages.join('\n\n')
+  return text.length <= 16_000 ? text : text.slice(-16_000)
 }
 
 function visibleReplySections(
@@ -523,18 +729,17 @@ function legacyPrivateCharacterStates(
     : [])
 }
 
-function approvedPublicDialogueFacts(
+function approvedPublicDialogueHistory(
   dialogues: readonly StoryTurnPublicDialogue[],
   participants: readonly StoryWorkspaceSnapshot['characters'][number][],
   visibleReply: string,
-): readonly StoryFactChange[] {
-  const knownBy = participants.map(character => character.id)
+): readonly string[] {
   const characterNameById = new Map(participants.map(character => [character.id, character.name]))
   return dialogues.flatMap(dialogue => {
     const characterName = characterNameById.get(dialogue.characterId)
-    return characterName === undefined || !visibleReply.includes(dialogue.dialogue) || knownBy.length === 0
+    return characterName === undefined || !visibleReply.includes(dialogue.dialogue)
       ? []
-      : [{ text: `${characterName}说：${dialogue.dialogue}`, knownBy }]
+      : [`- ${characterName}说：${dialogue.dialogue}`]
   })
 }
 
@@ -919,8 +1124,9 @@ function renderVoiceEvidenceItem(
 
 function groundDirectorSpeechPlans(
   decision: StoryDirectorAssignment,
-  sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  _sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
   characterDecisions: readonly StoryCharacterDecisionRecord[],
+  maximumSpeeches = Number.POSITIVE_INFINITY,
 ): StoryDirectorDecision {
   const decisionsByCharacter = new Map(characterDecisions.map(record => [record.characterId, record.decision]))
   const groundedSpeech = (characterId: string): Omit<StoryDirectorSpeechPlan, 'reference'> | undefined => {
@@ -935,7 +1141,7 @@ function groundDirectorSpeechPlans(
   const scheduled = new Set<string>()
   const groundedSections = decision.sections.map(section => {
     const speech = section.speech.flatMap(plan => {
-      if (scheduled.has(plan.characterId)) return []
+      if (scheduled.size >= maximumSpeeches || scheduled.has(plan.characterId)) return []
       const grounded = groundedSpeech(plan.characterId)
       if (grounded === undefined) return []
       scheduled.add(plan.characterId)
@@ -943,18 +1149,6 @@ function groundDirectorSpeechPlans(
     })
     return { ...section, speech }
   })
-  const defaultProseSectionId = sections.find(section => section.kind === 'prose')?.id
-  if (defaultProseSectionId !== undefined) {
-    const omitted = characterDecisions.flatMap(record => {
-      if (scheduled.has(record.characterId)) return []
-      const grounded = groundedSpeech(record.characterId)
-      if (grounded === undefined) return []
-      scheduled.add(record.characterId)
-      return [grounded]
-    })
-    const prose = groundedSections.find(section => section.sectionId === defaultProseSectionId)
-    if (prose !== undefined) prose.speech = [...prose.speech, ...omitted]
-  }
   return {
     sections: groundedSections.map(section => ({
       ...section,
@@ -1196,9 +1390,7 @@ function normalizeDialogueCandidate(raw: string): string | undefined {
   const pair = DIALOGUE_QUOTE_PAIRS.find(([opening, closing]) => !raw.includes(opening) && !raw.includes(closing))
   return pair === undefined ? undefined : `${pair[0]}${raw}${pair[1]}`
 }
-const VOICE_MOVES = new Set<StoryVoiceMove>([
-  'answer', 'assert', 'challenge', 'correct', 'command', 'question', 'warn', 'tease', 'refuse', 'inform', 'propose',
-])
+const VOICE_MOVES = new Set<StoryVoiceMove>(STORY_VOICE_MOVES)
 const VOICE_DRAFT_SYSTEM = [
   '你是 character_context 中这个人物自己的对白 Worker，只能使用该人物获准拥有的认知、当前可见世界状态和已经公开的 prior_approved_dialogue。不得读取或推断导演故事图、其他人物档案和私有知识。',
   'speech_plan 是此人物先前作出的结构化说话决定。“回应前提”是它要接住的已公开事实或判断，“对话动作”是它对对方做的事，“发言焦点”只是这一轮要新增的一个对象、区别或答案，不是一段待改写的完整论证。这三项是后台决策，不是对白要逐项覆盖的提纲。候选只说完成当前对话动作不可缺少的那一点；对方刚说过的前提、双方都能补出的因果和说完主句后才成立的解释留在台词外。',
@@ -1208,11 +1400,17 @@ const VOICE_DRAFT_SYSTEM = [
   'leftImplicit 写明候选刻意没有说出口、但听者能从刚才的提问和共享情境补全的一项内容。它是后台审校字段，不能作为后半句重新解释进 dialogue。若没有任何内容能安全留白，说明这个说话决定尚未压缩成自然的一轮对白，应返回空字符串。',
   '为同一个 required_reference 提供至多三个真正不同的候选；候选必须采用不同的接话结构或不同的留白位置，不能只是近义改写、增删语气词或把同一条完整逻辑链换序。对白是一轮当下反应，不负责向读者证明人物的全部推理。若只能把“回应前提”“发言焦点”或可见事实完整改写成问答、纠正或胜负说明，只返回一项空字符串。',
   '每个候选的 move 必须逐字复制 speech_plan 已决定的对话动作：answer 回答、assert 断言、challenge 质疑、correct 纠正、command 命令、question 提问、warn 提醒、tease 打趣、refuse 拒绝、inform 告知、propose 提议。声音阶段不能把既定动作改成另一种。',
-  '熟人对白默认省略姓名和背景说明。角色差异必须来自推理方式、句子结构和接话关系；禁止搬用只在 [对话上下文] 或原作事件中出现、而当前场景没有的具体名词、比喻和意象，也禁止现代网络说法和可替换姓名复用的套路。不要凭空制造物件、动物、身体意象或临时类比，也不要把“自信”“争胜”“调侃”等抽象标签扩写成炫耀、威胁或热血套话。',
+  '熟人对白默认省略姓名和背景说明。角色差异必须来自推理方式、句子结构和接话关系；禁止搬用只在 [对话上下文] 或原作事件中出现、而当前场景没有的具体名词、比喻和意象，也禁止现代网络说法和可替换姓名复用的套路。不要凭空制造物件、动物、身体意象或临时类比，也不要把“自信”“争胜”“调侃”等抽象标签扩写成炫耀、威胁或热血套话。原作证据不是句型模板：不得把“早有预感”“这不是什么……明明是……”“干的好事”等醒目措辞或完整修辞骨架替换名词后搬到当前场景。',
   '不应开口、前提不成立、已公开的上一句与说话决定不兼容，或证据不足时返回空字符串。不得照抄、拼接、近似复述或只替换名词改写原句。',
   '每一项 reference 都必须逐字复制 required_reference；每个 dialogue 必须是由一对中文引号包围的单行完整对白，或空字符串。空字符串使用空 seedLineIds、空 mechanics 和空 leftImplicit。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"speech_plan 中既定动作","seedLineIds":["主要目标人物 seed ID","可选旁证 seed ID"],"mechanics":"主要 seed 支持的接话机制","leftImplicit":"听者可自行补全而未说出口的内容","dialogue":"“候选一”"}]}，最多三项。不要使用 Markdown 围栏。',
 ].join('\n')
-const VOICE_REVIEW_SYSTEM = '你是一个人物自己的对白审校 Worker，只负责从同一人物的至多三个候选中选出一句，或全部拒绝，绝不参与创作。character_context 是此人物获准拥有的全部认知；不得借助导演信息或其他人物私有知识。逐项对照真实语气证据、结构化说话决定、此前已获准公开的相邻对白和此人物可见世界状态。第一项标准是这句能否作为熟人交谈中的下一轮立刻说出口，而不是它能否完整解释后台决策。对方刚说过的内容不必复述，双方能补出的因果不必证明；删除候选的任一解释性分句后若仍能完成同一个对话动作，原候选就说明过度，必须拒绝。<voice_exchange> 保留原始相邻顺序：同一 seed ID 的原文与参考译文属于一个发言单元；[目标人物] seed 才是此人物自己的原句，[对话上下文] seed 只说明别人说了什么以及目标人物怎样接话，不能拿来模仿；<voice_notes> 是资料分析。核对候选的主要 seed、旁证 seed、mechanics 与 leftImplicit：主要 seed 必须实际支持当前采用的接话或省略机制，旁证只能支持同一机制；复杂的 mechanics 或更多 seed 不构成质量加分。leftImplicit 必须确实没有被换句话塞回 dialogue，并且听者能依据前一轮自行补全。只列编号、只共享话题、事后为候选编造复杂解释或只像其中一条原句都必须拒绝。再做意图复述与匿名替换检验：如果候选只是把“回应前提”或“发言焦点”完整换成口语，或者遮去人物名、专有名词和场景名词后仍可由任意竞争者、朋友或对手原样说出，它就是泛化对白。仅复述公开世界事实，或只表示顺利、倒霉、领先、落后、加油、别得意而没有完成说话决定中的具体交流作用，也应排除；由当前连续事件触发、能以本人证据支持的打趣、认输、拒绝或提议不能仅因它不产生长期事实而拒绝。再做素材归属检验：不得把只出现在 [对话上下文] 或原作事件中的具体名词、比喻和意象搬进新场景；用证据中不存在的绰号、物件联想、动物、身体意象或临时类比制造俏皮感也必须排除。可批准的句子应像原作相邻交换一样，把大部分推理留在话轮之间，只用人物证据支持的一次反问、纠正、转折或省略完成当前动作。若 prior_approved_dialogue 非空，候选必须直接回应其中已经表达的内容；若为空，则必须能自然回应已发生的可见行动。dialogue 只能逐字返回 draft_candidates 中同一 reference 下的一句候选，或返回空字符串；不得增删、替换、润色、合并或重写任何字。多个候选合格时优先选择留白真实、接话最快且声音证据直接的一句，不优先选择解释最完整或 mechanics 最复杂的一句。审校不拥有也不返回说话动作。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","dialogue":"逐字选中的候选或空字符串"}]}。不要解释审校过程，不要使用 Markdown 围栏。'
+const VOICE_REVIEW_SYSTEM = [
+  '你是 character_context 中这个人物自己的严格对白审校 Worker。你只能从同一人物的候选中逐字选一句，或全部拒绝；默认拒绝，绝不参与创作。不得读取导演信息或其他人物私有知识。',
+  '先检查话轮：候选必须能紧接 prior_approved_dialogue 的最后一句；没有本轮前句时，必须回应 speech_plan 指向的已发生事实。它不能把回应前提、点数、规则结果和发言焦点重新讲一遍。删掉任一解释性分句仍能完成动作，说明原句过度，必须拒绝。',
+  '再检查声音证据。只有 [目标人物] seed 能支持这个人物；[对话上下文] 只说明别人说了什么。seed 证明的是接话时机、省略和分句关系，不是可替换名词复用的句型模板。候选若搬用原句的醒目措辞或完整修辞骨架，例如把“早有预感”“这不是什么……明明是……”“干的好事”换成棋局名词，必须拒绝。mechanics 与 leftImplicit 只是可核对声明，写得复杂不构成加分。',
+  '最后做匿名替换：遮去人名和场景名词后，任意朋友、对手或竞争者都能原样说出的打趣、倒霉感叹、胜负话和鼓劲都是泛化对白。若 speech_plan 本身没有人物特有且值得说出的交流动作，应返回空字符串；沉默优于为热闹批准套话。',
+  '可批准的句子只用一次有证据的反问、纠正、转折或省略完成当下交流，并把大部分因果留在话轮之间。dialogue 只能逐字返回 draft_candidates 中同一 reference 下的一句，或返回空字符串；不得增删、润色、合并。只返回 JSON：{"lines":[{"reference":"required_reference 中的编号","dialogue":"逐字选中的候选或空字符串"}]}。不要解释，不要使用 Markdown 围栏。',
+].join('\n')
 
 function normalizedComparableText(text: string): string {
   return text.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '')
@@ -1222,7 +1420,7 @@ function textBigrams(text: string): ReadonlySet<string> {
   return new Set(Array.from({ length: Math.max(0, text.length - 1) }, (_value, index) => text.slice(index, index + 2)))
 }
 
-function sharesLongVoiceSpan(left: string, right: string, minimumLength = 7): boolean {
+function sharesLongVoiceSpan(left: string, right: string, minimumLength = 5): boolean {
   if (left.length < minimumLength || right.length < minimumLength) return false
   const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left]
   for (let index = 0; index <= shorter.length - minimumLength; index += 1) {
@@ -1259,6 +1457,74 @@ function suppressForbiddenWorldOutcomeSpeech(
     || !playerForbidsWorldRecap(playerInput)
     || !substantiallyRestatesText(decision.speech.focus, worldOutcome)) return decision
   return { ...decision, speech: undefined }
+}
+
+function suppressClosedExchangeReprise(
+  decision: StoryCharacterDecision,
+  playerInput: string,
+  exchange: StoryRecentPublicExchange | undefined,
+): StoryCharacterDecision {
+  if (playerInput !== '' || exchange?.status !== 'closed' || decision.speech === undefined
+    || (decision.speech.move !== 'answer' && decision.speech.move !== 'tease')) return decision
+  const reopensPreviousLine = exchange.lines.some(line => substantiallyRestatesText(
+    decision.speech!.respondsTo,
+    `${line.characterName}${line.dialogue}`,
+    5,
+  ))
+  return reopensPreviousLine ? { ...decision, speech: undefined } : decision
+}
+
+function constrainAutomaticWorldDecision(
+  decision: StoryCharacterDecision,
+  automaticAdvance: boolean,
+  worldOutcome: string,
+  exchange: StoryRecentPublicExchange | undefined,
+): StoryCharacterDecision {
+  if (!automaticAdvance || worldOutcome === '') return decision
+  const lastExchangeLine = exchange?.lines.at(-1)
+  const speech = decision.speech
+  const respondsToCurrentOutcome = speech !== undefined
+    && substantiallyRestatesText(speech.respondsTo, worldOutcome, 5)
+  const answersOpenExchange = speech !== undefined
+    && exchange?.status === 'open'
+    && lastExchangeLine !== undefined
+    && substantiallyRestatesText(
+      speech.respondsTo,
+      `${lastExchangeLine.characterName}${lastExchangeLine.dialogue}`,
+      5,
+    )
+  return {
+    ...decision,
+    action: '',
+    ...(speech === undefined || respondsToCurrentOutcome || answersOpenExchange
+      ? {}
+      : { speech: undefined }),
+  }
+}
+
+function limitAutomaticWorldSpeech(
+  records: readonly StoryCharacterDecisionRecord[],
+  automaticAdvance: boolean,
+  worldOutcome: string,
+  preferredCharacterId: string | undefined,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): readonly StoryCharacterDecisionRecord[] {
+  if (!automaticAdvance || worldOutcome === '') return records
+  const speakers = records.filter(record => record.decision.speech !== undefined)
+  if (speakers.length <= 1) return records
+  const selected = speakers.find(record => record.characterId === preferredCharacterId) ?? speakers[0]!
+  const characterNameById = new Map(characters.map(character => [character.id, character.name]))
+  return records.map(record => {
+    if (record.decision.speech === undefined || record.characterId === selected.characterId) return record
+    const characterName = characterNameById.get(record.characterId)
+    if (characterName === undefined) return record
+    const decision = { ...record.decision, speech: undefined }
+    return {
+      ...record,
+      decision,
+      text: renderCharacterDecision(record.characterId, characterName, decision),
+    }
+  })
 }
 
 function copiedFromVoiceEvidence(replacement: string, evidence: readonly StoryCharacterVoiceEvidence[]): boolean {
@@ -1407,21 +1673,23 @@ function retainReviewedDialogue(
 function applyApprovedDialoguePolicy(text: string, approved: ReadonlySet<string>): string {
   const used = new Set<string>()
   return text.split(/\r?\n/u).flatMap(line => {
-    const trimmed = line.trim()
-    if (!QUOTED_DIALOGUE_LINE_PATTERN.test(trimmed)) {
-      return QUOTED_DIALOGUE_SPAN_PATTERN.test(line) ? [] : [line]
+    const spans = [...line.matchAll(new RegExp(QUOTED_DIALOGUE_SPAN_PATTERN.source, 'gu'))]
+      .map(match => match[0])
+    if (spans.length === 0) return [line]
+    const lineSpans = new Set<string>()
+    if (spans.some(span => !approved.has(span) || used.has(span) || lineSpans.has(span))) return []
+    for (const span of spans) {
+      lineSpans.add(span)
+      used.add(span)
     }
-    if (!approved.has(trimmed) || used.has(trimmed)) return []
-    used.add(trimmed)
     return [line]
   }).join('\n').replace(/\n{3,}/gu, '\n\n').trim()
 }
 
 function approvedDialogueLines(text: string, approved: ReadonlySet<string>): readonly string[] {
-  return text.split(/\r?\n/u).flatMap(line => {
-    const trimmed = line.trim()
-    return approved.has(trimmed) ? [trimmed] : []
-  })
+  return text.split(/\r?\n/u).flatMap(line => [...line.matchAll(new RegExp(QUOTED_DIALOGUE_SPAN_PATTERN.source, 'gu'))]
+    .map(match => match[0])
+    .filter(dialogue => approved.has(dialogue)))
 }
 
 function appendMissingApprovedDialogue(text: string, approved: ReadonlySet<string>): string {
@@ -1850,6 +2118,32 @@ function parseEditedSections(
   })
 }
 
+function preserveEditedPublicMaterials(
+  edited: readonly StorySectionDraft[],
+  source: readonly StorySectionDraft[],
+  director: StoryDirectorDecision | undefined,
+  approvedDialogue: ReadonlySet<string>,
+): readonly StorySectionDraft[] {
+  if (director === undefined && approvedDialogue.size === 0) return edited
+  const editedById = new Map(edited.map(section => [section.sectionId, section]))
+  const planById = new Map(director?.sections.map(section => [section.sectionId, section]) ?? [])
+  return source.flatMap(section => {
+    const candidate = editedById.get(section.sectionId)
+    const protectedBeats = (planById.get(section.sectionId)?.beats ?? [])
+      .filter(beat => substantiallyRestatesText(section.text, beat, 5))
+    const protectedDialogue = approvedDialogueLines(section.text, approvedDialogue)
+    if (protectedBeats.length === 0 && protectedDialogue.length === 0) {
+      return candidate === undefined ? [] : [candidate]
+    }
+    if (candidate === undefined
+      || protectedBeats.some(beat => !substantiallyRestatesText(candidate.text, beat, 5))
+      || protectedDialogue.some(dialogue => !candidate.text.includes(dialogue))) {
+      return [section]
+    }
+    return [candidate]
+  })
+}
+
 function renderHostOnlyWorldSections(
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   worldNarrative: string,
@@ -1872,10 +2166,15 @@ function resolveHostWorldDirectorAssignment(
   worldOutcome: string,
   storyMap: string,
   foreshadowing: string,
+  allowSingleDialogue: boolean,
+  allowPrivateInsights: boolean,
 ): StoryDirectorAssignment | undefined {
-  if (worldNarrative === '' || worldOutcome === '' || storyMap.trim() !== '' || foreshadowing.trim() !== '') return undefined
-  if (characterDecisions.some(record => record.decision.action !== '' || record.decision.insights.length > 0)) return undefined
-  if (characterDecisions.filter(record => record.decision.speech !== undefined).length > 1) return undefined
+  if (worldNarrative === '' || worldOutcome === ''
+    || storyMap.trim() !== '' || foreshadowing.trim() !== '') return undefined
+  if (characterDecisions.some(record => record.decision.action !== ''
+    || (!allowPrivateInsights && record.decision.insights.length > 0))) return undefined
+  const speechCount = characterDecisions.filter(record => record.decision.speech !== undefined).length
+  if (speechCount > 1 || (speechCount === 1 && !allowSingleDialogue)) return undefined
   const prose = outputs.filter(output => output.enabled && output.kind === 'prose')
   if (prose.length !== 1) return undefined
   return {
@@ -1889,45 +2188,6 @@ function resolveHostWorldDirectorAssignment(
         : [],
     })),
   }
-}
-
-function renderHostWorldDialogueSections(
-  outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
-  director: StoryDirectorDecision | undefined,
-  characterDecisions: readonly StoryCharacterDecisionRecord[],
-  dialogueByReference: ReadonlyMap<string, string>,
-  worldNarrative: string,
-  worldOutcome: string,
-): readonly StorySectionDraft[] | undefined {
-  if (director === undefined || worldNarrative === '' || worldOutcome === '') return undefined
-  if (characterDecisions.some(record => record.decision.action !== '' || record.decision.insights.length > 0)) return undefined
-  const outputById = new Map(outputs.map(output => [output.id, output]))
-  if (director.sections.some(section => {
-    const output = outputById.get(section.sectionId)
-    if (output === undefined) return true
-    if (output.kind === 'prose') return section.beats.length > 0
-    return output.kind === 'character'
-      ? section.beats.length > 0 || section.speech.length > 0
-      : section.speech.length > 0
-  })) return undefined
-  const plannedReferences = new Set(director.sections.flatMap(section => section.speech.map(speech => speech.reference)))
-  if ([...dialogueByReference.keys()].some(reference => !plannedReferences.has(reference))) return undefined
-  if (![...dialogueByReference.values()].some(dialogue => dialogue !== '')) return undefined
-  const firstProse = outputs.find(output => output.enabled && output.kind === 'prose')
-  if (firstProse === undefined) return undefined
-  const planBySection = new Map(director.sections.map(section => [section.sectionId, section]))
-  return outputs.flatMap((output): readonly StorySectionDraft[] => {
-    if (!output.enabled || output.kind === 'character') return []
-    if (output.kind === 'history') {
-      return [{ sectionId: output.id, name: output.name, kind: output.kind, text: worldOutcome }]
-    }
-    const dialogue = planBySection.get(output.id)?.speech.flatMap(speech => {
-      const approved = dialogueByReference.get(speech.reference)
-      return approved === undefined || approved === '' ? [] : [approved]
-    }) ?? []
-    const text = output.id === firstProse.id ? dialogue.join('\n\n') : ''
-    return text === '' ? [] : [{ sectionId: output.id, name: output.name, kind: output.kind, text }]
-  })
 }
 
 function historySectionFallback(workspace: StoryWorkspaceSnapshot): string {
@@ -2316,7 +2576,9 @@ function generateOptions(
   const reasoningEffort = reasoning[reasoningMode]
   const stageMaxTokens = reasoningEffort !== undefined && String(reasoningEffort) === 'off'
     ? maxTokens
-    : Math.max(maxTokens, 16_384)
+    : reasoningMode === 'routine'
+      ? Math.max(maxTokens, 8_192)
+      : Math.max(maxTokens, 16_384)
   return {
     provider: base.provider,
     model: base.model,
@@ -2336,13 +2598,176 @@ const MAX_STORY_STAGE_TEXT_LENGTH = 256 * 1_024
 const MAX_STORY_STAGE_FAILURE_CODE_LENGTH = 128
 const MAX_STORY_STAGE_FAILURE_MESSAGE_LENGTH = 2_000
 
-type StoryStageExecutionPhase = 'flush' | 'stream' | 'assemble'
+type StoryStageExecutionPhase = 'flush' | 'stream' | 'assemble' | 'subagent-start' | 'subagent-run' | 'subagent-dispose'
 
 class StoryStageOutputError extends Error {
-  constructor(readonly code: 'STORY_WORKER_EMPTY_OUTPUT' | 'STORY_WORKER_OUTPUT_TOO_LARGE', message: string) {
+  constructor(
+    readonly code: 'STORY_WORKER_EMPTY_OUTPUT' | 'STORY_WORKER_INVALID_OUTPUT' | 'STORY_WORKER_OUTPUT_TOO_LARGE',
+    message: string,
+  ) {
     super(message)
     this.name = 'StoryStageOutputError'
   }
+}
+
+class StorySubagentStageError extends Error {
+  constructor(
+    readonly code: 'STORY_SUBAGENT_START_FAILED' | 'STORY_SUBAGENT_RUN_FAILED' | 'STORY_SUBAGENT_DISPOSE_FAILED',
+    readonly failure: RoleplayActModelFailureKind,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'StorySubagentStageError'
+  }
+}
+
+interface StorySubagentStageOutput {
+  readonly childSessionId: string
+  readonly text: string
+}
+
+function availableStorySubagentRuntime(ctx: Context): SubagentRuntime | undefined {
+  const getter = (ctx as unknown as { readonly get?: (name: string) => unknown }).get
+  if (typeof getter !== 'function') return undefined
+  try {
+    const runtime = getter.call(ctx, 'subagents') as Partial<SubagentRuntime> | undefined
+    return runtime !== undefined
+      && typeof runtime.start === 'function'
+      && typeof runtime.getProvider === 'function'
+      && runtime.getProvider('spawn') !== undefined
+      ? runtime as SubagentRuntime
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function storyStageSubagentRuntime(
+  input: RunStoryTurnPipelineInput,
+  stage: StoryTurnStage,
+): SubagentRuntime | undefined {
+  return stage === 'character' ? availableStorySubagentRuntime(input.ctx) : undefined
+}
+
+function storyStageSubagentLabel(
+  input: RunStoryTurnPipelineInput,
+  stage: StoryTurnStage,
+  subjectId?: string,
+): string {
+  const character = subjectId === undefined
+    ? undefined
+    : input.workspace.characters.find(candidate => candidate.id === subjectId)
+  return character === undefined ? `故事 Worker · ${stage}` : `人物推演 · ${character.name}`
+}
+
+function subagentStageText(result: SubagentResult): string {
+  return result.output.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim()
+}
+
+function storySubagentPrompt(request: GenerateOptions): ContentBlock[] {
+  const instructions = request.system?.trim()
+  return [
+    ...(instructions === undefined || instructions === '' ? [] : [{
+      type: 'text' as const,
+      text: [
+        '<worker_instructions>',
+        instructions,
+        '</worker_instructions>',
+        '按上面的职责完成本次任务，并用 structured_output 工具提交最终对象；普通文字回复不算完成。',
+      ].join('\n'),
+    }]),
+    ...request.messages.flatMap(message => [...message.content]) as ContentBlock[],
+  ]
+}
+
+function subagentStageFailure(result: SubagentResult): StorySubagentStageError | undefined {
+  if (result.stopReason === 'completed') return undefined
+  const failure: RoleplayActModelFailureKind = result.stopReason === 'aborted' ? 'aborted' : 'provider'
+  return new StorySubagentStageError(
+    'STORY_SUBAGENT_RUN_FAILED',
+    failure,
+    `人物 Subagent 以 ${result.stopReason} 结束${result.diagnostic === undefined ? '' : `：${result.diagnostic}`}`,
+  )
+}
+
+async function runStorySubagentStage(
+  input: RunStoryTurnPipelineInput,
+  runtime: SubagentRuntime,
+  stage: StoryTurnStage,
+  request: GenerateOptions,
+  subjectId?: string,
+): Promise<StorySubagentStageOutput> {
+  let run: SubagentRun
+  try {
+    run = await runtime.start('spawn', {
+      label: storyStageSubagentLabel(input, stage, subjectId),
+      prompt: storySubagentPrompt(request),
+      parent: input.agent,
+      signal: input.signal,
+      agentOptions: {
+        provider: request.provider,
+        model: request.model,
+        ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
+        ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+      },
+      toolFilter: { allow: [] },
+      outputSchema: STORY_CHARACTER_DECISION_SCHEMA,
+      ...(request.system === undefined ? {} : { persona: request.system }),
+    })
+  } catch (error: unknown) {
+    throw new StorySubagentStageError(
+      'STORY_SUBAGENT_START_FAILED',
+      input.signal.aborted ? 'aborted' : 'unknown',
+      `人物 Subagent 无法启动：${errorChain(error)}`,
+    )
+  }
+
+  let primaryError: unknown
+  let output: StorySubagentStageOutput | undefined
+  try {
+    const result = await run.result
+    if (result.structured === undefined
+      && result.stopReason === 'error'
+      && subagentStageText(result) !== '') {
+      throw new StoryStageOutputError(
+        'STORY_WORKER_INVALID_OUTPUT',
+        '人物 Subagent 返回了普通文字，但没有通过 structured_output 提交人物决策',
+      )
+    }
+    const failure = subagentStageFailure(result)
+    if (failure !== undefined) throw failure
+    if (result.structured === undefined) {
+      throw new StoryStageOutputError(
+        'STORY_WORKER_INVALID_OUTPUT',
+        '人物 Subagent 已完成但没有提交结构化人物决策',
+      )
+    }
+    const text = JSON.stringify(result.structured)
+    if (text.length > MAX_STORY_STAGE_TEXT_LENGTH) {
+      throw new StoryStageOutputError('STORY_WORKER_OUTPUT_TOO_LARGE', '人物 Subagent 返回的结构化结果超过安全上限')
+    }
+    output = { childSessionId: String(run.id), text }
+  } catch (error: unknown) {
+    primaryError = error
+  }
+  try {
+    await run.dispose()
+  } catch (error: unknown) {
+    if (primaryError === undefined) {
+      primaryError = new StorySubagentStageError(
+        'STORY_SUBAGENT_DISPOSE_FAILED',
+        'unknown',
+        `人物 Subagent 无法释放：${errorChain(error)}`,
+      )
+    } else {
+      input.ctx.logger.warn(`agent-rp: story Subagent disposal also failed: ${errorChain(error)}`)
+    }
+  }
+  if (primaryError !== undefined) throw primaryError
+  if (output === undefined) {
+    throw new StorySubagentStageError('STORY_SUBAGENT_RUN_FAILED', 'unknown', '人物 Subagent 没有可用结果')
+  }
+  return output
 }
 
 function boundedStoryStageFailureText(value: string, max: number): string {
@@ -2368,6 +2793,8 @@ function storyStageThrownFailureDetail(
   if (reason instanceof LlmError) return storyStageProviderFailureDetail(reason.failure)
   const code = reason instanceof StoryStageOutputError
     ? reason.code
+    : reason instanceof StorySubagentStageError
+      ? reason.code
     : isHarnessError(reason)
       ? reason.code
       : phase === 'flush'
@@ -2387,10 +2814,15 @@ function storyStageThrownFailureKind(
   phase: StoryStageExecutionPhase,
   signal: AbortSignal,
 ): RoleplayActModelFailureKind {
+  if (reason instanceof StorySubagentStageError) return reason.failure
   const classified = roleplayActModelFailure(reason)
   if (signal.aborted || classified === 'aborted') return 'aborted'
   if (phase === 'stream' || reason instanceof LlmError) return 'provider'
   return classified
+}
+
+function validateStoryStageOutput(stage: StoryTurnStage, text: string): void {
+  if (stage === 'character') parseCharacterDecision(text)
 }
 
 async function runStageAttempt(
@@ -2401,9 +2833,8 @@ async function runStageAttempt(
   subjectId?: string,
 ): Promise<StageOutput> {
   const requestId = crypto.randomUUID()
-  const requestEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-request', {
-    format: 0,
-    requestId,
+  const subagentRuntime = storyStageSubagentRuntime(input, stage)
+  const identity = {
     sessionId: String(input.agent.session.id),
     workspaceId: input.workspace.id,
     workspaceRevision: input.workspace.revision,
@@ -2411,11 +2842,34 @@ async function runStageAttempt(
     step: input.step,
     stage,
     ...(subjectId === undefined ? {} : { subjectId }),
+  }
+  const requestEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-request', {
+    format: 0,
+    requestId,
+    ...identity,
     dispatch: roleplayActModelDispatch(request),
+    ...(subagentRuntime === undefined ? {} : {
+      execution: { kind: 'subagent' as const, provider: 'spawn' },
+    }),
   })
   let phase: StoryStageExecutionPhase = 'flush'
   try {
     await input.ctx.sessions.flush(input.agent.session)
+    if (subagentRuntime !== undefined) {
+      phase = 'subagent-run'
+      const delegated = await runStorySubagentStage(input, subagentRuntime, stage, request, subjectId)
+      validateStoryStageOutput(stage, delegated.text)
+      const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-result', {
+        format: 0,
+        requestId,
+        requestSeq: requestEvent.seq,
+        ...identity,
+        childSessionId: delegated.childSessionId,
+        result: { kind: 'success', text: delegated.text },
+      })
+      resultEventSeqs.push(resultEvent.seq)
+      return { text: delegated.text, resultEventSeq: resultEvent.seq }
+    }
     phase = 'stream'
     const assembler = new BlockAssembler()
     for await (const chunk of input.ctx.llm.stream(request)) assembler.push(chunk)
@@ -2425,6 +2879,7 @@ async function runStageAttempt(
         format: 0,
         requestId,
         requestSeq: requestEvent.seq,
+        ...identity,
         result: {
           kind: 'failure',
           failure: assembler.finish.kind === 'aborted' ? 'aborted' : 'provider',
@@ -2453,10 +2908,12 @@ async function runStageAttempt(
     if (text.length > MAX_STORY_STAGE_TEXT_LENGTH) {
       throw new StoryStageOutputError('STORY_WORKER_OUTPUT_TOO_LARGE', '故事 Worker 返回的文本超过安全上限')
     }
+    validateStoryStageOutput(stage, text)
     const resultEvent = appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-stage-result', {
       format: 0,
       requestId,
       requestSeq: requestEvent.seq,
+      ...identity,
       result: { kind: 'success', text },
     })
     resultEventSeqs.push(resultEvent.seq)
@@ -2470,6 +2927,7 @@ async function runStageAttempt(
       format: 0,
       requestId,
       requestSeq: requestEvent.seq,
+      ...identity,
       result: {
         kind: 'failure',
         failure,
@@ -2480,6 +2938,7 @@ async function runStageAttempt(
     return {
       resultEventSeq: resultEvent.seq,
       ...(failure !== 'aborted' && (detail.code === 'STORY_WORKER_EMPTY_OUTPUT'
+        || detail.code === 'STORY_WORKER_INVALID_OUTPUT'
         || detail.code === EMPTY_RESPONSE_CODE)
         ? { retryable: true }
         : {}),
@@ -2499,7 +2958,8 @@ async function runStage(
   return runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
 }
 
-const MAX_WORLD_ACTIONS_PER_STORY_TURN = 8
+const MAX_WORLD_ACTIONS_PER_STORY_TURN = 12
+const MAX_WORLD_CHARACTER_TURNS_PER_STORY_TURN = 4
 
 function worldActionRunKey(input: RunStoryTurnPipelineInput, worldInstanceId: string): string {
   return createHash('sha256').update([
@@ -2527,21 +2987,20 @@ function worldEventSequencesForRun(input: RunStoryTurnPipelineInput): readonly n
     .sort((left, right) => left - right)
 }
 
-function worldActionCharacterIdForRun(input: RunStoryTurnPipelineInput, sequences: readonly number[]): string | undefined {
-  if (input.workspace.world === undefined) return undefined
+function worldActionCharacterIdsForRun(input: RunStoryTurnPipelineInput, sequences: readonly number[]): readonly string[] {
+  if (input.workspace.world === undefined) return []
   const runKey = worldActionRunKey(input, input.workspace.world.instanceId)
-  const receiptCharacterIds = [...new Set((input.workspace.worldActionReceipts ?? [])
+  const receiptCharacterIds = (input.workspace.worldActionReceipts ?? [])
     .filter(receipt => receipt.runKey === runKey)
-    .map(receipt => receipt.characterId))]
-  if (receiptCharacterIds.length > 1) throw new Error('一个故事回合记录了多个世界行动人物')
+    .sort((left, right) => left.sequence - right.sequence)
+    .map(receipt => receipt.characterId)
   const selected = new Set(sequences)
-  const characterIds = new Set([
+  return [...new Set([
     ...receiptCharacterIds,
     ...input.workspace.world.events.flatMap(event => selected.has(event.sequence) && event.actorId !== undefined
       ? [event.actorId]
       : []),
-  ])
-  return characterIds.size === 1 ? [...characterIds][0] : undefined
+  ])]
 }
 
 function characterReferenceNames(name: string): readonly string[] {
@@ -2582,18 +3041,19 @@ async function resolveStoryTurnCast(
   reasoning: StoryStageReasoningProfile,
   playerInput: string,
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
-  worldActionCharacter: StoryWorkspaceSnapshot['characters'][number] | undefined,
+  worldActionCharacters: readonly StoryWorkspaceSnapshot['characters'][number][],
   resultEventSeqs: number[],
 ): Promise<ReadonlySet<string>> {
-  const fallback = new Set(worldActionCharacter === undefined
+  const worldActorIds = new Set(worldActionCharacters.map(character => character.id))
+  const fallback = new Set(worldActionCharacters.length === 0 || playerInput === ''
     ? characters.map(character => character.id)
-    : [worldActionCharacter.id])
+    : worldActionCharacters.map(character => character.id))
   if (characters.length <= 1) return fallback
   const mentionedCharacters = characters.filter(character =>
     characterReferenceNames(character.name).some(name => playerInput.includes(name)))
-  const needsRouting = worldActionCharacter === undefined
+  const needsRouting = worldActionCharacters.length === 0
     ? mentionedCharacters.length > 0 || CAST_SCOPE_PATTERN.test(playerInput)
-    : mentionedCharacters.some(character => character.id !== worldActionCharacter.id)
+    : mentionedCharacters.some(character => !worldActorIds.has(character.id))
       || CAST_SCOPE_PATTERN.test(playerInput)
   if (!needsRouting) return fallback
   const characterIds = new Set(characters.map(character => character.id))
@@ -2605,14 +3065,14 @@ async function resolveStoryTurnCast(
       '你是公开回合的人物参与路由 Worker。只判断哪些人物获准在本轮规则结算之外新增公开的非规则行动或对白；不替人物决定做什么、说什么，也不读取人物私有资料。',
       'publicCharacterIds 只包含玩家本轮要求、允许或留给其自主决定是否公开回应的人物。人物名称若只出现在已经发生的说话、动作、引用内容或别人要回应的前提中，不构成对该人物的新授权。',
       '若玩家用“只”“仅”“不要让”“除了”等限制公开回应范围，必须严格执行；“若愿意”“证据足够时”等仍表示该人物获准自行决定是否回应。否定要求的人物不得列入。',
-      '存在 world_actor 时，“当前人物”“该人物”“本轮行动人物”指 world_actor；没有另外限定时只列入 world_actor。没有 world_actor 且玩家没有限定时，沿用 default_public_character_ids。',
+      '存在 world_actors 时，“本轮行动人物”指其中列出的全部人物；没有另外限定时只列入这些人物。没有 world_actors 且玩家没有限定时，沿用 default_public_character_ids。',
       '只返回 JSON：{"publicCharacterIds":["participants 中的人物 id"]}。数组可以为空，不得使用显示名，不要使用 Markdown 围栏。',
     ].join('\n'),
     [
       '<participants>', characters.map(character => `${character.id}\t${character.name}`).join('\n'), '</participants>',
-      '<world_actor>', worldActionCharacter === undefined
+      '<world_actors>', worldActionCharacters.length === 0
         ? 'none'
-        : `${worldActionCharacter.id}\t${worldActionCharacter.name}`, '</world_actor>',
+        : worldActionCharacters.map(character => `${character.id}\t${character.name}`).join('\n'), '</world_actors>',
       '<default_public_character_ids>', [...fallback].join('\n'), '</default_public_character_ids>',
       '<player_input>', playerInput, '</player_input>',
     ].join('\n'),
@@ -2709,34 +3169,55 @@ async function advanceStoryWorld(
   let workspace = input.store.get(input.workspace.id)
   if (workspace.world === undefined) return workspace
   const module = input.store.worlds.get(workspace.world.moduleId)
-  let turn = module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))
-  if (turn === undefined) return workspace
   const runKey = worldActionRunKey({ ...input, workspace }, workspace.world.instanceId)
-  const receipts = (workspace.worldActionReceipts ?? [])
+  let receipts = (workspace.worldActionReceipts ?? [])
     .filter(receipt => receipt.runKey === runKey)
     .sort((left, right) => left.sequence - right.sequence)
+  const cycleIds: string[] = []
   for (const [index, receipt] of receipts.entries()) {
-    if (receipt.sequence !== index || receipt.cycleId !== receipts[0]?.cycleId) {
-      throw new Error('世界动作收据序列不连续')
+    if (receipt.sequence !== index) throw new Error('世界动作收据序列不连续')
+    if (cycleIds.at(-1) !== receipt.cycleId) {
+      if (cycleIds.includes(receipt.cycleId)) throw new Error('世界动作收据回合顺序无效')
+      cycleIds.push(receipt.cycleId)
     }
     if (!resultEventSeqs.includes(receipt.resultEventSeq)) resultEventSeqs.push(receipt.resultEventSeq)
   }
-  const cycleId = receipts[0]?.cycleId ?? turn.id
-  if (turn.id !== cycleId) return workspace
+
+  const currentTurn = (): PlayWorldCharacterTurn | undefined => workspace.world === undefined
+    ? undefined
+    : module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))
+  const runWorldEventSequences = (): readonly number[] => [...new Set(receipts.flatMap(receipt => receipt.eventSequences))]
+  const turn = currentTurn()
+  if (turn === undefined) return workspace
+  let completedCharacterTurns = cycleIds.length
+    - (cycleIds.at(-1) === turn.id ? 1 : 0)
+  const shouldPresentNarrative = (): boolean => {
+    if (completedCharacterTurns >= MAX_WORLD_CHARACTER_TURNS_PER_STORY_TURN) return true
+    if (completedCharacterTurns === 0 || workspace.world === undefined) return false
+    if (module.isNarrativeCheckpoint === undefined) return true
+    return module.isNarrativeCheckpoint(
+      workspace.world,
+      runWorldEventSequences(),
+      resolveStoryPlayWorldContext(workspace),
+    )
+  }
+  if (cycleIds.at(-1) !== turn.id && shouldPresentNarrative()) return workspace
+
   let sequence = receipts.length
-  for (; sequence < MAX_WORLD_ACTIONS_PER_STORY_TURN; sequence += 1) {
+  for (; sequence < MAX_WORLD_ACTIONS_PER_STORY_TURN;) {
     input.signal.throwIfAborted()
     if (workspace.world === undefined) return workspace
-    const currentTurn = module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))
-    if (currentTurn === undefined || currentTurn.id !== cycleId) return workspace
-    if (currentTurn.actions.length === 0 || currentTurn.actions.length > 128) throw new Error('世界模块返回了无效的可用动作数量')
-    const actionIds = currentTurn.actions.map((action, index) => {
+    const activeTurn = currentTurn()
+    if (activeTurn === undefined) return workspace
+    const cycleId = activeTurn.id
+    if (activeTurn.actions.length === 0 || activeTurn.actions.length > 128) throw new Error('世界模块返回了无效的可用动作数量')
+    const actionIds = activeTurn.actions.map((action, index) => {
       const id = boundedString(action.id, `世界动作[${String(index)}].id`, 240)
       if (id === '' || id !== action.id) throw new Error(`世界动作[${String(index)}].id 无效`)
       return id
     })
     if (new Set(actionIds).size !== actionIds.length) throw new Error('世界模块返回了重复的动作 id')
-    const character = workspace.characters.find(candidate => candidate.id === currentTurn.characterId)
+    const character = workspace.characters.find(candidate => candidate.id === activeTurn.characterId)
     if (character === undefined) throw new Error('世界模块把行动权交给了未知人物')
     const context = compileStoryCharacterContext(workspace, character.id, { playerInput }, input.store.worlds)
     const stageInput: RunStoryTurnPipelineInput = { ...input, workspace }
@@ -2751,9 +3232,9 @@ async function advanceStoryWorld(
       ].join('\n'),
       [
         context.text,
-        '<world_turn>', currentTurn.instruction, '</world_turn>',
+        '<world_turn>', activeTurn.instruction, '</world_turn>',
         '<available_actions>',
-        currentTurn.actions.map(action => `${action.id}\t${action.label}\t${action.description}`).join('\n'),
+        activeTurn.actions.map(action => `${action.id}\t${action.label}\t${action.description}`).join('\n'),
         '</available_actions>',
       ].join('\n'),
       512,
@@ -2777,9 +3258,19 @@ async function advanceStoryWorld(
       resultEventSeq: decision.resultEventSeq,
     }
     workspace = input.store.dispatchWorldCharacterAction(workspace.id, request)
+    const receipt = workspace.worldActionReceipts?.find(candidate => candidate.key === request.key)
+    if (receipt === undefined) throw new Error('世界动作执行后缺少持久收据')
+    receipts = [...receipts, receipt]
+    sequence += 1
+    const nextTurn = currentTurn()
+    if (nextTurn === undefined) return workspace
+    if (nextTurn.id !== cycleId) {
+      completedCharacterTurns += 1
+      if (shouldPresentNarrative()) return workspace
+    }
   }
-  if (workspace.world !== undefined
-    && module.characterTurn(workspace.world, resolveStoryPlayWorldContext(workspace))?.id === cycleId) {
+  const pendingTurn = currentTurn()
+  if (pendingTurn !== undefined && pendingTurn.id === receipts.at(-1)?.cycleId) {
     throw new Error('一个人物世界回合需要过多连续动作')
   }
   return workspace
@@ -2788,7 +3279,9 @@ async function advanceStoryWorld(
 /** Let the current character complete one module-defined world turn without accepting arbitrary model actions. */
 export async function advanceStoryWorldByCharacter(input: RunStoryTurnPipelineInput): Promise<StoryWorkspaceSnapshot> {
   const playerInput = messageText(input.messages)
-  if (playerInput === '') throw new Error('世界行动阶段没有可用的玩家输入')
+  if (playerInput === '' && !isAutomaticStoryAdvance(input.messages)) {
+    throw new Error('世界行动阶段没有可用的玩家输入')
+  }
   const reasoning = await resolveStoryStageReasoning(input)
   return advanceStoryWorld(input, reasoning, playerInput, [])
 }
@@ -2823,17 +3316,25 @@ function characterHistoryEvidence(
   workspace: StoryWorkspaceSnapshot,
   characterId: string,
 ): readonly StoryCharacterHistoryEvidence[] {
-  const publicEvents = [...workspace.events].reverse().flatMap(event =>
-    event.participantIds.includes(characterId) && event.summary.trim() !== ''
+  const withoutDialogueTranscriptLines = (text: string): string => text.split(/\r?\n/gu).filter(line => {
+    const content = line.trim().replace(/^-\s*/u, '')
+    return !workspace.characters.some(character => content.startsWith(`${character.name}说：`))
+  }).join('\n').trim()
+  const publicEvents = [...workspace.events].reverse().flatMap(event => {
+    const summary = withoutDialogueTranscriptLines(event.summary)
+    return event.participantIds.includes(characterId) && summary !== ''
       ? [{
           reference: `story:event:${event.id}`,
           kind: 'event' as const,
           label: `此人物参与的公开事件 · ${event.title}`,
-          text: event.summary,
+          text: summary,
         }]
-      : [])
+      : []
+  })
   const knownFacts = workspace.facts
-    .filter(fact => fact.status !== 'refuted' && storyFactKnownBy(workspace, fact).includes(characterId))
+    .filter(fact => fact.status !== 'refuted'
+      && !storyFactIsDialogueTranscript(workspace, fact)
+      && storyFactKnownBy(workspace, fact).includes(characterId))
     .map(fact => ({
       reference: `story:fact:${fact.id}`,
       kind: 'fact' as const,
@@ -2874,6 +3375,15 @@ async function retrieveCharacterHistory(
   if (evidence.length === 0) return ''
   const renderedEvidence = renderCharacterHistoryEvidence(evidence)
   if (evidence.length <= 8 && renderedEvidence.length <= 12_000) return ''
+  if (playerInput === '' && worldOutcome !== '') {
+    // Keep earlier public events that have fallen out of the current world projection, but omit
+    // completed verbatim dialogue. recent_public_exchange alone owns the adjacent open thread.
+    const recentEvents = boundCharacterHistoryEvidence(
+      evidence.filter(item => item.kind === 'event').slice(0, 8),
+      12_000,
+    )
+    return renderCharacterHistoryEvidence(recentEvents)
+  }
   const availableReferences = new Set(evidence.map(item => item.reference))
   const fallbackReferences = evidence.slice(0, 16).map(item => item.reference)
   const result = await runStage(input, 'history', generateOptions(
@@ -3055,6 +3565,83 @@ function existingBrief(
       && event.data.workspaceRevision === input.workspace.revision)
 }
 
+function existingStoryTurnStart(
+  events: readonly SessionEvent[],
+  input: RunStoryTurnPipelineInput,
+): SessionEvent<'agent-rp/story-turn-start'> | undefined {
+  return events.findLast((event): event is SessionEvent<'agent-rp/story-turn-start'> =>
+    event.type === 'agent-rp/story-turn-start' && event.data.format === 0
+      && event.data.sessionId === String(input.agent.session.id)
+      && event.data.turn === input.turn && event.data.step === input.step
+      && event.data.workspaceId === input.workspace.id)
+}
+
+/** Persist a retryable terminal state after a started story turn stops without a brief. */
+export async function stopStoryTurnPipeline(input: {
+  readonly ctx: Context
+  readonly agent: Agent
+  readonly workspaceId: string
+  readonly turn: number
+  readonly step: number
+  readonly outcome: StoryTurnStoppedRecord['outcome']
+}): Promise<StoryTurnStoppedRecord | undefined> {
+  const start = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-start'> =>
+    event.type === 'agent-rp/story-turn-start' && event.data.format === 0
+      && event.data.sessionId === String(input.agent.session.id)
+      && event.data.workspaceId === input.workspaceId
+      && event.data.turn === input.turn && event.data.step === input.step)
+  if (start === undefined) return undefined
+  const record: StoryTurnStoppedRecord = {
+    format: 0,
+    sessionId: String(input.agent.session.id),
+    workspaceId: input.workspaceId,
+    workspaceRevision: start.data.workspaceRevision,
+    turn: input.turn,
+    step: input.step,
+    outcome: input.outcome,
+  }
+  appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-stopped', record)
+  await input.ctx.sessions.flush(input.agent.session)
+  return record
+}
+
+/** Close story turns whose parent Agent turn ended before the plugin recorded a terminal state. */
+export async function recoverStoppedStoryTurns(input: {
+  readonly ctx: Context
+  readonly agent: Agent
+}): Promise<readonly StoryTurnStoppedRecord[]> {
+  const recovered: StoryTurnStoppedRecord[] = []
+  for (const start of input.agent.session.events) {
+    if (start.type !== 'agent-rp/story-turn-start' || start.data.format !== 0) continue
+    const terminal = input.agent.session.events.find(event => event.seq > start.seq
+      && ((event.type === 'agent-rp/story-turn-brief' && event.data.format === 1)
+        || (event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3)
+        || (event.type === 'agent-rp/story-turn-stopped' && event.data.format === 0))
+      && event.data.sessionId === start.data.sessionId
+      && event.data.workspaceId === start.data.workspaceId
+      && event.data.turn === start.data.turn && event.data.step === start.data.step)
+    if (terminal !== undefined) continue
+    const parentEnd = input.agent.session.events.find((event): event is SessionEvent<'turn/end'> => event.seq > start.seq
+      && event.type === 'turn/end' && event.data.turn === start.data.turn)
+    if (parentEnd === undefined) continue
+    const record: StoryTurnStoppedRecord = {
+      format: 0,
+      sessionId: start.data.sessionId,
+      workspaceId: start.data.workspaceId,
+      workspaceRevision: start.data.workspaceRevision,
+      turn: start.data.turn,
+      step: start.data.step,
+      outcome: parentEnd.data.reason.kind === 'aborted' || parentEnd.data.reason.kind === 'interrupted'
+        ? 'aborted'
+        : 'failed',
+    }
+    appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-stopped', record)
+    recovered.push(record)
+  }
+  if (recovered.length > 0) await input.ctx.sessions.flush(input.agent.session)
+  return recovered
+}
+
 function directorFallback(
   input: RunStoryTurnPipelineInput,
   playerInput: string,
@@ -3096,37 +3683,61 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   let prior = existingBrief(input.agent.session.events, input)
   if (prior !== undefined) return prior.data
   input.signal.throwIfAborted()
+  const automaticAdvance = isAutomaticStoryAdvance(input.messages)
   const playerInput = messageText(input.messages)
-  if (playerInput === '') throw new Error('故事流水线没有可用的玩家输入')
+  if (playerInput === '' && !automaticAdvance) {
+    throw new Error('故事流水线没有可用的玩家输入')
+  }
   const reasoning = await resolveStoryStageReasoning(input)
+  if (existingStoryTurnStart(input.agent.session.events, input) === undefined) {
+    appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-start', {
+      format: 0,
+      sessionId: String(input.agent.session.id),
+      workspaceId: input.workspace.id,
+      workspaceRevision: input.workspace.revision,
+      turn: input.turn,
+      step: input.step,
+    })
+    await input.ctx.sessions.flush(input.agent.session)
+  }
   const resultEventSeqs: number[] = []
-  if (input.workspace.world !== undefined && !hasPendingCharacterWorldResult(input.workspace)) {
+  const worldAdvanceRequested = automaticAdvance
+    || (input.workspace.world !== undefined
+      && playerInput !== ''
+      && playerDirectionAdvancesWorld(playerInput))
+  if (worldAdvanceRequested
+    && input.workspace.world !== undefined
+    && !hasPendingCharacterWorldResult(input.workspace)) {
     const workspace = await advanceStoryWorld(input, reasoning, playerInput, resultEventSeqs)
     input = { ...input, workspace }
     prior = existingBrief(input.agent.session.events, input)
     if (prior !== undefined) return prior.data
   }
   const worldEventSequences = worldEventSequencesForRun(input)
-  const worldActionCharacterId = worldActionCharacterIdForRun(input, worldEventSequences)
-  const worldActionCharacter = worldActionCharacterId === undefined
-    ? undefined
-    : input.workspace.characters.find(character => character.id === worldActionCharacterId)
-  if (worldActionCharacterId !== undefined && worldActionCharacter === undefined) {
-    throw new Error('世界动作收据引用了未知人物')
-  }
+  const worldActionCharacterIds = worldActionCharacterIdsForRun(input, worldEventSequences)
+  const worldActionCharacters = worldActionCharacterIds.map(characterId => {
+    const character = input.workspace.characters.find(candidate => candidate.id === characterId)
+    if (character === undefined) throw new Error('世界动作收据引用了未知人物')
+    return character
+  })
   const worldOutcome = renderWorldOutcome(input.workspace, worldEventSequences)
   const worldNarrative = renderWorldNarrative(input, worldEventSequences)
 
   const enabledCharacters = storyTurnParticipants(
     input.workspace,
-    worldActionCharacterId === undefined ? [] : [worldActionCharacterId],
+    worldActionCharacterIds,
   )
+  const recentExchange = recentPublicExchange(input.agent.session.events, input.turn, enabledCharacters)
+  const characterReasoningMode: StoryStageReasoningMode = automaticAdvance
+    && worldOutcome !== '' && recentExchange?.status !== 'open'
+    ? 'routine'
+    : 'quality'
   const publicCharacterIds = await resolveStoryTurnCast(
     input,
     reasoning,
     playerInput,
     enabledCharacters,
-    worldActionCharacter,
+    worldActionCharacters,
     resultEventSeqs,
   )
   const voiceEvidence = buildCharacterProfileVoiceEvidence(enabledCharacters)
@@ -3138,7 +3749,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       await retrieveCharacterHistory(input, reasoning, character, playerInput, worldOutcome, resultEventSeqs),
     ] as const,
   ))
-  const characterDecisions = (await mapStoryPeers(
+  const parallelCharacterDecisions = (await mapStoryPeers(
     enabledCharacters,
     input.workspace.pipeline.maxParallel,
     async character => {
@@ -3150,58 +3761,74 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       const decision = await runStage(input, 'character', generateOptions(
         input,
         reasoning,
-        'quality',
+        characterReasoningMode,
         [
           '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、如何回应 current_world_outcome 以及是否确实需要开口。不能使用未出现在输入中的知识。',
           'retrieved_history 是独立历史检索 Worker 从此人物获准记录中选出的原文，只用于恢复此人物自己的连续记忆。它不会授予对其他人物私有记录、导演故事图或未来安排的访问权，也不能覆盖当前世界状态。',
           'story:player-input 是所有在场人物共同看见的公开输入，其中既可能包含已经发生的公开前提，也可能包含对本轮参与范围的要求。名字出现在前提或引用中不等于此人物获准新增公开回应；公开回应权限只由 turn_participation 决定。',
           'turn_participation 的 publicResponse=allowed 表示此人物可以自行决定是否返回公开 action 或 speech；publicResponse=observe-only 表示仍须形成自己的 observation 和合法私有 insights，但 action 必须为空、speech 必须为 null。Host 会强制清除越权公开内容。',
-          '若存在 world_turn_assignment，actor 是本轮实际完成规则动作的人物，observer 是旁观者。该分工描述已经完成的规则动作，不会覆盖 turn_participation，也不改变公开输入对所有人物可见。',
+          '若存在 world_turn_assignment，其中列出的 actors 是这一叙事节拍内实际完成规则动作的人物，observer 是旁观者。该分工描述已经完成的规则动作，不会覆盖 turn_participation，也不改变公开输入对所有人物可见。',
           '可执行世界中的状态和事件已经由程序决定：current_world_outcome 是本轮刚刚执行完成、必须优先回应的结果，不得跳到下一位人物准备行动；不得自行掷骰、移动棋子、切换回合、决定胜负或虚构新的世界状态。当前行动人由 world state 决定；不得催促、等待或描写任何人物将来进行规则动作。',
           'action 只保留由本轮结果直接引起、能够改变当场互动、人物关系或下一项非规则选择的具体反应；只表达态度、情绪或为说话摆姿势的动作不进入 action。不要用看向、伸手、换手、拨弄物件、摆姿势、轻笑或等待开口填空，也不要用“像是”“仿佛”“似乎”替动作解释内心；没有实际互动变化时留空。不得用 action 代替程序掷骰、移动棋子、切换回合或决定胜负。',
           'speech 必须是 null，或者由 respondsTo、move、focus 和 effect 组成的对象。respondsTo 只写输入中已经公开发生、这句话要接住的具体前提；不能填未来假设、人物不知情的事或抽象话题。move 只能是 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose。focus 不是完整论点，只命名这个人要新增给当前交流的一个对象、区别、态度或直接答案，例如“对方先前主动采用的接法”“门外的人”“连续小点的荒唐”“先确认刻痕”；不写原因链、句式、口癖或逐字台词，也不重复 respondsTo 已经包含的前提。effect 写这次开口当场完成的一项交流作用：可以改变对方的理解、决定或行动，也可以向在场熟人明确表达态度、打趣、认输、拒绝或提议；它用于判断是否确实需要开口以及清除伪装成持久意图的本轮复述，不会交给声音 Worker 改写成对白。',
-          '人物不必为了让场面热闹而每轮开口；但也不能仅因反应不会形成长期知识，就把人物特有的当场态度一律判为沉默。玩家明确要求把权威结果写成角色场面时，若当前结果、连续事件或熟人关系确实给这个人物一个自然的回应点，可以返回具体 action 或非空 speech。单纯复述点数、领先落后或双方都知道的结算，无法指出具体 respondsTo，或者只能生成可替换到任何角色的感叹时，speech 必须为 null。人物档案中的对话示例只帮助判断人物会不会这样回应；不要选择逐字证据或模仿句式，后续声音阶段会独立检索该人物的原作证据，证据不足时让人物沉默。',
+          '人物不必为了让场面热闹而每轮开口。只有这次结果真正回答、推翻或改变了一句尚未收束的公开发言，或者引出了此人物特有的一项判断、拒绝、提议或关系动作时，才返回 speech；若已有相邻公开对白，respondsTo 优先逐项接住其中最后一个仍有效的前提，不能绕过它另起一段点数感想。单纯复述点数、领先落后、双方相同处境或众所周知的规则，单靠“熟人会互相打趣”制造话题，或者只能生成可替换到任意朋友与对手的感叹时，speech 必须为 null。人物档案中的对话示例只帮助判断人物会不会这样回应；不要选择逐字证据或模仿句式，后续声音阶段会独立检索该人物的原作证据，证据不足时让人物沉默。',
+          'recent_public_exchange 是紧邻本轮之前、真正获准展示的逐字对白。status=open 只表示最后一句明确要求回答、命令或提出建议；其他话轮一律是 closed。closed 的打趣、回答和陈述已经完成，当前结果只是再次印证同一处境时不得重开、升级或换句话续梗。只有本轮新结果推翻其前提，或者产生与旧话题不同的人物特有决定时，才可另起 speech。',
+          '玩家输入为空只表示导演没有介入，不构成要求人物表演的指令。规则结果本身已经由场地和正文承担；没有未收束话轮或人物特有的信息增量时，保持沉默并继续棋局就是完整决定。',
+          '当玩家输入为空且 current_world_outcome 非空时，这是场地程序已经完成的自动世界回合。action 必须为空；不得把新世界状态中轮到下一人物解释成准备掷骰、拿起棋子或任何未来行动。若 recent_public_exchange 不是 open，speech 的 respondsTo 必须直接指向 current_world_outcome 中本轮刚发生的结果；更早的公开事件和对白只用于连续记忆，不是待续的话头。',
           'insights 中 knowledge 是本轮新获得且未公开的知识，写入 text，futureChoice 使用空字符串。intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；两者的 text 只写形成本项的当轮依据，futureChoice 必须写明：假设本轮 action 与 speech 已经完整结束，下一轮仍会因此改变的一个具体非规则选择。futureChoice 是 Host 唯一持久化的内容，必须是可独立复用的一项原子选择，不复述当轮骰点、棋子位置、公开历史、当前回合或解释性背景。只把 speech 的发言焦点换成“继续……”，或者改成“以后遇到相似结果再开口回敬”，都不构成新的未来选择；Host 会把 text 与 futureChoice 合在一起和本轮说话决定比较并丢弃这种复述。当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 使用空字符串，Host 会丢弃整项。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
           '不要写完整正文或逐字对白。只返回 JSON：{"observation":"此人能观察到的事实","action":"会改变当场互动、关系或下一项非规则选择的具体反应，或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"一个对象、区别、态度或直接答案","effect":"这次开口当场完成的一项交流作用"},"insights":[{"kind":"knowledge|intention|decision|world-action","text":"knowledge 的私有事实、intention/decision 的当轮依据或待丢弃的规则动作","futureChoice":"intention/decision 唯一需要长期保存的原子选择，其他类型为空字符串"}]}。不开口时把 speech 设为 null。observation、action、speech 内容和 insights 不能包含引号包围的台词。不要使用 Markdown 围栏。',
         ].join('\n'),
         [
           context.text,
           '<retrieved_history>', characterHistory.get(character.id) ?? '', '</retrieved_history>',
-          ...(worldActionCharacter === undefined ? [] : [
+          ...(worldActionCharacters.length === 0 ? [] : [
             '<world_turn_assignment>',
-            `actorId=${worldActionCharacter.id}\tactorName=${worldActionCharacter.name}`,
-            `thisCharacterRole=${character.id === worldActionCharacter.id ? 'actor' : 'observer'}`,
+            ...worldActionCharacters.map(actor => `actorId=${actor.id}\tactorName=${actor.name}`),
+            `thisCharacterRole=${worldActionCharacterIds.includes(character.id) ? 'actor' : 'observer'}`,
             '</world_turn_assignment>',
           ]),
           '<turn_participation>',
           `publicResponse=${publicResponseAllowed ? 'allowed' : 'observe-only'}`,
           '</turn_participation>',
+          '<recent_public_exchange>', renderRecentPublicExchange(recentExchange), '</recent_public_exchange>',
           '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         ].join('\n'),
         2_048,
         0.5,
       ), resultEventSeqs, character.id)
       if (decision.text === undefined) return undefined
-      try {
-        const parsed = parseCharacterDecision(decision.text)
-        const scoped = publicResponseAllowed
-          ? parsed
-          : { ...parsed, action: '', speech: undefined }
-        const permitted = suppressForbiddenWorldOutcomeSpeech(scoped, playerInput, worldOutcome)
-        return {
-          characterId: character.id,
-          decision: permitted,
-          text: renderCharacterDecision(character.id, character.name, permitted),
-        }
-      } catch {
-        return undefined
+      const parsed = parseCharacterDecision(decision.text)
+      const scoped = publicResponseAllowed
+        ? parsed
+        : { ...parsed, action: '', speech: undefined }
+      const permitted = suppressForbiddenWorldOutcomeSpeech(scoped, playerInput, worldOutcome)
+      const continuous = suppressClosedExchangeReprise(permitted, playerInput, recentExchange)
+      const constrained = constrainAutomaticWorldDecision(
+        continuous,
+        automaticAdvance,
+        worldOutcome,
+        recentExchange,
+      )
+      return {
+        characterId: character.id,
+        decision: constrained,
+        text: renderCharacterDecision(character.id, character.name, constrained),
       }
     },
   )).filter((value): value is StoryCharacterDecisionRecord => value !== undefined)
+  const characterDecisions = limitAutomaticWorldSpeech(
+    parallelCharacterDecisions,
+    automaticAdvance,
+    worldOutcome,
+    worldActionCharacterIds.at(-1),
+    enabledCharacters,
+  )
   const characterDecisionText = characterDecisions.map(record => record.text)
 
   const enabledSections = expandStoryTurnOutputs(input.workspace, enabledCharacters)
-    .filter(section => section.kind !== 'character')
+    .filter(section => section.kind !== 'character'
+      && (input.workspace.world === undefined || section.kind !== 'history'))
+  const priorPublicProse = recentPublicProse(input.workspace)
   const storyMap = storyDirectorMap(input.workspace)
   const foreshadowing = storyOpenForeshadowing(input.workspace)
   const hostDirectorAssignment = resolveHostWorldDirectorAssignment(
@@ -3211,6 +3838,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     worldOutcome,
     storyMap,
     foreshadowing,
+    automaticAdvance || playerForbidsWorldRecap(playerInput),
+    automaticAdvance,
   )
   const research = hostDirectorAssignment === undefined
     ? await runResearch(
@@ -3219,15 +3848,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         playerInput,
         resultEventSeqs,
         worldOutcome,
-        worldActionCharacter?.name,
+        worldActionCharacters.map(character => character.name).join('、') || undefined,
       )
     : { text: '', citations: [] }
   const researchText = research.text
   const fallback = directorFallback(input, playerInput, researchText, characterDecisionText, worldOutcome, worldNarrative)
+  const maximumSpeeches = worldNarrative !== '' && playerInput === '' ? 1 : Number.POSITIVE_INFINITY
   let directorDecision = hostDirectorAssignment === undefined
     ? undefined
     : groundWorldDirectorBeats(
-        groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions),
+        groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions, maximumSpeeches),
         enabledSections,
         characterDecisions,
         worldNarrative,
@@ -3241,13 +3871,15 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       input,
       reasoning,
       directorReasoningMode,
-      '你是剧情导演 Worker。依据大纲、伏笔、带原始证据的研究简报和各人物独立行动提案，为本轮分配叙事节拍。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。current_world_outcome 是本轮刚由规则程序产生的结果；world_narrative 是 Host 已经写好的权威叙事骨架，会原样成为 prose 首段。不要在 beats 中改写或复述它，只安排确有信息增量的后续人物反应；history 仍记录 current_world_outcome。先逐项核对人物提案与 world_state：当前行动人由 world state 决定；与回合、棋子或合法行动冲突的动作必须删除，不能为了保留人物提案而改写世界状态。看向、换手、敲碰物件、摆姿势、轻笑或等待开口若不表达新的决定或关系变化，也必须删除。speech 只负责安排 character_decisions 中已有非空说话决定的分区和先后顺序；不得新建、复述、扩写或改写结构化说话决定，也不得为同一人物安排两次开口。只写 characterId，不写 intent、voiceEvidence 或逐字台词。人物自己的非空说话决定已经通过隔离认知检查，Host 会把导演遗漏的有效决定补回默认正文分区，再由声音阶段检索本人原作证据并最终批准或拒绝；因此不要依靠省略 speech 来否决人物决定。可执行世界严格只读：节拍只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。给每个启用分区分配互不重复的材料；公共反应和对白只进入 prose，character 只接收会影响后续回合的私有知识，不能把下一项世界规则动作保存成意图或决定；history 只记事实。只返回 JSON：{"sections":[{"sectionId":"输入中的分区 id","beats":["不含逐字对白的额外反应节拍"],"speech":[{"characterId":"character_decisions 中已有非空说话决定的人物 id"}]}]}。每个启用分区必须恰好出现一次；没有独有材料时使用空数组。不要使用 Markdown 围栏。',
+        '你是剧情导演 Worker。依据大纲、伏笔、带原始证据的研究简报和各人物独立行动提案，为本轮分配叙事节拍。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。recent_public_prose 是用户上一轮实际读到的正文；本轮必须承接它的时空、视角、叙述距离和节奏，但不得复制旧句、旧标题或已经完成的节拍。current_world_outcome 是本轮刚由规则程序产生的结果；world_narrative 是 Host 提供的权威事实骨架，不是成品正文。不要在 beats 中逐项复述它，只安排确有信息增量的后续人物反应；prose Worker 会把必要的规则动作和结果自然写入场景。多个相似的机械回合属于同一个连续时间段，不要逐轮报点。先逐项核对人物提案与 world_state：当前行动人由 world state 决定；与回合、棋子或合法行动冲突的动作必须删除，不能为了保留人物提案而改写世界状态。看向、换手、敲碰物件、摆姿势、轻笑或等待开口若不表达新的决定或关系变化，也必须删除。speech 只负责从 character_decisions 中已有非空说话决定里选择真正值得展示的分区和顺序；可以省略没有信息增长、只是复述处境或续已经收束玩笑的决定，Host 会尊重省略，不得新建、复述、扩写或改写决定，也不得为同一人物安排两次开口。各人物决定由并行 Worker 独立产生，任何人物都没有听见本轮其他人物尚未生成的台词；不得把两份独立决定排成伪造的一问一答。玩家没有输入且本轮包含世界规则动作时，最多安排一人开口。recent_public_exchange 的 status=closed 表示上一轮话轮已经完成，当前结果仅再次印证同一处境时不要重开。只写 characterId，不写 intent、voiceEvidence 或逐字台词。可执行世界严格只读：节拍只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。给每个启用分区分配互不重复的材料；公共反应和对白只进入 prose，character 只接收会影响后续回合的私有知识，不能把下一项世界规则动作保存成意图或决定。只返回 JSON：{"sections":[{"sectionId":"输入中的分区 id","beats":["不含逐字对白的额外反应节拍"],"speech":[{"characterId":"character_decisions 中已有非空说话决定的人物 id"}]}]}。每个启用分区必须恰好出现一次；没有独有材料时使用空数组。不要使用 Markdown 围栏。',
       [
         '<story_map>', storyMap, '</story_map>',
         '<foreshadowing>', foreshadowing, '</foreshadowing>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         '<world_narrative>', worldNarrative, '</world_narrative>',
+        '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
+        '<recent_public_exchange>', renderRecentPublicExchange(recentExchange), '</recent_public_exchange>',
         '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
         '<research>', researchText, '</research>',
         '<character_decisions>', characterDecisionText.join('\n\n'), '</character_decisions>',
@@ -3270,7 +3902,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             director.text,
             enabledSections,
             enabledCharacters,
-          ), enabledSections, characterDecisions),
+          ), enabledSections, characterDecisions, maximumSpeeches),
           enabledSections,
           characterDecisions,
           worldNarrative,
@@ -3349,7 +3981,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const reviewed = await runStage(input, 'voice', generateOptions(
           input,
           reasoning,
-          'structural',
+          'routine',
           VOICE_REVIEW_SYSTEM,
           [
             commonBody,
@@ -3423,18 +4055,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     ? fallback
     : renderDirectorDecision(directorDecision, enabledSections, enabledCharacters, dialogueByReference)
   const approvedDialogue = new Set([...dialogueByReference.values()].filter(value => value !== ''))
-  const hostWorldDialogueSections = renderHostWorldDialogueSections(
-    enabledSections,
-    directorDecision,
-    characterDecisions,
-    dialogueByReference,
-    worldNarrative,
-    worldOutcome,
-  )
   let sectionDrafts: readonly StorySectionDraft[]
-  if (hostWorldDialogueSections !== undefined) {
-    sectionDrafts = hostWorldDialogueSections
-  } else if (enabledSections.length === 0) {
+  if (enabledSections.length === 0) {
     sectionDrafts = []
   } else {
     sectionDrafts = (await mapStoryPeers(
@@ -3469,28 +4091,42 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const outputInstruction = section.kind === 'prose' && worldNarrative !== ''
-          ? '棋盘会直接呈现 world_narrative 对应的规则结果；不要复述它。只返回确有信息增量的公开行动和获准对白，没有额外内容时返回 <omit-section />。'
+          ? '把 world_narrative 中本轮实际发生的动作与结果写成可以直接阅读的完整场景节拍，并接上确有信息增量的公开行动和获准对白。篇幅由场景节拍决定；多个相似机械结果要压缩成连续的时间流动，不能逐项报点，也不能把每个机械回合各写一句。world_state 只用于核对事实，未在 world_narrative 中变化的其他人物、棋子和位置不是本轮素材，不要为了对照或收尾补报。不得解释规则、计算点数差、汇报下一行动者或写成系统结算。只返回本分区正文，不能返回 <omit-section />。'
           : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
           ? 'current_world_outcome 是本轮刚发生的权威结果：prose 必须完整表现这些事件及执行动作的人。'
-          : 'world_narrative 是棋盘事实约束，不是待粘贴的正文；prose 不得复述它，只能写确有信息增量的反应。'
+          : 'world_narrative 是本轮权威事实骨架，不是待粘贴的成品。prose 要让读者自然看见其中必要的动作和结果，但不能把规则事件换成说明文，也不能增添 world_state 没有记录的规则动作。'
+        const sectionPlan = directorDecision?.sections.find(plan => plan.sectionId === section.id)
+        const sectionDirectorBrief = sectionPlan === undefined
+          ? directorBrief
+          : renderDirectorDecision(
+              { sections: [sectionPlan] },
+              enabledSections,
+              enabledCharacters,
+              dialogueByReference,
+            )
         const draft = await runStage(input, 'section', generateOptions(
           input,
           reasoning,
           'quality',
-          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}保持既有文风和连续性。${worldInstruction}不能跳到下一位人物准备未来规则动作。director_brief 中标为“获准对白”的句子已经由专职声音阶段依据原作证据写定：属于本分区的完整对白必须逐字作为单独一段使用；不得省略、添加、改写、拆分或模仿生成其他对白。没有获准对白时不要写人物正在说话、即将接话、语气如何或对一句不存在的话作出反应。看向、换手、敲碰物件、摆姿势、轻笑等动作若不表达新的决定或关系变化，不得用来填充场面。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。${outputInstruction}`,
+          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}recent_public_prose 是用户上一轮实际读到的正文；延续它的时空、视角、叙述距离、句法密度和节奏，不要复制旧句、旧标题或已完成的动作。${worldInstruction}不能跳到下一位人物准备未来规则动作。director_brief 中标为“获准对白”的字面内容已经由专职声音阶段依据原作证据写定：每句必须完整逐字保留一次，并在叙述中明确说话人；可以用自然的叙述句、冒号或“某某说”衔接，不能把它们拆成一串没有归属的引号段。不得省略、添加、改写、拆分或模仿生成其他对白。没有获准对白时不要写人物正在说话、即将接话、语气如何或对一句不存在的话作出反应。看向、换手、敲碰物件、摆姿势、轻笑等动作若不表达新的决定或关系变化，不得用来填充场面。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。${outputInstruction}`,
           [
             `<section_reference kind="${section.kind}">`, existing, '</section_reference>',
-            '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+            '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
+            ...(worldOutcome === '' && worldNarrative === ''
+              ? []
+              : ['<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>']),
             '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
             '<world_narrative>', worldNarrative, '</world_narrative>',
-            '<director_brief>', directorBrief, '</director_brief>',
+            '<director_brief>', sectionDirectorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
           ].join('\n'),
           6_144,
           0.7,
         ), resultEventSeqs, section.id)
-        if (draft.text === undefined) return section.kind === 'prose' && worldNarrative !== ''
+        if (draft.text === undefined
+          || (section.kind === 'prose' && worldNarrative !== ''
+            && (draft.text.trim() === '' || draft.text.trim() === '<omit-section />'))) return section.kind === 'prose' && worldNarrative !== ''
           ? { sectionId: section.id, name: section.name, kind: section.kind, text: worldNarrative }
           : undefined
         const omitted = draft.text.trim() === '<omit-section />'
@@ -3509,13 +4145,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
-  if (hostWorldDialogueSections === undefined) {
+  if (sectionDrafts.length > 0) {
     const edited = await runStage(input, 'editor', generateOptions(
       input,
       reasoning,
       'routine',
-        '你是最终正文编辑 Worker，负责决定用户会看到的文本。人物私有认知和内部历史不会交给你，也不得补写。公共场景、行动和对白只保留在 prose；显式配置的 history 只保留可核对的事实记录。world_narrative 与 current_world_outcome 是棋盘事实约束，不是待粘贴的正文；棋盘已经表达清楚的规则结果不要在 prose 中复述，history 仅在 ordered_sections 明确包含该分区时保留。不能把重点改成下一位人物准备未来动作。相同材料不许跨分区换句话重演。随后逐句检查 prose：没有新增可观察行动、人物决定、关系变化或必要对白的过渡句应删除；删除“空气安静了一会儿”式空镜、无因由的迟疑和为了显得细腻而补出的手指、目光、换手、敲碰物件、摆姿势、轻笑、抬下巴等微动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；不得新增、恢复、拆分、重写或删除任何获准对白，只能逐字保留 ordered_sections 中仍存在的完整句子。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 不得新增、重复或改序；省略应删除的分区。text 内不能使用二级标题，需要内部标题时从三级标题开始。不要使用 Markdown 围栏。',
+        '你是最终正文编辑 Worker，负责决定用户会看到的文本。recent_public_prose 是上一轮实际可见正文；成稿必须自然接续它的时空、视角、叙述距离和节奏，但不能复制旧句、旧标题或已经完成的节拍。人物私有认知和内部历史不会交给你，也不得补写。公共场景、行动和对白只保留在 prose。world_narrative 与 current_world_outcome 是事实约束，不是待粘贴的正文；prose 应保留让读者理解本轮所必需的动作与结果，并把多个相似机械回合压缩成一个完整场景节拍，不能写成“掷骰—报点—报位置”的逐项清单。world_state 只用于校验，删除未在 world_narrative 中变化、也不承担获准对白或公开行动因果的其他人物、棋子与位置播报。删掉规则解释、点数差计算和下一行动者播报。篇幅由场景节拍决定：机械重复要表现为连续的时间流动，不能每个结果各写一句，也不能用空镜或总结凑长度。不能把重点改成下一位人物准备未来动作。相同材料不许换句话重演。随后逐句检查 prose：删除无因由的迟疑，以及为了显得细腻而补出的手指、目光、换手、敲碰物件、摆姿势、轻笑、抬下巴等微动作；但不要删除承担实际掷骰、移动、明确说话人或可观察关系变化的必要动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；每个获准引号内容必须逐字保留一次，允许编辑它周围的说话人标识和叙述衔接，不能把对白重新拆成无归属的引号段。不得新增、恢复、拆分或重写对白。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 不得新增、重复或改序；省略应删除的分区。text 内不能使用二级标题，需要内部标题时从三级标题开始。不要使用 Markdown 围栏。',
       [
+        '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         '<world_narrative>', worldNarrative, '</world_narrative>',
@@ -3527,7 +4164,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     if (edited.text !== undefined) {
       try {
         const parsed = parseEditedSections(edited.text, sectionDrafts, approvedDialogue)
-        if (parsed.length > 0) editedSections = parsed
+        if (parsed.length > 0) {
+          editedSections = preserveEditedPublicMaterials(
+            parsed,
+            sectionDrafts,
+            directorDecision,
+            approvedDialogue,
+          )
+        }
       } catch {
         editedSections = sectionDrafts
       }
@@ -3539,26 +4183,23 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     worldOutcome,
   )
   const omitVisibleWorldRecap = approvedDialogue.size > 0 && playerForbidsWorldRecap(playerInput)
-  const finalSections = omitVisibleWorldRecap
+  const preparedFinalSections = omitVisibleWorldRecap
     ? omitHostWorldRecap(enforcedSections, worldNarrative, worldOutcome)
     : enforcedSections
-  const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldSections = renderHostOnlyWorldSections(enabledSections, worldNarrative, worldOutcome)
+  const finalSections = preparedFinalSections.length > 0
+    ? preparedFinalSections
+    : hostOnlyWorldSections ?? []
+  const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
-  const visibleHostWorldDialogueSections = hostWorldDialogueSections === undefined
-    ? undefined
-    : omitVisibleWorldRecap
-      ? omitHostWorldRecap(hostWorldDialogueSections, worldNarrative, worldOutcome)
-      : hostWorldDialogueSections
-  const hostOwnedWorldDraft = visibleHostWorldDialogueSections !== undefined
-    && finalDraft === renderSectionDrafts(visibleHostWorldDialogueSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
     return dialogue === undefined || dialogue === '' ? [] : [{
       characterId: speech.characterId,
       dialogue,
+      move: speech.intent.move,
       ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     }]
   })) ?? []
@@ -3566,6 +4207,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const privateCharacterStates = characterDecisions.flatMap(record => record.decision.insights.length === 0
     ? []
     : [{ characterId: record.characterId, insights: record.decision.insights }])
+  const deterministicWorldMaterialization = worldOutcome !== ''
+    && privateCharacterStates.length === 0
+    && characterDecisions.every(record => record.decision.action === '')
+    && (directorDecision?.sections.every(section => section.beats.length === 0) ?? true)
   const record: StoryTurnBriefRecord = {
     format: 1,
     sessionId: String(input.agent.session.id),
@@ -3575,6 +4220,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     step: input.step,
     resultEventSeqs,
     ...(worldEventSequences.length === 0 ? {} : { worldEventSequences }),
+    ...(worldEventSequences.length === 0
+      ? {}
+      : { publicWorldEvents: storyTurnPublicWorldEvents(input.workspace, worldEventSequences) }),
     directorBrief,
     ...(research.citations.length === 0 ? {} : { researchCitations: research.citations }),
     finalSections,
@@ -3583,7 +4231,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     modelContext: context,
     ...(publicDialogues.length === 0 ? {} : { publicDialogues }),
     ...(hostOnlyWorldDraft ? { hostOnlyWorldDraft: true as const } : {}),
-    ...(hostOwnedWorldDraft ? { hostOwnedWorldDraft: true as const } : {}),
+    ...(deterministicWorldMaterialization ? { deterministicWorldMaterialization: true as const } : {}),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-brief', record)
   await input.ctx.sessions.flush(input.agent.session)
@@ -3593,6 +4241,43 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
 function storyTurnMaterializationKey(sessionId: string, turn: number, briefSeq: number): string {
   const sessionHash = createHash('sha256').update(sessionId).digest('hex').slice(0, 32)
   return `session-${sessionHash}-turn-${String(turn)}-brief-${String(briefSeq)}`
+}
+
+function storyTurnPublicStageTrace(
+  events: readonly SessionEvent[],
+  resultEventSeqs: readonly number[],
+): readonly StoryTurnPublicStageTrace[] {
+  const eventBySeq = new Map(events.map(event => [event.seq, event]))
+  return [...new Set(resultEventSeqs)].flatMap(resultSeq => {
+    const result = eventBySeq.get(resultSeq)
+    if (result?.type !== 'agent-rp/story-stage-result') return []
+    const request = eventBySeq.get(result.data.requestSeq)
+    if (request?.type !== 'agent-rp/story-stage-request'
+      || request.data.requestId !== result.data.requestId) return []
+    const failure = result.data.result.kind === 'failure'
+      ? result.data.result.detail?.message ?? result.data.result.failure
+      : undefined
+    return [{
+      stage: request.data.stage,
+      ...(request.data.subjectId === undefined ? {} : { subjectId: request.data.subjectId }),
+      status: result.data.result.kind === 'success' ? 'succeeded' as const : 'failed' as const,
+      durationMs: Math.max(0, result.time - request.time),
+      ...(failure === undefined ? {} : { failure }),
+    }]
+  })
+}
+
+function storyTurnPublicWorldEvents(
+  workspace: StoryWorkspaceSnapshot,
+  sequences: readonly number[],
+): readonly StoryTurnPublicWorldEvent[] {
+  const selected = new Set(sequences)
+  return workspace.world?.events.flatMap(item => selected.has(item.sequence) ? [{
+    type: item.type,
+    title: item.title,
+    summary: item.summary,
+    ...(item.actorId === undefined ? {} : { actorId: item.actorId }),
+  }] : []) ?? []
 }
 
 /** Materialize the completed presentation into internal history and one typed story change set. */
@@ -3624,9 +4309,11 @@ export async function materializeStoryTurn(input: {
     ...storyWorldEventActorIds(workspace, briefEvent.data.worldEventSequences ?? []),
     ...(briefEvent.data.publicDialogues ?? []).map(dialogue => dialogue.characterId),
   ])
-  const publicDialogueFacts = worldOutcome === ''
-    ? []
-    : approvedPublicDialogueFacts(briefEvent.data.publicDialogues ?? [], participants, visibleReply)
+  const publicDialogueHistory = approvedPublicDialogueHistory(
+    briefEvent.data.publicDialogues ?? [],
+    participants,
+    visibleReply,
+  )
   const canonicalNodes = workspace.graph.nodes.filter(node => node.lifecycle === 'canonical' && node.status !== 'dropped')
   const stageInput: RunStoryTurnPipelineInput = {
     ctx: input.ctx,
@@ -3645,22 +4332,25 @@ export async function materializeStoryTurn(input: {
       history: worldOutcome,
       changes: { characters: [], facts: [], nodes: [], edges: [] },
     }
-  } else if (briefEvent.data.hostOwnedWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
+  } else if (briefEvent.data.deterministicWorldMaterialization === true) {
     hostOwnedMaterialization = true
-    const characterNameById = new Map(participants.map(character => [character.id, character.name]))
-    const publicDialogues = (briefEvent.data.publicDialogues ?? []).flatMap(item => {
-      const characterName = characterNameById.get(item.characterId)
-      return characterName === undefined ? [] : [{ ...item, characterName }]
-    })
-    const knownBy = participants.map(character => character.id)
     update = {
       history: [
         worldOutcome,
-        ...publicDialogues.map(item => `- ${item.characterName}说：${item.dialogue}`),
+        ...publicDialogueHistory,
+      ].filter(value => value !== '').join('\n'),
+      changes: { characters: [], facts: [], nodes: [], edges: [] },
+    }
+  } else if (briefEvent.data.hostOwnedWorldDraft === true && visibleReply === briefEvent.data.finalDraft) {
+    hostOwnedMaterialization = true
+    update = {
+      history: [
+        worldOutcome,
+        ...publicDialogueHistory,
       ].filter(value => value !== '').join('\n'),
       changes: {
         characters: [],
-        facts: publicDialogues.map(item => ({ text: `${item.characterName}说：${item.dialogue}`, knownBy })),
+        facts: [],
         nodes: [],
         edges: [],
       },
@@ -3730,12 +4420,12 @@ export async function materializeStoryTurn(input: {
   const ownedPrivateFacts = privateInsightFacts(
     briefEvent.data.privateCharacterStates ?? legacyPrivateCharacterStates(visibleSections ?? []),
   )
-  if (ownedPrivateFacts.length > 0 || publicDialogueFacts.length > 0) {
+  if (ownedPrivateFacts.length > 0) {
     update = {
       ...update,
       changes: {
         ...update.changes,
-        facts: mergeFactChanges([...ownedPrivateFacts, ...publicDialogueFacts], update.changes.facts),
+        facts: mergeFactChanges(ownedPrivateFacts, update.changes.facts),
       },
     }
   }
@@ -3771,6 +4461,13 @@ export async function materializeStoryTurn(input: {
     changes: update.changes,
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
     ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
+    publicTrace: {
+      stages: storyTurnPublicStageTrace(input.agent.session.events, [
+        ...briefEvent.data.resultEventSeqs,
+        ...(continuityResultEventSeq === undefined ? [] : [continuityResultEventSeq]),
+      ]),
+      worldEvents: storyTurnPublicWorldEvents(workspace, briefEvent.data.worldEventSequences ?? []),
+    },
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-materialized', record)
   await input.ctx.sessions.flush(input.agent.session)

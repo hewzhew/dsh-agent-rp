@@ -8,6 +8,8 @@ export interface StoryVoiceEvidenceLine {
   readonly dialogue: string
   readonly owner: 'target' | 'context'
   readonly variant: 'original' | 'translation' | 'example'
+  /** Stable position shared by an original utterance and its parallel translation. */
+  readonly parallelKey?: string
 }
 
 /** One speaker-labelled line with offsets into the parsed source document. */
@@ -99,25 +101,40 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
   const seen = new Set<string>()
   const noteParts: string[] = []
   let cursor = 0
-  let translated = false
+  let variantMode: 'automatic' | 'original' | 'translation' = 'automatic'
+  let parallelGroup = 0
+  let nextParallelGroup = 1
+  let parallelIndex = 0
   for (const match of text.matchAll(LABELED_DIALOGUE_PATTERN)) {
     const index = match.index
     if (index === undefined) continue
     const prose = text.slice(cursor, index)
     noteParts.push(prose)
     for (const marker of prose.matchAll(/(原文|参考译文)\s*[：:]?/gu)) {
-      translated = marker[1] === '参考译文'
+      if (marker[1] === '原文') {
+        variantMode = 'original'
+        parallelGroup = nextParallelGroup
+        nextParallelGroup += 1
+      } else {
+        variantMode = 'translation'
+      }
+      parallelIndex = 0
     }
     cursor = index + match[0].length
     const speaker = match[1]!.trim()
     const dialogue = (match[2] ?? match[3] ?? '').trim()
-    const variant = translated
+    const variant = variantMode === 'translation'
       ? 'translation'
-      : /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(dialogue) ? 'original' : 'example'
+      : variantMode === 'original' || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(dialogue)
+        ? 'original'
+        : 'example'
+    const parallelKey = variant === 'example' ? undefined : `${String(parallelGroup)}:${String(parallelIndex)}`
+    if (variant !== 'example') parallelIndex += 1
     const line = {
       speaker,
       dialogue,
       variant,
+      ...(parallelKey === undefined ? {} : { parallelKey }),
       sourceStart: index,
       sourceEnd: index + match[0].length,
     } as const
@@ -147,6 +164,7 @@ export function attributeStoryVoiceDocument(
     dialogue: line.dialogue,
     variant: line.variant,
     owner: storyVoiceSpeakerMatches(characterNames, line.speaker) ? 'target' : 'context',
+    ...(line.parallelKey === undefined ? {} : { parallelKey: line.parallelKey }),
   }))
   return {
     orderedLines,
@@ -167,17 +185,12 @@ export function storyVoiceEvidenceUnits(parts: StoryVoiceEvidenceParts): readonl
   const translations = parts.orderedLines.filter(line => line.variant === 'translation')
   if (primary.length === 0) return translations.map(line => ({ lines: [line], owner: line.owner }))
   const unusedTranslations = new Set(translations.map((_line, index) => index))
-  const units = primary.map((line, index): StoryVoiceEvidenceUnit => {
-    const aligned = translations[index]
+  const units = primary.map((line): StoryVoiceEvidenceUnit => {
     const sameOwner = (candidate: StoryVoiceEvidenceLine): boolean => candidate.owner === line.owner
-    const sameFallbackSpeaker = (candidate: StoryVoiceEvidenceLine): boolean => line.owner === 'target'
-      || normalizeStoryVoiceSpeakerName(candidate.speaker) === normalizeStoryVoiceSpeakerName(line.speaker)
-    const translationIndex = aligned !== undefined
-      && unusedTranslations.has(index)
-      && sameOwner(aligned)
-      ? index
+    const translationIndex = line.parallelKey === undefined
+      ? -1
       : translations.findIndex((candidate, candidateIndex) => unusedTranslations.has(candidateIndex)
-        && sameOwner(candidate) && sameFallbackSpeaker(candidate))
+        && candidate.parallelKey === line.parallelKey && sameOwner(candidate))
     const translation = translationIndex < 0 ? undefined : translations[translationIndex]
     if (translation !== undefined) unusedTranslations.delete(translationIndex)
     return {

@@ -73,6 +73,13 @@ export interface AgentRpPlayWorldViewOwnerProps {
   readonly dispatchAction: (actionId: string) => void
 }
 
+/** Browser-safe read-only state supplied to one compact in-conversation world view. */
+export interface AgentRpWorldSurfaceViewOwnerProps {
+  readonly world: PlayWorldSnapshot
+  readonly characters: readonly AgentRpPlayWorldViewCharacter[]
+  readonly turn: PlayWorldTurnProjection | null
+}
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Trusted client plugins can add complete task rows without receiving Agent RP private state. */
@@ -91,7 +98,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'agent-rp.world-surface.view': {
       kind: 'keyed'
       scope: 'root'
-      owner: AgentRpPlayWorldViewOwnerProps
+      owner: AgentRpWorldSurfaceViewOwnerProps
     }
   }
 }

@@ -6,6 +6,9 @@ import type { RoleplayResourceSelection } from './roleplay-resource-catalog-prot
 /** Same-origin collection endpoint for local story workspaces. */
 export const STORY_WORKSPACES_PATH = '/api/agent-rp/story-workspaces'
 
+/** Internal non-prose input used when the director leaves the next turn unconstrained. */
+export const STORY_AUTO_ADVANCE_INPUT = '🎬 自由推进下一回合'
+
 /** Editable role assigned to one ordered output section. */
 export type StoryOutputKind = 'prose' | 'character' | 'history'
 

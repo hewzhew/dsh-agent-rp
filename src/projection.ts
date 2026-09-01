@@ -179,7 +179,8 @@ function validStoryTurnProgress(value: unknown): boolean {
   if (typeof record.workspaceId !== 'string'
     || typeof record.turn !== 'number' || !Number.isSafeInteger(record.turn) || record.turn < 0
     || typeof record.step !== 'number' || !Number.isSafeInteger(record.step) || record.step < 0
-    || (record.status !== 'running' && record.status !== 'prepared' && record.status !== 'complete')
+    || (record.status !== 'running' && record.status !== 'prepared' && record.status !== 'complete'
+      && record.status !== 'aborted' && record.status !== 'failed')
     || !Array.isArray(record.requests)) return false
   return record.requests.every(request => {
     if (typeof request !== 'object' || request === null || Array.isArray(request)) return false
@@ -212,6 +213,15 @@ function applyStoryTurnProgress(
   current: StoryTurnProgress | undefined,
   event: SessionEvent,
 ): StoryTurnProgress | undefined {
+  if (event.type === 'agent-rp/story-turn-start') {
+    return {
+      workspaceId: event.data.workspaceId,
+      turn: event.data.turn,
+      step: event.data.step,
+      status: 'running',
+      requests: [],
+    }
+  }
   if (event.type === 'agent-rp/story-stage-request') {
     const request = {
       requestId: event.data.requestId,
@@ -236,7 +246,7 @@ function applyStoryTurnProgress(
     return { ...current, status: 'running', requests }
   }
   if (event.type === 'agent-rp/story-stage-result') {
-    if (current === undefined) return current
+    if (current === undefined || !sameStoryTurn(current, event.data)) return current
     const status = event.data.result.kind === 'success' ? 'succeeded' as const : 'failed' as const
     const index = current.requests.findIndex(item => item.requestId === event.data.requestId)
     if (index < 0) return current
@@ -287,6 +297,29 @@ function applyStoryTurnProgress(
           status: 'complete',
           requests: [],
         }
+  }
+  if (event.type === 'agent-rp/story-turn-stopped') {
+    const status = event.data.outcome
+    if (current === undefined || !sameStoryTurn(current, event.data)) {
+      return {
+        workspaceId: event.data.workspaceId,
+        turn: event.data.turn,
+        step: event.data.step,
+        status,
+        requests: [],
+      }
+    }
+    return {
+      ...current,
+      status,
+      requests: current.requests.map(request => request.status !== 'running' ? request : {
+        ...request,
+        finishedAt: event.time,
+        durationMs: Math.max(0, event.time - request.startedAt),
+        status: 'failed' as const,
+        failure: status === 'aborted' ? 'aborted' as const : 'unknown' as const,
+      }),
+    }
   }
   return current
 }

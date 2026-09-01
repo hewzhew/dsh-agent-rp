@@ -1507,6 +1507,12 @@ export function storyFactKnownBy(workspace: StoryWorkspaceSnapshot, fact: StoryF
     : fact.nodeId === undefined ? [] : storyNodeKnownBy(workspace, fact.nodeId)
 }
 
+/** Return whether an old event fact only duplicates one exact public utterance. */
+export function storyFactIsDialogueTranscript(workspace: StoryWorkspaceSnapshot, fact: StoryFact): boolean {
+  return fact.source.kind === 'event'
+    && workspace.characters.some(character => fact.text.startsWith(`${character.name}说：`))
+}
+
 /** Compile completed events into the public continuity input. */
 export function storyPublicHistory(workspace: StoryWorkspaceSnapshot): string {
   return workspace.events.map(event => {
@@ -2656,7 +2662,9 @@ function compileStoryCharacterContextDocument(
 ): StoryCharacterContext {
   const character = workspace.characters.find(candidate => candidate.id === characterId)
   if (character === undefined) throw new Error(`故事工作室中没有人物 ${JSON.stringify(characterId)}`)
-  const facts = workspace.facts.filter(fact => fact.status !== 'refuted' && storyFactKnownBy(workspace, fact).includes(characterId))
+  const facts = workspace.facts.filter(fact => fact.status !== 'refuted'
+    && !storyFactIsDialogueTranscript(workspace, fact)
+    && storyFactKnownBy(workspace, fact).includes(characterId))
   const privateKnowledge = facts.map(fact => {
     const prefix = fact.status === 'uncertain' ? '[不确定] ' : ''
     const citations = workspace.citations.filter(citation => citation.target?.kind === 'fact' && citation.target.factId === fact.id)

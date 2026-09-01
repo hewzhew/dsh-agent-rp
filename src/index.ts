@@ -27,7 +27,12 @@ import {
   PlayWorldRegistry,
 } from './play-world.ts'
 import { executeStoryWorkspaceCommand, readSessionStoryWorkspaceId } from './session-story-workspace.ts'
-import { materializeStoryTurn, runStoryTurnPipeline } from './story-turn-pipeline.ts'
+import {
+  materializeStoryTurn,
+  recoverStoppedStoryTurns,
+  runStoryTurnPipeline,
+  stopStoryTurnPipeline,
+} from './story-turn-pipeline.ts'
 import { installStoryTurnCompletion } from './story-turn-completion.ts'
 import {
   ROLEPLAY_RESOURCE_CATALOG_KEY,
@@ -863,6 +868,24 @@ export function installAgentRp(
     if (turnCoordinator.currentActLane(agent) === 'artifact-handoff') {
       return ROLEPLAY_ARTIFACT_HANDOFF_PROMPT
     }
+    const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
+    if (workspaceId !== undefined) {
+      let workspaceName = '故事工作室'
+      let characterNames = ''
+      try {
+        const workspace = storyWorkspaces.get(workspaceId)
+        workspaceName = workspace.name
+        characterNames = workspace.characters.map(character => character.name).join('、')
+      } catch {
+        // A deleted workspace still needs a neutral persona while the Session reports the missing source.
+      }
+      return [
+        `你是“${workspaceName}”的回合呈现 Agent。`,
+        characterNames === '' ? '' : `参与人物：${characterNames}。`,
+        '世界规则、人物独立认知、资料检索、导演规划和正文编辑由故事工作区流水线分别处理。',
+        '只呈现当前回合已经完成的编辑稿；不继承部署默认角色，不补写未记录的规则事件，也不泄露人物私有认知或 Worker 内部材料。',
+      ].filter(text => text !== '').join('\n')
+    }
     return turnCoordinator.current(agent)?.prompt.systemPromptText ?? renderCharacterPrompt(config)
   }
   const preparePendingRoleplayPlan = (
@@ -900,20 +923,16 @@ export function installAgentRp(
   })
   ctx.on('system-prompt/assemble', async (_assembly, assemblyContext, next) => {
     const agent = assemblyContext.scope === undefined ? undefined : agentsByScope.get(assemblyContext.scope)
-    if (agent === undefined) {
-      const transformed = await next()
-      return {
-        ...transformed,
-        sections: [{ name: 'deployment:persona', text: renderCharacterPrompt(config) }],
-      }
-    }
+    if (agent === undefined) return next()
     const pending = pendingMessagesByAgent.get(agent)
+    let refreshRoleplayPersona = false
     if (pending?.stExtensionGeneration !== undefined) {
       const signal = assemblyContext.signal ?? new AbortController().signal
       const barrier = await pending.stExtensionGeneration.wait(String(agent.session.id), pending.turn, signal)
       if (barrier.outcome === 'applied') {
         try {
           preparePendingRoleplayPlan(agent, pending)
+          refreshRoleplayPersona = true
         } catch (error: unknown) {
           ctx.logger.warn(`agent-rp: installed ST extension prompt refresh failed: ${String(error)}`)
         }
@@ -935,7 +954,11 @@ export function installAgentRp(
       : undefined
     return {
       ...transformed,
-      sections: [{ name: 'deployment:persona', text: roleplayPersonaText(agent) }],
+      sections: refreshRoleplayPersona
+        ? transformed.sections.map(section => section.name === 'deployment:persona'
+          ? { ...section, text: roleplayPersonaText(agent) }
+          : section)
+        : transformed.sections,
       contexts: transformed.contexts.map(context => {
         if (context.name === 'agent-rp:memory') {
           return { ...context, text: plan?.memory.contextText ?? '' }
@@ -988,16 +1011,23 @@ export function installAgentRp(
       worldbookCharacters?.register(sessionId, resolveCharacter) ?? (() => {})))
     queueMicrotask(() => {
       if (!settlementRuntimeActive || agentsByScope.get(agent) !== agent) return
-      try {
-        recoverSessionRoleplayTurns({
-          session: agent.session,
-          deployment: config,
-          templateEngineAvailable: options.ejsTemplateEngine !== undefined,
-          ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
-        })
-      } catch (error: unknown) {
-        ctx.logger.warn(`agent-rp: turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
+      void (async () => {
+        try {
+          await recoverStoppedStoryTurns({ ctx, agent })
+        } catch (error: unknown) {
+          ctx.logger.warn(`agent-rp: story turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        try {
+          recoverSessionRoleplayTurns({
+            session: agent.session,
+            deployment: config,
+            templateEngineAvailable: options.ejsTemplateEngine !== undefined,
+            ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
+          })
+        } catch (error: unknown) {
+          ctx.logger.warn(`agent-rp: turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      })()
     })
   })
   ctx.on('agent/session-start', ({ agent, source }) => {
@@ -1067,9 +1097,9 @@ export function installAgentRp(
     }
     if (step === 1) {
       storyBriefByAgent.delete(agent)
-      try {
-        const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
-        if (workspaceId !== undefined) {
+      const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
+      if (workspaceId !== undefined) {
+        try {
           const brief = await runStoryTurnPipeline({
             ctx,
             agent,
@@ -1086,9 +1116,21 @@ export function installAgentRp(
             finalDraft: brief.finalDraft,
             modelContext: brief.modelContext,
           })
+        } catch (error: unknown) {
+          try {
+            await stopStoryTurnPipeline({
+              ctx,
+              agent,
+              workspaceId,
+              turn,
+              step,
+              outcome: signal.aborted ? 'aborted' : 'failed',
+            })
+          } catch (stopError: unknown) {
+            ctx.logger.warn(`agent-rp: story pipeline terminal state could not be saved: ${stopError instanceof Error ? stopError.message : String(stopError)}`)
+          }
+          ctx.logger.warn(`agent-rp: story pipeline skipped: ${error instanceof Error ? error.message : String(error)}`)
         }
-      } catch (error: unknown) {
-        ctx.logger.warn(`agent-rp: story pipeline skipped: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
     return decision
@@ -1206,17 +1248,24 @@ export function installAgentRp(
     turnCoordinator.completeTurn(agent, event.data.turn)
     queueMicrotask(() => {
       if (!settlementRuntimeActive) return
-      try {
-        recoverSessionRoleplayTurns({
-          session,
-          deployment: config,
-          turn: event.data.turn,
-          templateEngineAvailable: options.ejsTemplateEngine !== undefined,
-          ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
-        })
-      } catch (error: unknown) {
-        ctx.logger.warn(`agent-rp: turn settlement failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
+      void (async () => {
+        try {
+          await recoverStoppedStoryTurns({ ctx, agent })
+        } catch (error: unknown) {
+          ctx.logger.warn(`agent-rp: story turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        try {
+          recoverSessionRoleplayTurns({
+            session,
+            deployment: config,
+            turn: event.data.turn,
+            templateEngineAvailable: options.ejsTemplateEngine !== undefined,
+            ...(runtimeExtensions === undefined ? {} : { extensions: runtimeExtensions }),
+          })
+        } catch (error: unknown) {
+          ctx.logger.warn(`agent-rp: turn settlement failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      })()
     })
   })
   ctx.systemPrompt.context({ name: 'sandbox:policy', order: 0, text: '' })

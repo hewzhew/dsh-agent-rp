@@ -432,6 +432,7 @@ test('compiles inherited scene knowledge while preserving private fact overrides
   const aliceFactId = createStoryFactId()
   const bobFactId = createStoryFactId()
   const sharedFactId = createStoryFactId()
+  const dialogueFactId = createStoryFactId()
   const sourceId = createStorySourceId()
   const workspace = store.save({
     ...editable(created),
@@ -503,6 +504,15 @@ test('compiles inherited scene knowledge while preserving private fact overrides
         knownBy: [bobId],
         source: { kind: 'event', eventId, evidence: '柏舟把地图折进袖口。' },
       },
+      {
+        id: dialogueFactId,
+        text: '阿梨说：“雨停了。”',
+        status: 'asserted',
+        audience: 'public',
+        knowledgeMode: 'override',
+        knownBy: [aliceId, bobId],
+        source: { kind: 'event', eventId, evidence: '阿梨说：“雨停了。”' },
+      },
     ],
     sources: [{
       id: sourceId,
@@ -548,10 +558,12 @@ test('compiles inherited scene knowledge while preserving private fact overrides
   assert.doesNotMatch(compiled.text, /所有人都看见雨停了/u)
   assert.doesNotMatch(compiled.text, /柏舟私密/u)
   assert.doesNotMatch(compiled.text, /柏舟独自拿走地图/u)
+  assert.doesNotMatch(compiled.text, /阿梨说：“雨停了。”/u)
   assert.doesNotMatch(compiled.text, /桥会断/u)
   assert.match(bobCompiled.text, /桥边的雨已经停了/u)
   assert.match(bobCompiled.text, /柏舟私密：他藏起了地图/u)
   assert.doesNotMatch(bobCompiled.text, /阿梨私密/u)
+  assert.doesNotMatch(bobCompiled.text, /阿梨说：“雨停了。”/u)
 })
 
 test('keeps suggested graph objects out of formal director and current-scene inputs', (context) => {

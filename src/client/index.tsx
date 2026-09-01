@@ -50,7 +50,8 @@ import { StoryWorkspaceEditor } from './story-workspace-editor.tsx'
 import { createStoryWorkspaceNavigation, type StoryWorkspaceNavigation } from './story-workspace-navigation.ts'
 import { openStoryWorkspaceSessionFromHostWorkspace } from './story-workspace-launch-source.ts'
 import { installStoryWorkspaceSessionCard } from './story-workspace-session-card.tsx'
-import { StoryWorldSurface } from './story-world-surface.tsx'
+import { installStoryWorkspaceStageCard } from './story-workspace-stage-card.tsx'
+import { StoryDirectorDock, StoryWorldSurface } from './story-world-surface.tsx'
 
 interface SidebarDestinationOwnerProps {
   readonly wide: boolean
@@ -65,6 +66,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 import { DEFAULT_AGENT_RP_CHARACTER_NAME, type AgentRpProjection } from '../projection-types.ts'
+import { STORY_AUTO_ADVANCE_INPUT } from '../story-workspace-protocol.ts'
 import { resolveLegacySidebarWidth } from './sidebar-slot-compat.ts'
 import { resolveRoleplayAvatarSource } from './avatar-source.ts'
 import { chatMigrationPermissionOwnerId } from './chat-migration.ts'
@@ -580,6 +582,7 @@ interface PreparedChatMigration {
 type HeaderProps = PropsRuntime<'conversation.session.header.actions'> & {
   readonly runtimeDiagnostics: AgentRpRuntimeDiagnosticRegistry
   readonly workspaceSettings: WorkspaceSettingsSource
+  readonly storyWorkspaceNavigation: StoryWorkspaceNavigation
   readonly loadAvatar: (attachmentId: string) => Promise<string | undefined>
   readonly renameSession: (sessionId: SessionId, title: string) => Promise<void>
   readonly configurePreset: (sessionId: SessionId, request: PresetConfigurationRequest) => Promise<void>
@@ -1314,6 +1317,11 @@ const generationButtonStyle = {
 const headerMenuItemStyle = {
   background: 'transparent', border: 0, borderRadius: '7px', color: 'inherit', cursor: 'pointer',
   font: 'inherit', fontSize: '12px', padding: '8px 9px', textAlign: 'left', whiteSpace: 'nowrap',
+} as const
+
+const headerMenuHeadingStyle = {
+  fontSize: '9px', fontWeight: 650, letterSpacing: '.08em', margin: '7px 9px 2px', opacity: .38,
+  textTransform: 'uppercase',
 } as const
 
 function initials(name: string): string {
@@ -2115,6 +2123,12 @@ const agentRpResponsiveStyle = `
     margin-right: 0 !important;
     width: 100%;
   }
+  .agent-rp-header[data-story-session='true'] {
+    flex: 0 0 auto !important;
+    margin-left: auto !important;
+    width: auto;
+  }
+  .agent-rp-header[data-story-session='true'] .agent-rp-header-stage small { display: none; }
   .agent-rp-header-meta { flex: 1 1 auto; }
   .agent-rp-header-kind,
   .agent-rp-header-capabilities,
@@ -4323,7 +4337,7 @@ function RoleplayHeader({
   startCharacterSession, exportChat,
   listMemory, manageMemory, manageState, manageTurnMode,
   listPresets, listPersonas, savePersona, deletePersona, applyPersona, loadModelCapabilities, runtimeDiagnostics,
-  workspaceSettings,
+  workspaceSettings, storyWorkspaceNavigation,
 }: HeaderProps) {
   const summary = useSessions(state => state.byId[sessionId])
   const projected = useProjection('agentRp')
@@ -4362,6 +4376,7 @@ function RoleplayHeader({
   const settingsRef = useRef<HTMLDetailsElement | null>(null)
   const settingsSummaryRef = useRef<HTMLElement | null>(null)
   const settingsMenuRef = useRef<HTMLDivElement | null>(null)
+  const headerStoryWorkspaceId = projection?.storyWorkspaceId ?? projection?.storyTurn?.workspaceId
   useEffect(() => {
     const openSessionTools = (event: Event): void => {
       if (!(event instanceof CustomEvent) || event.detail !== String(sessionId)) return
@@ -4398,11 +4413,11 @@ function RoleplayHeader({
       .filter((element): element is HTMLElement => element !== root && element instanceof HTMLElement)
     const secondaryTabs = Array.from(header.querySelectorAll<HTMLElement>('[role="tablist"] [role="tab"]')).slice(1)
     return hideWhileMounted([
-      header.querySelector<HTMLElement>('nav[aria-label]'),
+      ...(headerStoryWorkspaceId === undefined ? [header.querySelector<HTMLElement>('nav[aria-label]')] : []),
       ...actionSiblings,
       ...secondaryTabs,
     ])
-  }, [projection !== undefined, viewMode])
+  }, [headerStoryWorkspaceId, projection !== undefined, viewMode])
   if (projection === undefined) return null
   const displayName = roleplayDisplayName(summary, projection)
   const displayProjection = displayName === projection.characterName
@@ -4446,45 +4461,33 @@ function RoleplayHeader({
   }))
   const settingsAnchor = settingsSummaryRef.current?.getBoundingClientRect()
   return <>
-    <div ref={rootRef} className="agent-rp-header" data-agent-rp-header style={{ alignItems: 'center', display: 'flex', gap: '10px', marginRight: 'auto', minWidth: 0 }}>
-      <Avatar projection={displayProjection} loadAvatar={loadAvatar}
-        {...(storedCharacterDetail === undefined ? {} : { libraryAvatarAvailable: storedCharacterDetail.avatarAvailable })}
-        {...(expressionUrl === undefined ? {} : { imageUrl: expressionUrl })} />
-      <div className="agent-rp-header-meta" style={{ minWidth: 0 }}>
-        <div style={{ alignItems: 'baseline', display: 'flex', gap: '8px', minWidth: 0 }}>
-          <strong style={{ fontSize: '15px', fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {displayName}
-          </strong>
-          <span className="agent-rp-header-kind" style={{ fontSize: '11px', opacity: 0.48, whiteSpace: 'nowrap' }}>{imported ? '已迁移对话' : '角色对话'}</span>
+    <div ref={rootRef} className="agent-rp-header" data-agent-rp-header data-story-session={headerStoryWorkspaceId === undefined ? undefined : 'true'}
+      style={{ alignItems: 'center', display: 'flex', gap: '8px', marginLeft: headerStoryWorkspaceId === undefined ? undefined : 'auto', marginRight: headerStoryWorkspaceId === undefined ? 'auto' : 0, minWidth: 0 }}>
+      {headerStoryWorkspaceId === undefined ? <>
+        <Avatar projection={displayProjection} loadAvatar={loadAvatar}
+          {...(storedCharacterDetail === undefined ? {} : { libraryAvatarAvailable: storedCharacterDetail.avatarAvailable })}
+          {...(expressionUrl === undefined ? {} : { imageUrl: expressionUrl })} />
+        <div className="agent-rp-header-meta" style={{ minWidth: 0 }}>
+          <div style={{ alignItems: 'baseline', display: 'flex', gap: '8px', minWidth: 0 }}>
+            <strong style={{ fontSize: '14px', fontWeight: 620, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayName}
+            </strong>
+            <span className="agent-rp-header-kind" style={{ fontSize: '10px', opacity: 0.44, whiteSpace: 'nowrap' }}>{imported ? '已迁移' : '角色会话'}</span>
+          </div>
+          <div className="agent-rp-header-capabilities" style={{ fontSize: '11px', marginTop: '1px', opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {characterCapabilitySummary(projection)}
+          </div>
         </div>
-        <div className="agent-rp-header-capabilities" style={{ fontSize: '12px', marginTop: '2px', opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {characterCapabilitySummary(projection)}
-        </div>
-      </div>
-      <button className="agent-rp-header-primary-action" type="button" onClick={() => { setSettingsOpen(false); setOpen(true) }} style={{
-        background: 'transparent', border: '1px solid var(--dsw-alias-border-l2, #444)', borderRadius: '8px',
-        color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '12px', marginLeft: '8px', padding: '6px 10px',
-      }}>角色信息</button>
-      <button className="agent-rp-header-primary-action" type="button" data-agent-rp-action="open-character-library"
-        data-agent-rp-source-session={sessionId}
-        onClick={() => { setSettingsOpen(false); setLibraryOpen(true) }} style={{
-        background: `color-mix(in srgb, ${color} 10%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
-        borderRadius: '8px', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '12px', padding: '6px 10px',
-      }}>角色库</button>
-      <button className="agent-rp-header-primary-action" type="button" onClick={() => { setSettingsOpen(false); setPersonaOpen(true) }} style={{
-        background: projection.persona === undefined ? 'transparent' : `color-mix(in srgb, ${color} 12%, transparent)`,
-        border: `1px solid ${projection.persona === undefined ? 'var(--dsw-alias-border-l2, #444)' : `color-mix(in srgb, ${color} 34%, transparent)`}`,
-        borderRadius: '8px', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '12px', padding: '6px 10px',
-      }}>身份{projection.persona === undefined ? '' : ` · ${projection.persona.name}`}</button>
+      </> : null}
       <details className="agent-rp-header-settings" ref={settingsRef} open={settingsOpen}
         data-agent-rp-surface="session-settings" data-agent-rp-surface-state={settingsOpen ? 'open' : 'closed'}
         onToggle={event => { setSettingsOpen(event.currentTarget.open) }} style={{ position: 'relative' }}>
         <summary ref={settingsSummaryRef} role="button" aria-expanded={settingsOpen} aria-haspopup="menu"
           data-agent-rp-action="toggle-session-settings" style={{
-          background: projection.worldInfo.activeCount > 0 ? `color-mix(in srgb, ${color} 10%, transparent)` : 'transparent',
-          border: '1px solid var(--dsw-alias-border-l2, #444)', borderRadius: '8px', color: 'inherit', cursor: 'pointer',
-          fontSize: '12px', listStyle: 'none', padding: '6px 10px', whiteSpace: 'nowrap',
-        }}>会话设置</summary>
+          background: 'transparent', border: '1px solid var(--dsw-alias-border-l2, #444)', borderRadius: '8px',
+          color: 'inherit', cursor: 'pointer', fontSize: '15px', lineHeight: 1, listStyle: 'none', padding: '7px 10px',
+          whiteSpace: 'nowrap',
+        }} aria-label="打开本局菜单">•••</summary>
       </details>
       {settingsOpen && createPortal(<div ref={settingsMenuRef} className="agent-rp-session-menu"
         role="menu" aria-label="角色会话设置" data-agent-rp-native-back-layer style={{
@@ -4495,20 +4498,29 @@ function RoleplayHeader({
           right: `${Math.max(8, window.innerWidth - (settingsAnchor?.right ?? window.innerWidth - 8))}px`,
           top: `${Math.min(window.innerHeight - 180, (settingsAnchor?.bottom ?? 8) + 7)}px`, zIndex: 1210,
         }}>
-          <button className="agent-rp-mobile-only" type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setOpen(true) }} style={headerMenuItemStyle}>角色信息</button>
-          <button className="agent-rp-mobile-only" type="button" role="menuitem" data-agent-rp-action="open-character-library"
-            data-agent-rp-source-session={sessionId}
-            onClick={() => { setSettingsOpen(false); setLibraryOpen(true) }} style={headerMenuItemStyle}>角色库</button>
-          <button className="agent-rp-mobile-only" type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setPersonaOpen(true) }} style={headerMenuItemStyle}>你的身份</button>
-          {statusSource !== undefined && <button className="agent-rp-mobile-only" type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setStatusOpen(true) }} style={headerMenuItemStyle}>当前状态{projection.mvu?.lastError === undefined ? '' : ' · 更新失败'}</button>}
-          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setMigrationOpen(true) }} style={headerMenuItemStyle}>迁移聊天</button>
-          <button type="button" role="menuitem" disabled={exporting} onClick={() => {
-            setExporting(true)
-            setExportError(undefined)
-            void exportChat(sessionId).then(() => { setSettingsOpen(false) }, reason => {
-              setExportError(reason instanceof Error ? reason.message : String(reason))
-            }).finally(() => { setExporting(false) })
-          }} style={headerMenuItemStyle}>{exporting ? '正在导出…' : '导出聊天'}</button>
+          <p style={headerMenuHeadingStyle}>本局</p>
+          {headerStoryWorkspaceId !== undefined && <button type="button" role="menuitem" onClick={() => {
+            setSettingsOpen(false)
+            storyWorkspaceNavigation.request({ workspaceId: headerStoryWorkspaceId, surface: 'world' })
+          }} style={headerMenuItemStyle}>当前场景</button>}
+          {headerStoryWorkspaceId === undefined
+            ? <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setOpen(true) }}
+              style={headerMenuItemStyle}>人物档案 · {displayName}</button>
+            : <button type="button" role="menuitem" onClick={() => {
+              setSettingsOpen(false)
+              storyWorkspaceNavigation.request({ workspaceId: headerStoryWorkspaceId, surface: 'studio' })
+            }} style={headerMenuItemStyle}>场地资料与人物</button>}
+          {statusSource !== undefined && <button type="button" role="menuitem" onClick={() => {
+            setSettingsOpen(false); setStatusOpen(true)
+          }} style={headerMenuItemStyle}>人物状态{projection.mvu?.lastError === undefined ? '' : ' · 更新失败'}</button>}
+          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setMemoryOpen(true) }}
+            style={headerMenuItemStyle}>人物记忆</button>
+          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setStateOpen(true) }}
+            style={headerMenuItemStyle}>本局状态{projection.nativeStates.length === 0 ? '' : ` · ${projection.nativeStates.length}`}</button>
+          <button type="button" role="menuitem" data-agent-rp-action="open-world-info-manager"
+            onClick={() => { setSettingsOpen(false); setWorldInfoOpen(true) }} style={headerMenuItemStyle}>
+            世界资料{projection.worldInfo.activeCount === 0 ? '' : ` · ${projection.worldInfo.activeCount}`}
+          </button>
           <button type="button" role="menuitem"
             disabled={turnModeSaving || projection.hostCapabilities?.sessionEvents !== true}
             aria-label="切换角色回合方式"
@@ -4531,31 +4543,35 @@ function RoleplayHeader({
             当前启动的 DSH Host 缺少安全插件事件能力；仅更新版本号可能无效，请从 Agent RP 安装器创建的专用入口启动。{' '}
             <a href="https://github.com/hewzhew/dsh-agent-rp#安装" target="_blank" rel="noreferrer" style={{ color, fontWeight: 600 }}>查看修复方式</a>
           </p>}
-          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setMemoryOpen(true) }} style={headerMenuItemStyle}>记忆</button>
-          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setStateOpen(true) }} style={headerMenuItemStyle}>
-            状态数据{projection.nativeStates.length === 0 ? '' : ` · ${projection.nativeStates.length}`}
-          </button>
+          <p style={headerMenuHeadingStyle}>资源与兼容</p>
+          <button type="button" role="menuitem" data-agent-rp-action="open-character-library"
+            data-agent-rp-source-session={sessionId}
+            onClick={() => { setSettingsOpen(false); setLibraryOpen(true) }} style={headerMenuItemStyle}>角色资源库</button>
+          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setPersonaOpen(true) }}
+            style={headerMenuItemStyle}>玩家身份{projection.persona === undefined ? '' : ` · ${projection.persona.name}`}</button>
           <button type="button" role="menuitem" data-agent-rp-action="open-preset-manager"
-            onClick={() => { setSettingsOpen(false); setPresetOpen(true) }} style={headerMenuItemStyle}>预设</button>
-          <button type="button" role="menuitem" data-agent-rp-action="open-world-info-manager"
-            onClick={() => { setSettingsOpen(false); setWorldInfoOpen(true) }} style={headerMenuItemStyle}>
-            世界书{projection.worldInfo.activeCount === 0 ? '' : ` · ${projection.worldInfo.activeCount}`}
-          </button>
+            onClick={() => { setSettingsOpen(false); setPresetOpen(true) }} style={headerMenuItemStyle}>提示预设与正则</button>
+          <button type="button" role="menuitem" onClick={() => { setSettingsOpen(false); setMigrationOpen(true) }}
+            style={headerMenuItemStyle}>迁移 SillyTavern 聊天</button>
+          <button type="button" role="menuitem" disabled={exporting} onClick={() => {
+            setExporting(true)
+            setExportError(undefined)
+            void exportChat(sessionId).then(() => { setSettingsOpen(false) }, reason => {
+              setExportError(reason instanceof Error ? reason.message : String(reason))
+            }).finally(() => { setExporting(false) })
+          }} style={headerMenuItemStyle}>{exporting ? '正在导出…' : '导出聊天记录'}</button>
+          <p style={headerMenuHeadingStyle}>显示</p>
           <button type="button" role="menuitem" data-agent-rp-action="toggle-debug-view"
             aria-pressed={viewMode === 'debug'} onClick={() => {
             setSettingsOpen(false)
             setRoleplayViewMode(sessionId, viewMode === 'immersive' ? 'debug' : 'immersive')
-          }} style={headerMenuItemStyle}>{viewMode === 'debug' ? '返回沉浸视图' : '打开调试视图 · 工具与上下文'}</button>
+          }} style={headerMenuItemStyle}>{viewMode === 'debug' ? '返回游玩视图' : '查看工具与执行细节'}</button>
           {viewMode === 'immersive' && <p style={{
             fontSize: '11px', lineHeight: 1.45, margin: '-2px 9px 4px', maxWidth: '230px', opacity: .5,
-          }}>显示模型思考、工具调用，以及其他插件提供的会话页签。</p>}
+          }}>切换后显示工具调用、上下文和其他插件提供的会话页签。</p>}
           {exportError !== undefined && <p role="alert" style={{ color: 'var(--dsw-alias-state-danger, #d64d5f)', fontSize: '11px', lineHeight: 1.45, margin: '4px 8px 3px', maxWidth: '240px' }}>{exportError}</p>}
           {turnModeError !== undefined && <p role="alert" style={{ color: 'var(--dsw-alias-state-danger, #d64d5f)', fontSize: '11px', lineHeight: 1.45, margin: '4px 8px 3px', maxWidth: '240px' }}>{turnModeError}</p>}
         </div>, document.body)}
-      {statusSource !== undefined && <button className="agent-rp-header-primary-action" type="button" onClick={() => { setStatusOpen(true) }} style={{
-        background: `color-mix(in srgb, ${color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 34%, transparent)`,
-        borderRadius: '8px', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: '12px', padding: '6px 10px',
-      }}>当前状态{projection.mvu?.lastError === undefined ? '' : ' · 更新失败'}</button>}
     </div>
     {migrationOpen && <SillyTavernImportDialog
       runtimeDiagnostics={runtimeDiagnostics}
@@ -11391,6 +11407,7 @@ function roleplayComposerDockComponent(
   runTavernTrigger: RunTavernTrigger,
   runPresetConfiguration: RunPresetConfiguration,
   storyWorkspaceNavigation: StoryWorkspaceNavigation,
+  startFreshStorySession: (sourceSessionId: SessionId, workspaceId: string) => Promise<void>,
 ): (props: ComposerDockProps) => JSX.Element | null {
   return function RoleplayComposerDock({
     input, inputActions, renderSlot, sessionId, useChat, useProjection, useSessions, useSession,
@@ -11399,6 +11416,7 @@ function roleplayComposerDockComponent(
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
   const chat = useChat(state => state)
+  const sessionRunning = useSession(state => state.running)
   const agentRpSettings = useSyncExternalStore(
     workspaceSettings.subscribe,
     workspaceSettings.getSnapshot,
@@ -11425,6 +11443,7 @@ function roleplayComposerDockComponent(
   approvedCardNativeIdentitiesRef.current = approvedCardNativeIdentities
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [statusPanelHost, setStatusPanelHost] = useState<HTMLElement>()
+  const [worldSurfaceHost, setWorldSurfaceHost] = useState<HTMLElement>()
   const cardExternalWindowBrokers = useRef(new Map<string, ExternalWindowBroker>())
   const cardFramesByTokenRef = useRef(new Map<string, HTMLIFrameElement>())
   const cardFrameDiagnosticSourcesRef = useRef(new Map<string, AgentRpRuntimeDiagnosticSource>())
@@ -11496,7 +11515,13 @@ function roleplayComposerDockComponent(
   const backgroundChoice = useRoleplayBackground(sessionId)
   const background = selectedBackground(characterDetail, backgroundChoice)
   const displayName = projection === undefined ? undefined : roleplayDisplayName(summary, projection)
-  const placeholder = displayName === undefined ? undefined : '写下你的回应…'
+  const storyWorkspaceId = projection?.storyWorkspaceId ?? projection?.storyTurn?.workspaceId
+  const placeholder = displayName === undefined ? undefined
+    : storyWorkspaceId === undefined ? '写下你的回应…' : '给人物一个方向，或留空让他们自行推进…'
+  const storyRefreshKey = projection?.storyTurn === undefined
+    ? 'idle'
+    : `${projection.storyTurn.turn}:${projection.storyTurn.step}:${projection.storyTurn.status}:${projection.storyTurn.requests
+      .map(request => `${request.requestId}:${request.status}:${request.durationMs ?? ''}`).join('|')}`
   const transcriptSignature = projection?.tavern?.messages.map(message => `${message.seq}\u0000${message.text}`).join('\u0001')
   const onDisplayOverride = useCallback((_scriptId: string, messageId: number, value: string): void => {
     setDisplayOverrides(current => new Map(current).set(messageId, value))
@@ -11535,7 +11560,7 @@ function roleplayComposerDockComponent(
     if (dock == null || inputRoot == null) return
     const host = document.createElement('div')
     host.dataset.agentRpStatusPanelDock = 'true'
-    host.style.cssText = 'box-sizing:border-box;min-width:0;padding:0 0 8px;width:100%;'
+    host.style.cssText = 'box-sizing:border-box;min-width:0;padding:0;width:100%;'
     const card = inputRoot.querySelector<HTMLElement>('[data-composer-card]')
     inputRoot.insertBefore(host, card ?? dock)
     setStatusPanelHost(host)
@@ -11544,6 +11569,44 @@ function roleplayComposerDockComponent(
       host.remove()
     }
   }, [sessionId])
+  useLayoutEffect(() => {
+    const scroll = rootRef.current?.closest<HTMLElement>('[data-conversation-scroll]')
+    if (scroll == null) return
+    const host = document.createElement('div')
+    host.dataset.agentRpWorldStageHost = 'true'
+    scroll.insertBefore(host, scroll.firstChild)
+    setWorldSurfaceHost(host)
+    return () => {
+      setWorldSurfaceHost(current => current === host ? undefined : current)
+      host.remove()
+    }
+  }, [sessionId])
+  useLayoutEffect(() => {
+    const scroll = rootRef.current?.closest<HTMLElement>('[data-conversation-scroll]')
+    if (scroll == null || storyWorkspaceId === undefined || viewMode === 'debug') return
+    const hidden = new Map<HTMLElement, { readonly display: string; readonly priority: string }>()
+    const refresh = (): void => {
+      for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="agent-rp-story-workspace-launch"]')) {
+        if (!hidden.has(item)) {
+          hidden.set(item, {
+            display: item.style.getPropertyValue('display'),
+            priority: item.style.getPropertyPriority('display'),
+          })
+        }
+        item.style.setProperty('display', 'none', 'important')
+      }
+    }
+    refresh()
+    const observer = new MutationObserver(refresh)
+    observer.observe(scroll, { childList: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      for (const [item, previous] of hidden) {
+        if (previous.display === '') item.style.removeProperty('display')
+        else item.style.setProperty('display', previous.display, previous.priority)
+      }
+    }
+  }, [storyWorkspaceId, viewMode])
   useLayoutEffect(() => {
     const scroll = rootRef.current?.closest<HTMLElement>('[data-conversation-scroll]')
     if (scroll == null || background === undefined || projection?.avatarLibraryId === undefined || viewMode !== 'immersive') return
@@ -11618,6 +11681,11 @@ function roleplayComposerDockComponent(
     const inputRoot = dock?.parentElement
     if (dock == null || inputRoot == null || placeholder === undefined) return
     const managedTextareas = new Map<HTMLTextAreaElement, string | null>()
+    const managedComposerInputs = new Map<HTMLElement, {
+      readonly ariaLabel: string | null
+      readonly dataPlaceholder: string | null
+    }>()
+    const managedComposerPlaceholders = new Map<HTMLElement, string | null>()
     const hiddenControls = new Map<HTMLElement, { display: string; priority: string }>()
     const hide = (element: Element): void => {
       if (!(element instanceof HTMLElement) || hiddenControls.has(element)) return
@@ -11633,6 +11701,26 @@ function roleplayComposerDockComponent(
       if (textarea != null) {
         if (!managedTextareas.has(textarea)) managedTextareas.set(textarea, textarea.getAttribute('placeholder'))
         if (textarea.getAttribute('placeholder') !== placeholder) textarea.setAttribute('placeholder', placeholder)
+      }
+      const composerInput = card?.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+      if (composerInput != null) {
+        if (!managedComposerInputs.has(composerInput)) {
+          managedComposerInputs.set(composerInput, {
+            ariaLabel: composerInput.getAttribute('aria-label'),
+            dataPlaceholder: composerInput.getAttribute('data-placeholder'),
+          })
+        }
+        if (composerInput.getAttribute('data-placeholder') !== placeholder) {
+          composerInput.setAttribute('data-placeholder', placeholder)
+        }
+        if (composerInput.getAttribute('aria-label') !== placeholder) composerInput.setAttribute('aria-label', placeholder)
+      }
+      const composerPlaceholder = card?.querySelector<HTMLElement>('[data-composer-placeholder]')
+      if (composerPlaceholder != null) {
+        if (!managedComposerPlaceholders.has(composerPlaceholder)) {
+          managedComposerPlaceholders.set(composerPlaceholder, composerPlaceholder.textContent)
+        }
+        if (composerPlaceholder.textContent !== placeholder) composerPlaceholder.textContent = placeholder
       }
       if (viewMode === 'debug') return
       const row = card?.lastElementChild
@@ -11651,7 +11739,12 @@ function roleplayComposerDockComponent(
     if (viewMode !== 'debug') dock.dataset.agentRpInput = ''
     refreshComposer()
     const observer = new MutationObserver(refreshComposer)
-    observer.observe(inputRoot, { attributeFilter: ['placeholder'], attributes: true, childList: true, subtree: true })
+    observer.observe(inputRoot, {
+      attributeFilter: ['aria-label', 'data-placeholder', 'placeholder'],
+      attributes: true,
+      childList: true,
+      subtree: true,
+    })
     return () => {
       observer.disconnect()
       for (const [element, { display, priority }] of hiddenControls) {
@@ -11663,6 +11756,19 @@ function roleplayComposerDockComponent(
         if (textarea.getAttribute('placeholder') !== placeholder) continue
         if (previousPlaceholder === null) textarea.removeAttribute('placeholder')
         else textarea.setAttribute('placeholder', previousPlaceholder)
+      }
+      for (const [composerInput, previous] of managedComposerInputs) {
+        if (composerInput.getAttribute('data-placeholder') === placeholder) {
+          if (previous.dataPlaceholder === null) composerInput.removeAttribute('data-placeholder')
+          else composerInput.setAttribute('data-placeholder', previous.dataPlaceholder)
+        }
+        if (composerInput.getAttribute('aria-label') === placeholder) {
+          if (previous.ariaLabel === null) composerInput.removeAttribute('aria-label')
+          else composerInput.setAttribute('aria-label', previous.ariaLabel)
+        }
+      }
+      for (const [composerPlaceholder, previous] of managedComposerPlaceholders) {
+        if (composerPlaceholder.textContent === placeholder) composerPlaceholder.textContent = previous
       }
     }
   }, [placeholder, viewMode])
@@ -12193,11 +12299,24 @@ function roleplayComposerDockComponent(
         })
       }
       if (activeViewMode === 'immersive') {
+        const storySession = activeProjection.storyWorkspaceId !== undefined
+          || activeProjection.storyTurn?.workspaceId !== undefined
+        for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="context"]')) {
+          if (storySession) restoreTranscriptDetail(item)
+          else hideTranscriptDetail(item)
+        }
         for (const item of scroll.querySelectorAll<HTMLElement>(
-          '[data-chat-flow-kind="context"], [data-chat-flow-kind="tool-call"], '
-          + '[data-chat-flow-kind="manual-compaction"], [data-chat-flow-kind="compaction"], '
+          '[data-chat-flow-kind="manual-compaction"], [data-chat-flow-kind="compaction"], '
           + '[data-chat-flow-kind="model-retry"], [data-chat-flow-kind="unknown"]',
         )) hideTranscriptDetail(item)
+        for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="system-prompt"]')) {
+          if (storySession) hideTranscriptDetail(item)
+          else restoreTranscriptDetail(item)
+        }
+        for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="tool-call"]')) {
+          if (storySession) restoreTranscriptDetail(item)
+          else hideTranscriptDetail(item)
+        }
         for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="command"]')) {
           if (item.querySelector('[data-agent-rp-image-card]') === null) hideTranscriptDetail(item)
           else restoreTranscriptDetail(item)
@@ -12217,6 +12336,12 @@ function roleplayComposerDockComponent(
           showLegacyConversationNotice(item)
         }
         for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="user"]')) {
+          const text = item.textContent?.trim()
+          if (storySession && (text?.startsWith('继续。') === true
+            || text?.startsWith(STORY_AUTO_ADVANCE_INPUT) === true)) {
+            hideTranscriptDetail(item)
+            continue
+          }
           if (item.dataset.agentRpSetupCollapsed === 'true'
             || !item.textContent?.includes('🎬 档案提交完毕指令：')) continue
           const content = item.firstElementChild as HTMLElement | null
@@ -12354,7 +12479,6 @@ function roleplayComposerDockComponent(
   const worldInfoBooks = projection?.worldInfo.books ?? []
   const worldEngineResources = summarizeWorldEngineResources(worldInfoBooks)
   const worldEngineReasons = worldEngineResources.reasons
-  const storyWorkspaceId = projection?.storyWorkspaceId ?? projection?.storyTurn?.workspaceId
   useAgentRpRuntimeDiagnosticContribution(
     runtimeDiagnostics,
     'roleplay-session',
@@ -12479,20 +12603,30 @@ function roleplayComposerDockComponent(
     data-agent-rp-world-engine-template-unsupported={worldEngineFailures.templateUnsupported}
     data-agent-rp-world-engine-template-error={worldEngineFailures.templateError}
     style={{ alignItems: 'center', display: 'flex', gap: '4px', minWidth: 0 }}>
-    {statusPanelHost !== undefined && createPortal(<>
-      {storyWorkspaceId !== undefined && <StoryWorldSurface
+    {worldSurfaceHost !== undefined && storyWorkspaceId !== undefined && createPortal(<StoryWorldSurface
         workspaceId={storyWorkspaceId}
-        refreshKey={`${projection.storyTurn?.turn ?? 0}:${projection.storyTurn?.step ?? 0}:${projection.storyTurn?.status ?? 'idle'}`}
-        draft={input.draft}
-        setDraft={inputActions.setDraft}
+        refreshKey={storyRefreshKey}
+        {...(projection.storyTurn === undefined ? {} : { progress: projection.storyTurn })}
         navigation={storyWorkspaceNavigation}
         renderPlayWorldView={(moduleId, owner, fallback) => renderSlot(
           AGENT_RP_WORLD_SURFACE_VIEW_SLOT,
           owner,
           { entryKey: moduleId, fallback },
         )}
-      />}
+      />, worldSurfaceHost)}
+    {statusPanelHost !== undefined && createPortal(<>
       <TavernStatusPanels projection={projection} />
+      {storyWorkspaceId !== undefined && <StoryDirectorDock
+        workspaceId={storyWorkspaceId}
+        refreshKey={storyRefreshKey}
+        {...(projection.storyTurn === undefined ? {} : { progress: projection.storyTurn })}
+        draft={input.draft}
+        inputPhase={input.phase}
+        running={sessionRunning}
+        setDraft={inputActions.setDraft}
+        submit={inputActions.submit}
+        startFreshSession={() => startFreshStorySession(sessionId, storyWorkspaceId)}
+      />}
     </>, statusPanelHost)}
     {storedCharacterRuntime?.status === 'error' && <span role="status"
       title={storedCharacterRuntime.error} style={{
@@ -12622,7 +12756,7 @@ function roleplayComposerDockComponent(
     }}><span aria-hidden="true" style={{ color }}>✦</span>绘图</button>
     <RoleplayStatusLine projection={summary?.title?.trim() && summary.title.trim() !== projection.characterName
       ? { ...projection, characterName: summary.title.trim() }
-      : projection} running={useSession(state => state.running)} />
+      : projection} running={sessionRunning} />
     {drawOpen && <ImageGenerationDialog projection={projection} onClose={() => { setDrawOpen(false) }}
       onGenerate={request => { runImageGeneration(sessionId, request) }} />}
   </div>
@@ -12848,6 +12982,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => installStExtensionSurface(window, document, installedStExtensionSurface))
   installRoleplayArtifactTail(ctx)
   installStoryWorkspaceSessionCard(ctx, storyWorkspaceNavigation)
+  installStoryWorkspaceStageCard(ctx)
   const runtimeDiagnostics = new AgentRpRuntimeDiagnosticRegistry()
   ctx.effect(() => installAgentRpRuntimeDiagnostic(window, runtimeDiagnostics))
   ctx.effect(() => installAgentRpBrowserCompatibilityDiagnostic(window, document, runtimeDiagnostics))
@@ -13174,6 +13309,9 @@ export function apply(ctx: ClientContext): void {
       kind: 'story-workspace',
       workspaceId,
     })
+  }
+  const startFreshStorySession = async (sessionId: SessionId, workspaceId: string): Promise<void> => {
+    await launchStoryWorkspaceFromSession(sessionId, workspaceId)
   }
   const openStoryWorkspaceInHostWorkspace = async (
     hostWorkspaceId: string,
@@ -13587,7 +13725,20 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions', id: 'agent-rp-character-header', order: -100,
-  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} workspaceSettings={workspaceSettings} loadAvatar={loadAvatar} renameSession={renameSession} configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset} managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo} attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters} readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter} importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration} prepareRpDistributionChatMigration={prepareRpDistributionChatMigration} launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory} manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode} startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks} importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack} listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona} deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
+  }, props => <RoleplayHeader {...props} runtimeDiagnostics={runtimeDiagnostics} workspaceSettings={workspaceSettings}
+    storyWorkspaceNavigation={storyWorkspaceNavigation} loadAvatar={loadAvatar} renameSession={renameSession}
+    configurePreset={configurePreset} importPresetFile={importPresetFile} importPreset={importPreset}
+    managePresetLibrary={managePresetLibrary} configureWorldInfo={configureWorldInfo} importWorldInfo={importWorldInfo}
+    attachWorldInfo={attachWorldInfo} listWorldInfos={listWorldInfos} listCharacters={listCharacters}
+    readCharacter={readCharacter} setCharacterArchived={setCharacterArchived} deleteCharacter={deleteCharacter}
+    importCharacterFile={importCharacterFile} prepareChatMigration={prepareChatMigration}
+    prepareRpDistributionChatMigration={prepareRpDistributionChatMigration}
+    launchPreparedChatMigration={launchPreparedChatMigration} exportChat={exportChat} listMemory={listMemory}
+    manageMemory={manageMemory} manageState={manageState} manageTurnMode={manageTurnMode}
+    startCharacterSession={startCharacterFromCurrentSession} listPresets={listPresets} listRegexPacks={listRegexPacks}
+    importRegexPackFile={importRegexPackFile} deleteRegexPack={deleteRegexPack}
+    listAgentCapabilityPresets={listAgentCapabilityPresets} listPersonas={listPersonas} savePersona={savePersona}
+    deletePersona={deletePersona} applyPersona={applyPersona} loadModelCapabilities={loadModelCapabilities} />))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'agent-rp',
@@ -13716,7 +13867,7 @@ export function apply(ctx: ClientContext): void {
     },
   }, roleplayComposerDockComponent(
     ctx, runtimeDiagnostics, workspaceSettings, runImageGeneration, runTavernMutation, runTavernGeneration, runTavernPromptPreview, runTavernModelList,
-    runTavernTrigger, configurePreset, storyWorkspaceNavigation,
+    runTavernTrigger, configurePreset, storyWorkspaceNavigation, startFreshStorySession,
   )))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock', id: 'agent-rp-sillytavern-import-hint', order: -10,

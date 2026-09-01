@@ -94,6 +94,12 @@ interface AgentRpPlayWorldViewOwnerProps {
   /** Dispatch one action id from the current Host-projected legal turn. */
   readonly dispatchAction: (actionId: string) => void;
 }
+/** Browser-safe read-only state supplied to one compact in-conversation world view. */
+interface AgentRpWorldSurfaceViewOwnerProps {
+  readonly world: PlayWorldSnapshot;
+  readonly characters: readonly AgentRpPlayWorldViewCharacter[];
+  readonly turn: PlayWorldTurnProjection | null;
+}
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Trusted client plugins can add complete task rows without receiving Agent RP private state. */
@@ -112,7 +118,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'agent-rp.world-surface.view': {
       kind: 'keyed';
       scope: 'root';
-      owner: AgentRpPlayWorldViewOwnerProps;
+      owner: AgentRpWorldSurfaceViewOwnerProps;
     };
   }
 }
@@ -122,4 +128,4 @@ type AgentRpWorkbenchSectionProps = PropsRuntime<typeof AGENT_RP_WORKBENCH_SECTI
 type AgentRpPlayWorldViewProps = PropsRuntime<typeof AGENT_RP_PLAY_WORLD_VIEW_SLOT>;
 /** Props received by a compact native Session viewport registered under its Host world module id. */
 type AgentRpWorldSurfaceViewProps = PropsRuntime<typeof AGENT_RP_WORLD_SURFACE_VIEW_SLOT>;
-export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_PLAY_WORLD_VIEW_SLOT, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AGENT_RP_WORLD_SURFACE_VIEW_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpPlayWorldViewCharacter, AgentRpPlayWorldViewOwnerProps, AgentRpPlayWorldViewProps, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps, AgentRpWorldSurfaceViewProps };
+export { AGENT_RP_CLIENT_EXTENSION_API_VERSION, AGENT_RP_PLAY_WORLD_VIEW_SLOT, AGENT_RP_ST_EXTENSION_SERVICE, AGENT_RP_WORKBENCH_SECTION_SLOT, AGENT_RP_WORLD_SURFACE_VIEW_SLOT, AgentRpInstalledStExtensionRegistration, AgentRpInstalledStExtensionService, AgentRpPlayWorldViewCharacter, AgentRpPlayWorldViewOwnerProps, AgentRpPlayWorldViewProps, AgentRpWorkbenchSectionOwnerProps, AgentRpWorkbenchSectionProps, AgentRpWorldSurfaceViewOwnerProps, AgentRpWorldSurfaceViewProps };

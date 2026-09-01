@@ -1506,8 +1506,13 @@ interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection;
-  /** Render selected authoritative events as the immutable first paragraph of story prose. */
+  /** Render selected authoritative events as a factual skeleton for the prose Worker. */
   renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string;
+  /**
+   * Decide whether completed character turns now form a useful narrative beat.
+   * Omission preserves one character turn per visible story turn.
+   */
+  isNarrativeCheckpoint?(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): boolean;
 }
 /** Installed world modules keyed by stable module id. */
 declare class PlayWorldRegistry {

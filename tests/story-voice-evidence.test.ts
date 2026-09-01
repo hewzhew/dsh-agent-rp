@@ -82,6 +82,29 @@ test('groups bilingual lines into the same units used by voice generation', () =
   ])
 })
 
+test('does not align unrelated original and translated lines after a local excerpt is sliced', () => {
+  const parsed = parseStoryVoiceEvidence(['博丽灵梦'], [
+    '原文：',
+    '霧雨魔理沙：「最後の推測だ。」',
+    '参考译文：',
+    '雾雨魔理沙：“喂，灵梦。”',
+    '博丽灵梦：“一看就知道了。”',
+  ].join('\n'))
+  const slicedLines = [parsed.orderedLines[0]!, parsed.orderedLines[2]!]
+  const units = storyVoiceEvidenceUnits({
+    orderedLines: slicedLines,
+    targetLines: slicedLines.filter(line => line.owner === 'target'),
+    contextLines: slicedLines.filter(line => line.owner === 'context'),
+    notes: '',
+  })
+
+  assert.equal(units.length, 2)
+  assert.deepEqual(units.map(unit => unit.lines.map(line => [line.speaker, line.dialogue])), [
+    [['霧雨魔理沙', '最後の推測だ。']],
+    [['博丽灵梦', '一看就知道了。']],
+  ])
+})
+
 test('reports unmatched and ambiguous speaker labels without inventing attribution', () => {
   const document = parseStoryVoiceDocument([
     '博麗霊夢：「始めるわよ。」',

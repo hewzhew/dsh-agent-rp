@@ -110,6 +110,7 @@ function attributeSource(source: IndexedSource, characterNames: readonly string[
         dialogue: line.dialogue,
         variant: line.variant,
         owner: storyVoiceSpeakerMatches(characterNames, line.speaker) ? 'target' : 'context',
+        ...(line.parallelKey === undefined ? {} : { parallelKey: line.parallelKey }),
       }))
       return {
         passage,

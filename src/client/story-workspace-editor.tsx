@@ -26,7 +26,7 @@ import {
 import xyFlowCss from '@xyflow/react/dist/style.css?raw'
 import type { CharacterLibraryImportResult } from '../character-library-protocol.ts'
 import type { AgentRpPlayWorldViewOwnerProps } from '../client-extension-v0.ts'
-import type { AgentRpStoryTurnProgress, AgentRpStoryTurnStage } from '../projection-types.ts'
+import type { AgentRpStoryTurnProgress } from '../projection-types.ts'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   isFlyingChessWorldState,
@@ -98,6 +98,12 @@ import {
   storyPlayWorldParticipants,
 } from './story-play-world-readiness.ts'
 import { assignImportedStoryWorldActor } from './story-world-actor-assignment.ts'
+import {
+  storyTurnDuration,
+  storyTurnProgressText,
+  storyTurnStageLabels,
+  storyTurnSubjectName,
+} from './story-turn-progress.ts'
 import {
   decodeStorySourceFile,
   STORY_SOURCE_FILE_ACCEPT,
@@ -270,58 +276,6 @@ const characterActorFieldLabels: Readonly<Record<StoryCharacterActorField, strin
   exampleDialogue: '说话样本',
   systemPrompt: '系统指令',
   postHistoryInstructions: '历史后指令',
-}
-
-const storyTurnStageLabels: Readonly<Record<AgentRpStoryTurnStage, string>> = {
-  'world-action': '推进场地规则',
-  cast: '确认本轮人物',
-  history: '检索人物经历',
-  research: '查找资料',
-  character: '推演人物行动',
-  director: '规划剧情',
-  section: '撰写输出分区',
-  voice: '校准人物对白',
-  editor: '删去套话',
-  continuity: '整理事件与认知',
-}
-
-function storyTurnSubjectName(
-  workspace: StoryWorkspaceSnapshot,
-  subjectId: string | undefined,
-): string | undefined {
-  if (subjectId === undefined) return undefined
-  const character = workspace.characters.find(candidate => subjectId.includes(candidate.id))
-  if (character !== undefined) return character.name
-  return workspace.outputs.find(output => output.id === subjectId)?.name
-}
-
-function storyTurnProgressText(
-  workspace: StoryWorkspaceSnapshot | undefined,
-  progress: AgentRpStoryTurnProgress | undefined,
-): string {
-  if (workspace === undefined || progress === undefined || progress.workspaceId !== workspace.id) {
-    return '历史检索 → 人物推演 → 导演规划 → 分区写作 → 去八股'
-  }
-  if (progress.status === 'complete') return `第 ${String(progress.turn)} 回合的事件、认知与引用已经保存`
-  if (progress.status === 'prepared') return `第 ${String(progress.turn)} 回合正文已经准备好，等待呈现`
-  const running = progress.requests.findLast(request => request.status === 'running')
-  if (running !== undefined) {
-    const subject = storyTurnSubjectName(workspace, running.subjectId)
-    return `正在${storyTurnStageLabels[running.stage]}${subject === undefined ? '' : ` · ${subject}`}`
-  }
-  const latest = progress.requests.at(-1)
-  if (latest === undefined) return '正在准备故事流水线'
-  return latest.status === 'failed'
-    ? `${storyTurnStageLabels[latest.stage]}已降级${latest.detail === undefined ? '' : `（${latest.detail.code}）`}，正在继续后续步骤`
-    : `${storyTurnStageLabels[latest.stage]}完成，正在进入下一阶段`
-}
-
-function storyTurnDuration(milliseconds: number): string {
-  const seconds = Math.max(0, Math.round(milliseconds / 1_000))
-  if (seconds < 60) return `${String(seconds)} 秒`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return remainder === 0 ? `${String(minutes)} 分钟` : `${String(minutes)} 分 ${String(remainder)} 秒`
 }
 
 function StoryTurnTimingDetails({

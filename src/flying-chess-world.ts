@@ -205,18 +205,21 @@ function eventActor(event: PlayWorldEvent, context: PlayWorldContext): string | 
 
 function eventNarrative(event: PlayWorldEvent, context: PlayWorldContext): string {
   const actor = eventActor(event, context)
+  if (event.type === 'game.started') {
+    return `${context.characters.map(character => character.name).join('、')}在棋盘两侧坐定。`
+  }
   if (event.type === 'die.rolled' && actor !== undefined) {
     const value = eventData(event)?.value ?? event.summary.match(/结果为 ([1-6])。/u)?.[1]
-    if (value !== undefined) return `${actor}掷出 ${value}。`
+    if (value !== undefined) return `${actor}掷出的骰子停在 ${value} 点。`
   }
   if (event.type === 'turn.passed' && actor !== undefined) {
     const data = eventData(event)
     if (data?.reason === 'launch-roll-required'
       && typeof data.rolled === 'number' && typeof data.required === 'number'
       && typeof data.nextPlayerId === 'string') {
-      return `基地中的飞机需要掷出 ${String(data.required)} 点才能起飞；本轮是 ${String(data.rolled)} 点，轮到 ${playerName(context, data.nextPlayerId)}。`
+      return `${actor}的四架飞机仍留在基地。`
     }
-    return `${actor}没有可移动的飞机，本回合结束。`
+    return `${actor}没有可以移动的飞机。`
   }
   if (event.type === 'piece.moved' && actor !== undefined) {
     const piece = event.title.match(/移动 (\d+) 号飞机/u)?.[1]
@@ -232,6 +235,48 @@ function eventNarrative(event: PlayWorldEvent, context: PlayWorldContext): strin
     return `${actor}的四架飞机全部抵达终点，赢得棋局。`
   }
   return `${event.title}：${event.summary}`
+}
+
+function pairedRollNarrative(
+  roll: PlayWorldEvent,
+  outcome: PlayWorldEvent | undefined,
+  context: PlayWorldContext,
+): string | undefined {
+  if (roll.type !== 'die.rolled' || outcome === undefined || outcome.actorId !== roll.actorId) return undefined
+  const actor = eventActor(roll, context)
+  const value = eventData(roll)?.value ?? roll.summary.match(/结果为 ([1-6])。/u)?.[1]
+  if (actor === undefined || value === undefined) return undefined
+  if (outcome.type === 'turn.passed') {
+    const data = eventData(outcome)
+    if (data?.reason === 'launch-roll-required') {
+      return `${actor}掷出的骰子停在 ${value} 点，四架飞机仍留在基地。`
+    }
+  }
+  if (outcome.type === 'piece.moved') {
+    const piece = outcome.title.match(/移动 (\d+) 号飞机/u)?.[1]
+    if (piece !== undefined && outcome.summary === '飞机抵达终点。') {
+      return `${actor}掷出的骰子停在 ${value} 点，${piece} 号飞机随即抵达终点。`
+    }
+    const step = outcome.summary.match(/航线第 (\d+) 步/u)?.[1]
+    if (piece !== undefined && step !== undefined) {
+      return `${actor}掷出的骰子停在 ${value} 点，随后把 ${piece} 号飞机推进到航线第 ${step} 步。`
+    }
+  }
+  return undefined
+}
+
+function renderEventNarratives(events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
+  const narratives: string[] = []
+  for (let index = 0; index < events.length; index += 1) {
+    const paired = pairedRollNarrative(events[index]!, events[index + 1], context)
+    if (paired === undefined) {
+      narratives.push(eventNarrative(events[index]!, context))
+    } else {
+      narratives.push(paired)
+      index += 1
+    }
+  }
+  return narratives.join('')
 }
 
 function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
@@ -290,7 +335,7 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
             name: '正文',
             kind: 'prose',
             enabled: true,
-            instructions: '只呈现人物确有信息增量的公开行动与获准对白；棋盘已经表达清楚的规则结果不再复述。',
+            instructions: '把本轮权威棋局结果写成承接上一段正文的小说场景。让骰子、棋子与人物反应处在同一条时间流里；重复的无效回合要压缩，不逐项报点，不解释规则，不写系统结算。人物可以沉默，只有获准对白才进入正文。',
           },
         ],
       }
@@ -473,13 +518,7 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
           { label: '已到达', value: `${String(arrived)}/${String(state.pieces.length)}` },
         ],
         viewport: { kind: 'flying-chess/board-v0', data: viewportData },
-        composerSuggestions: state.pendingRoll !== undefined || latest === undefined
-          ? []
-          : [{
-              id: `after-event:${String(latest.sequence)}`,
-              label: '写写大家的反应',
-              draft: `写写“${latest.title}”之后，场上的人物各自有什么反应。`,
-            }],
+        composerSuggestions: [],
       }
     },
     projectForCharacter(snapshot, characterId, context) {
@@ -496,7 +535,16 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
       const selected = new Set(eventSequences)
       const events = normalized.events.filter(item => selected.has(item.sequence))
       if (events.length !== selected.size) throw new Error('飞行棋叙事引用了不存在的世界事件')
-      return events.map(item => eventNarrative(item, context)).join('')
+      return renderEventNarratives(events, context)
+    },
+    isNarrativeCheckpoint(snapshot, eventSequences, context) {
+      const normalized = this.normalize(snapshot, context)
+      const selected = new Set(eventSequences)
+      const events = normalized.events.filter(item => selected.has(item.sequence))
+      if (events.length !== selected.size) throw new Error('飞行棋叙事检查点引用了不存在的世界事件')
+      return events.some(item => item.type === 'piece.moved'
+        || item.type === 'piece.captured'
+        || item.type === 'game.finished')
     },
   }
 }

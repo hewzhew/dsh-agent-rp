@@ -27,6 +27,8 @@ export const AGENT_RP_SESSION_EVENT_TYPES = [
   'agent-rp/story-workspace-selection',
   'agent-rp/story-stage-request',
   'agent-rp/story-stage-result',
+  'agent-rp/story-turn-start',
+  'agent-rp/story-turn-stopped',
   'agent-rp/story-turn-brief',
   'agent-rp/story-turn-materialized',
   'agent-rp/story-web-fetch-request',
