@@ -196,6 +196,12 @@ export function projectPlayWorldNarrative(
   }
   const facts = projection.facts.map((fact, index) => Object.freeze({
     eventSequences: validateEventReferences(fact.eventSequences, `游玩世界叙事事实 ${String(index + 1)}`),
+    retention: (() => {
+      if (fact.retention !== 'essential' && fact.retention !== 'compressible') {
+        throw new Error(`游玩世界叙事事实 ${String(index + 1)}保留方式无效`)
+      }
+      return fact.retention
+    })(),
     text: requiredProjectionText(fact.text, `游玩世界叙事事实 ${String(index + 1)}`, 4_000),
   }))
   const cues = projection.cues.map((cue, index) => {

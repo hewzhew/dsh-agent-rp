@@ -1364,6 +1364,8 @@ type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution';
 /** One immutable public fact backed by selected authoritative world events. */
 interface PlayWorldNarrativeFact {
   readonly eventSequences: readonly number[];
+  /** Essential facts remain explicit; compressible facts may merge with similar events without preserving every value. */
+  readonly retention: 'essential' | 'compressible';
   readonly text: string;
 }
 /** One optional dramatic direction made available by selected world events. */

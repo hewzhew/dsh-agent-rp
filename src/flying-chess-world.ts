@@ -14,6 +14,7 @@ import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
 import type {
   PlayWorldEvent,
   PlayWorldNarrativeCue,
+  PlayWorldNarrativeFact,
   PlayWorldNarrativeProjection,
 } from './play-world-protocol.ts'
 
@@ -354,18 +355,33 @@ function pairedRollNarrative(
   return undefined
 }
 
-function renderEventNarratives(events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
-  const narratives: string[] = []
+function eventNarrativeFacts(
+  events: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+): readonly PlayWorldNarrativeFact[] {
+  const facts: PlayWorldNarrativeFact[] = []
   for (let index = 0; index < events.length; index += 1) {
-    const paired = pairedRollNarrative(events[index]!, events[index + 1], context)
+    const current = events[index]!
+    const outcome = events[index + 1]
+    const paired = pairedRollNarrative(current, outcome, context)
     if (paired === undefined) {
-      narratives.push(eventNarrative(events[index]!, context))
+      facts.push({
+        eventSequences: [current.sequence],
+        retention: current.type === 'turn.passed' || current.type === 'game.started'
+          ? 'compressible'
+          : 'essential',
+        text: eventNarrative(current, context),
+      })
     } else {
-      narratives.push(paired)
+      facts.push({
+        eventSequences: [current.sequence, outcome!.sequence],
+        retention: outcome!.type === 'turn.passed' ? 'compressible' : 'essential',
+        text: paired,
+      })
       index += 1
     }
   }
-  return narratives.join('')
+  return facts
 }
 
 function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
@@ -497,7 +513,6 @@ function projectNarrative(
   state: FlyingChessWorldState,
   context: PlayWorldContext,
 ): PlayWorldNarrativeProjection {
-  const text = renderEventNarratives(events, context)
   const cues = narrativeCues(events, state)
   const cadence = events.some(item => item.type === 'game.finished')
     ? 'resolution'
@@ -510,7 +525,7 @@ function projectNarrative(
       : 'transition'
   return {
     cadence,
-    facts: [{ eventSequences: events.map(item => item.sequence), text }],
+    facts: eventNarrativeFacts(events, context),
     cues,
     invariants: FLYING_CHESS_NARRATIVE_INVARIANTS,
   }

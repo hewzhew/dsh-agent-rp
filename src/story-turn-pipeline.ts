@@ -2138,8 +2138,10 @@ function preserveEditedPublicMaterials(
   source: readonly StorySectionDraft[],
   director: StoryDirectorDecision | undefined,
   approvedDialogue: ReadonlySet<string>,
+  worldNarrative: PlayWorldNarrativeProjection | undefined,
 ): readonly StorySectionDraft[] {
-  if (director === undefined && approvedDialogue.size === 0) return edited
+  const essentialWorldFacts = worldNarrative?.facts.filter(fact => fact.retention === 'essential') ?? []
+  if (director === undefined && approvedDialogue.size === 0 && essentialWorldFacts.length === 0) return edited
   const editedById = new Map(edited.map(section => [section.sectionId, section]))
   const planById = new Map(director?.sections.map(section => [section.sectionId, section]) ?? [])
   return source.flatMap(section => {
@@ -2147,10 +2149,14 @@ function preserveEditedPublicMaterials(
     const protectedBeats = (planById.get(section.sectionId)?.beats ?? [])
       .filter(beat => substantiallyRestatesText(section.text, beat, 5))
     const protectedDialogue = approvedDialogueLines(section.text, approvedDialogue)
-    if (protectedBeats.length === 0 && protectedDialogue.length === 0) {
+    const missingEssentialWorldFact = section.kind === 'prose' && candidate !== undefined
+      && essentialWorldFacts.some(fact => !proseRetainsWorldFact(candidate.text, fact.text))
+    if (protectedBeats.length === 0 && protectedDialogue.length === 0
+      && essentialWorldFacts.length === 0) {
       return candidate === undefined ? [] : [candidate]
     }
     if (candidate === undefined
+      || missingEssentialWorldFact
       || protectedBeats.some(beat => !substantiallyRestatesText(candidate.text, beat, 5))
       || protectedDialogue.some(dialogue => !candidate.text.includes(dialogue))) {
       return [section]
@@ -3136,6 +3142,49 @@ function renderWorldNarrativeFacts(projection: PlayWorldNarrativeProjection | un
   return projection?.facts.map(fact => fact.text).join('') ?? ''
 }
 
+const CHINESE_NARRATIVE_DIGITS = new Map([
+  ['零', 0], ['〇', 0], ['一', 1], ['二', 2], ['两', 2], ['三', 3], ['四', 4],
+  ['五', 5], ['六', 6], ['七', 7], ['八', 8], ['九', 9],
+])
+
+function chineseNarrativeNumber(value: string): number | undefined {
+  const units = new Map([['十', 10], ['百', 100], ['千', 1_000]])
+  if (![...value].some(character => units.has(character))) {
+    const digits = [...value].map(character => CHINESE_NARRATIVE_DIGITS.get(character))
+    return digits.some(digit => digit === undefined) ? undefined : Number(digits.join(''))
+  }
+  let total = 0
+  let digit = 0
+  for (const character of value) {
+    const nextDigit = CHINESE_NARRATIVE_DIGITS.get(character)
+    if (nextDigit !== undefined) {
+      digit = nextDigit
+      continue
+    }
+    const unit = units.get(character)
+    if (unit === undefined) return undefined
+    total += (digit === 0 ? 1 : digit) * unit
+    digit = 0
+  }
+  return total + digit
+}
+
+function narrativeNumbers(value: string): ReadonlySet<number> {
+  const result = new Set<number>()
+  for (const match of value.matchAll(/\d+/gu)) result.add(Number(match[0]))
+  for (const match of value.matchAll(/[零〇一二两三四五六七八九十百千]+/gu)) {
+    const number = chineseNarrativeNumber(match[0])
+    if (number !== undefined) result.add(number)
+  }
+  return result
+}
+
+function proseRetainsWorldFact(prose: string, fact: string): boolean {
+  if (!substantiallyRestatesText(prose, fact, 5) && !sharesLongVoiceSpan(prose, fact, 6)) return false
+  const proseNumbers = narrativeNumbers(prose)
+  return [...narrativeNumbers(fact)].every(number => proseNumbers.has(number))
+}
+
 function renderWorldNarrativeBrief(
   projection: PlayWorldNarrativeProjection | undefined,
   cues: readonly PlayWorldNarrativeProjection['cues'][number][],
@@ -3147,7 +3196,7 @@ function renderWorldNarrativeBrief(
   return [
     `呈现节奏：${cadence}`,
     '必须保留的事实：',
-    ...projection.facts.map(fact => `- ${fact.text}`),
+    ...projection.facts.map(fact => `- [世界事件 ${fact.eventSequences.join('、')}；${fact.retention === 'essential' ? '不可省略' : '可与同类事实压缩'}] ${fact.text}`),
     ...(cues.length === 0
       ? []
       : [
@@ -3207,6 +3256,7 @@ function renderWorldNarrativeAuthority(
   })) ?? []
   return JSON.stringify({
     invariants: projection.invariants ?? [],
+    narrativeFacts: projection.facts,
     worldEvents,
     allowedPublicActions,
     charactersWithoutAdditionalActions: characters
@@ -4231,7 +4281,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
             worldInstruction,
             'director_brief 只列本分区需要兑现的额外节拍。叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动；感官细节不能改变物体位置、规则状态或人物认知。只写可观察行为，不从目光、表情、姿态或停顿推断故意、不以为意、期待、犹豫等人物内心。',
-            'narrative_authority 是 Host 汇总的非叙事化校验材料，不要求逐项写进正文。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。',
+            'narrative_authority 是 Host 汇总的非叙事化校验材料。narrativeFacts 中 retention 为 essential 的事实必须按 eventSequences 的顺序在正文中明确发生一次，包括其中的行动者、骰点、棋子编号和落点；compressible 的同类机械结果可以合并带过。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。',
             '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
             outputInstruction,
           ].join('\n'),
@@ -4260,6 +4310,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             ? historySectionFallback(input.workspace)
             : draft.text
         text = appendMissingApprovedDialogue(text, sectionApprovedDialogue)
+        if (section.kind === 'prose' && worldNarrativeProjection !== undefined
+          && worldNarrativeProjection.facts.some(fact => fact.retention === 'essential'
+            && !proseRetainsWorldFact(text, fact.text))) {
+          text = worldNarrative
+        }
         return text.trim() === '' || text.trim() === '<omit-section />' ? undefined : {
           sectionId: section.id,
           name: section.name,
@@ -4280,7 +4335,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
         'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留权威事实、获准对白和已选公开行动；删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞。没有新增人物材料时保留一个紧凑自然段，不补造互动。',
-        'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 invariants、worldEvents 的事件数值、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
+        'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
         '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
       ].join('\n'),
@@ -4304,6 +4359,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             sectionDrafts,
             directorDecision,
             approvedDialogue,
+            worldNarrativeProjection,
           )
         }
       } catch {

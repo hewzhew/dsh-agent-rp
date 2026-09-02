@@ -163,6 +163,8 @@ export type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution'
 /** One immutable public fact backed by selected authoritative world events. */
 export interface PlayWorldNarrativeFact {
   readonly eventSequences: readonly number[]
+  /** Essential facts remain explicit; compressible facts may merge with similar events without preserving every value. */
+  readonly retention: 'essential' | 'compressible'
   readonly text: string
 }
 

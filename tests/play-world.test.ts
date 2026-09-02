@@ -181,7 +181,11 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
       const events = this.normalize(snapshot, context).events.filter(event => eventSequences.includes(event.sequence))
       return {
         cadence: 'scene',
-        facts: [{ eventSequences: events.map(event => event.sequence), text: events.map(event => `${event.title}。`).join('') }],
+        facts: [{
+          eventSequences: events.map(event => event.sequence),
+          retention: 'essential',
+          text: events.map(event => `${event.title}。`).join(''),
+        }],
         cues: [],
       }
     },
@@ -1093,7 +1097,8 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
     playContext,
   )
   assert.equal(projection.cadence, 'scene')
-  assert.match(projection.facts[0]?.text ?? '', /棋盘被风掀动/u)
+  assert.equal(projection.facts.filter(fact => fact.retention === 'compressible').length, 5)
+  assert.match(projection.facts.find(fact => fact.retention === 'essential')?.text ?? '', /棋盘被风掀动/u)
   assert.deepEqual(projection.invariants, [{
     id: 'single-board',
     text: '场景中只有一张棋盘。',
@@ -1130,6 +1135,11 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
     cues: projection.cues,
     invariants: [{ id: 'same', text: '第一项。' }, { id: 'same', text: '第二项。' }],
   }, eventSequences, playContext), /叙事不变量 2 id 无效/u)
+  assert.throws(() => projectPlayWorldNarrative({
+    cadence: 'scene',
+    facts: [{ ...projection.facts[0]!, retention: 'invalid' as 'essential' }],
+    cues: [],
+  }, eventSequences, playContext), /叙事事实 1保留方式无效/u)
 })
 
 test('draws authored scene cards from landing, collision, and home-count events', () => {
@@ -1618,6 +1628,115 @@ test('gives prose and editor Workers exact world events, invariants, and public-
   }
   assert.equal(result.finalDraft, correctedDraft)
   assert.doesNotMatch(result.finalDraft, /两张棋盘|四只骰子|相同的白点|灵梦抬眼/u)
+})
+
+test('restores the causal roll when generated prose jumps straight to a first launch', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-first-launch-retention-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const rolls = [3, 2, 1, 6]
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift()! }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const created = store.create({ format: 2, name: '首次起飞因果' })
+  let workspace = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+    outputs: [{
+      id: proseId,
+      name: '正文',
+      kind: 'prose',
+      enabled: true,
+      instructions: '写成连续场景。',
+    }],
+  })
+  workspace = store.installWorld(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  for (let turn = 0; turn < 4; turn += 1) {
+    let available = store.worldTurn(workspace.id)!
+    assert.equal(available.actions[0]?.id, 'roll')
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: 'roll',
+    })
+    available = store.worldTurn(workspace.id)!
+    const move = available.actions.find(action => action.id.startsWith('move:'))
+    if (move !== undefined) {
+      workspace = store.dispatchWorldAction(workspace.id, {
+        format: 0,
+        revision: workspace.revision,
+        cycleId: available.cycleId,
+        actionId: move.id,
+      })
+    }
+  }
+
+  const session = Session.create(SessionId('first-launch-retention'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const incomplete = '灵梦先后掷出三点和一点，魔理沙掷出两点。魔理沙的一号机已经离开基地，停在航线开头。'
+  let sectionBody = ''
+  let editorBody = ''
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        let text: string
+        if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          text = JSON.stringify({ observation: '棋局继续。', action: '', speech: null, insights: [] })
+        } else if (system.includes('分区的 prose Worker')) {
+          sectionBody = body
+          text = incomplete
+        } else if (system.includes('最终正文编辑 Worker')) {
+          editorBody = body
+          text = JSON.stringify({ sections: [{ sectionId: proseId, text: incomplete }] })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.match(sectionBody, /retention[\s\S]*essential/u)
+  assert.match(editorBody, /retention[\s\S]*essential/u)
+  assert.notEqual(result.finalDraft, incomplete)
+  assert.match(result.finalDraft, /雾雨魔理沙掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
 })
 
 test('scaffolds fresh world authoring surfaces without replacing authored work', (context) => {
