@@ -2527,6 +2527,12 @@ const narrativeCueLabels: Readonly<Record<FlyingChessNarrativeCard['cue']['kind'
   relationship: '关系后果',
 }
 
+const narrativeResponderLabels: Readonly<Record<FlyingChessNarrativeCard['cue']['responders'], string>> = {
+  actor: '触发本轮的行动人物',
+  opponents: '行动人物以外的棋手',
+  all: '所有在场人物',
+}
+
 function installedFlyingChessNarrativeCards(workspace: StoryWorkspaceSnapshot): readonly FlyingChessNarrativeCard[] {
   const configuration = workspace.worldBinding?.configuration
   if (typeof configuration !== 'object' || configuration === null || Array.isArray(configuration)) return []
@@ -2589,7 +2595,10 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
         <TextField label="人物可以回应的现场条件" rows={3} value={card.cue.text} onChange={text => {
           updateCard(index, current => ({ ...current, cue: { ...current.cue, text } }))
         }} />
-        <div className="story-world-narrative-card-foot"><span>回应范围：所有在场人物</span><label className="story-studio-check"><input type="checkbox" checked={card.repeat} onChange={event => {
+        <div className="story-world-narrative-card-foot"><label>回应范围：<select className="story-studio-input" value={card.cue.responders} onChange={event => {
+          const responders = event.currentTarget.value as FlyingChessNarrativeCard['cue']['responders']
+          updateCard(index, current => ({ ...current, cue: { ...current.cue, responders } }))
+        }}>{Object.entries(narrativeResponderLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="story-studio-check"><input type="checkbox" checked={card.repeat} onChange={event => {
           const repeat = event.currentTarget.checked
           updateCard(index, current => ({ ...current, repeat }))
         }} />条件再次满足时可重复触发</label></div>
@@ -3578,7 +3587,7 @@ export function StoryWorkspaceEditor({
             ...current.pipeline,
             voiceDraftReasoning: event.target.value === 'quality' ? 'quality' : 'routine',
           } })) }}>
-          <option value="routine">平衡（支持时使用 Low）</option>
+          <option value="routine">精简（支持时关闭推理）</option>
           <option value="quality">质量（跟随会话）</option>
         </select></Field>
         <Field label="Worker provider（留空则跟随会话）"><input className="story-studio-input" value={workspace.pipeline.workerModel?.provider ?? ''}
@@ -3591,7 +3600,7 @@ export function StoryWorkspaceEditor({
             provider: current.pipeline.workerModel?.provider ?? '',
             model: event.target.value,
           } } })) }} /></Field>
-        <p style={{ color: 'var(--studio-muted)', fontSize: 10, lineHeight: 1.5 }}>研究先读取本地证据，再按需要追查；人物、导演、分区与编辑保持阶段顺序，同阶段的人物和分区可以并行。对白的平衡模式只在模型明确支持时使用 Low，否则保持会话设置。</p>
+        <p style={{ color: 'var(--studio-muted)', fontSize: 10, lineHeight: 1.5 }}>研究先读取本地证据，再按需要追查；人物、导演、分区与编辑按需运行，同阶段的人物和分区可以并行。对白的精简模式在模型明确支持时关闭推理，否则保持会话设置；质量模式跟随会话。</p>
         <hr className="story-studio-divider" />
         <button className="story-studio-button story-studio-danger" type="button" disabled={saving} onClick={removeWorkspace}>{deleteArmed ? '再次点击，确认删除故事' : '删除这个故事'}</button>
       </aside>

@@ -55,7 +55,8 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
     || !isRecord(value.cue) || !exactKeys(value.cue, ['kind', 'text', 'responders'])
     || value.cue.kind !== 'change' && value.cue.kind !== 'pressure'
       && value.cue.kind !== 'opportunity' && value.cue.kind !== 'relationship'
-    || value.cue.responders !== 'all' || typeof value.repeat !== 'boolean') {
+    || value.cue.responders !== 'actor' && value.cue.responders !== 'opponents'
+      && value.cue.responders !== 'all' || typeof value.repeat !== 'boolean') {
     throw new Error(`${label}无效`)
   }
   const id = configurationText(value.id, `${label} id`, 120)
@@ -70,7 +71,7 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
     cue: {
       kind: value.cue.kind,
       text: configurationText(value.cue.text, `${label}现场条件`, 2_000),
-      responders: 'all',
+      responders: value.cue.responders,
     },
     repeat: value.repeat,
   }
@@ -345,6 +346,18 @@ function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
   return count
 }
 
+function isFirstLaunchEvent(
+  event: PlayWorldEvent,
+  allEvents: readonly PlayWorldEvent[],
+): boolean {
+  const data = eventData(event)
+  if (event.type !== 'piece.moved' || data?.kind !== 'piece-moved' || data.fromStatus !== 'base') return false
+  return allEvents.find(item => {
+    const itemData = eventData(item)
+    return item.type === 'piece.moved' && itemData?.kind === 'piece-moved' && itemData.fromStatus === 'base'
+  })?.sequence === event.sequence
+}
+
 function appendNarrativeCardEvents(
   events: readonly PlayWorldEvent[],
   state: FlyingChessWorldState,
@@ -359,39 +372,32 @@ function appendNarrativeCardEvents(
   const matching = narrativeCards(context).filter(card =>
     passedTurns >= card.trigger.count
       && (card.repeat ? passedTurns % card.trigger.count === 0 : !fired.has(card.id)))
-  return matching.reduce<readonly PlayWorldEvent[]>((current, card) => [
-    ...current,
-    event(current, 'scene.changed', card.event.title, card.event.summary, undefined, {
-      kind: 'narrative-card',
-      cardId: card.id,
-      cueKind: card.cue.kind,
-      cueText: card.cue.text,
-      characterIds: [...state.playerOrder],
-    }),
-  ], events)
+  return matching.reduce<readonly PlayWorldEvent[]>((current, card) => {
+    const characterIds = card.cue.responders === 'all'
+      ? state.playerOrder
+      : card.cue.responders === 'actor'
+        ? [state.currentPlayerId]
+        : state.playerOrder.filter(characterId => characterId !== state.currentPlayerId)
+    return [
+      ...current,
+      event(current, 'scene.changed', card.event.title, card.event.summary, undefined, {
+        kind: 'narrative-card',
+        cardId: card.id,
+        cueKind: card.cue.kind,
+        cueText: card.cue.text,
+        characterIds: [...characterIds],
+      }),
+    ]
+  }, events)
 }
 
 function narrativeCues(
   events: readonly PlayWorldEvent[],
-  allEvents: readonly PlayWorldEvent[],
   state: FlyingChessWorldState,
-  context: PlayWorldContext,
 ): readonly PlayWorldNarrativeCue[] {
   const everyone = state.playerOrder
-  const firstLaunchSequence = allEvents.find(item => {
-    const data = eventData(item)
-    return item.type === 'piece.moved' && data?.kind === 'piece-moved' && data.fromStatus === 'base'
-  })?.sequence
   return events.flatMap((item): readonly PlayWorldNarrativeCue[] => {
     const data = eventData(item)
-    if (item.type === 'game.started') {
-      return [{
-        eventSequences: [item.sequence],
-        kind: 'change',
-        text: '这是棋局进入当前场景的开场。可依据人物档案与故事地图，用一个具体行动建立人物关系和现场气氛。',
-        characterIds: everyone,
-      }]
-    }
     if (item.type === 'scene.changed' && data?.kind === 'narrative-card'
       && (data.cueKind === 'change' || data.cueKind === 'pressure'
         || data.cueKind === 'opportunity' || data.cueKind === 'relationship')
@@ -402,16 +408,6 @@ function narrativeCues(
         kind: data.cueKind,
         text: data.cueText,
         characterIds: data.characterIds as string[],
-      }]
-    }
-    if (item.type === 'piece.moved' && data?.kind === 'piece-moved'
-      && item.sequence === firstLaunchSequence) {
-      const actor = eventActor(item, context)
-      return [{
-        eventSequences: [item.sequence],
-        kind: 'change',
-        text: `${actor ?? '当前棋手'}让本局第一阶段的僵持出现了明确变化。人物可以回应领先关系的变化，也可以不把它说出口。`,
-        characterIds: everyone,
       }]
     }
     if (item.type === 'piece.captured') {
@@ -441,10 +437,12 @@ function projectNarrative(
   context: PlayWorldContext,
 ): PlayWorldNarrativeProjection {
   const text = renderEventNarratives(events, context)
-  const cues = narrativeCues(events, allEvents, state, context)
+  const cues = narrativeCues(events, state)
   const cadence = events.some(item => item.type === 'game.finished')
     ? 'resolution'
-    : cues.length > 0 || events.some(item => item.type === 'piece.captured'
+    : cues.length > 0 || events.some(item => item.type === 'game.started'
+      || isFirstLaunchEvent(item, allEvents)
+      || item.type === 'piece.captured'
       || item.type === 'scene.changed'
       || item.type === 'piece.moved' && eventData(item)?.toStatus === 'home')
       ? 'scene'

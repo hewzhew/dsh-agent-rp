@@ -11,6 +11,9 @@ export interface FlyingChessConsecutivePassesTrigger {
   readonly count: number
 }
 
+/** Characters invited to respond when a narrative card fires. */
+export type FlyingChessNarrativeResponders = 'actor' | 'opponents' | 'all'
+
 /** One structured scene event supplied by a flying-chess world resource. */
 export interface FlyingChessNarrativeCard {
   readonly id: string
@@ -22,7 +25,7 @@ export interface FlyingChessNarrativeCard {
   readonly cue: {
     readonly kind: 'change' | 'pressure' | 'opportunity' | 'relationship'
     readonly text: string
-    readonly responders: 'all'
+    readonly responders: FlyingChessNarrativeResponders
   }
   readonly repeat: boolean
 }

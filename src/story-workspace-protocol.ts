@@ -60,7 +60,7 @@ export interface StoryPipelineSettings {
   readonly maxParallel: number
   /** Maximum research Worker passes, including the initial local-evidence pass. */
   readonly researchMaxPasses: number
-  /** Reasoning policy shared by initial and retry dialogue drafts. */
+  /** Reasoning policy for dialogue drafts. */
   readonly voiceDraftReasoning: StoryVoiceDraftReasoning
   readonly workerModel?: StoryWorkerModelRoute
 }

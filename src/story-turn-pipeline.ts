@@ -926,8 +926,7 @@ function renderCharacterDecision(
   return [
     `## ${characterName}`,
     `- 人物 ID：${characterId}`,
-    `- 观察：${decision.observation}`,
-    `- 行动：${decision.action}`,
+    `- 公开行动：${decision.action === '' ? '无' : decision.action}`,
     ...(decision.speech === undefined
       ? ['- 说话决定：无']
       : [
@@ -936,7 +935,6 @@ function renderCharacterDecision(
           `- 发言焦点：${decision.speech.focus}`,
           `- 预期作用：${decision.speech.effect}`,
         ]),
-    `- 持久私有变化：${decision.insights.length === 0 ? '无' : decision.insights.map(insight => `[${insight.kind}] ${insight.text}`).join('；')}`,
   ].join('\n')
 }
 
@@ -1497,12 +1495,13 @@ function constrainAutomaticWorldDecision(
       `${lastExchangeLine.characterName}${lastExchangeLine.dialogue}`,
       5,
     )
+  const publicSpeechAllowed = answersOpenExchange || allowSceneReaction && respondsToCurrentOutcome
   return {
     ...decision,
     action: allowSceneReaction && !CHARACTER_RULE_ACTION_PATTERN.test(decision.action)
       ? decision.action
       : '',
-    ...(speech === undefined || respondsToCurrentOutcome || answersOpenExchange
+    ...(speech === undefined || publicSpeechAllowed
       ? {}
       : { speech: undefined }),
   }
@@ -1750,6 +1749,16 @@ function parseCharacterInsights(
         && insightRestatesSpeech(insight.futureChoice, speech))
         || insightRestatesSpeech(`${insight.text}\n${insight.futureChoice}`, speech))) return []
     return [{ kind: insight.kind, text: insight.futureChoice }]
+  })
+}
+
+function removeWorldRestatementInsights(
+  insights: readonly StoryTurnPrivateInsight[],
+  worldOutcome: string,
+): readonly StoryTurnPrivateInsight[] {
+  return insights.filter(insight => {
+    if (worldOutcome !== '' && substantiallyRestatesText(insight.text, worldOutcome, 6)) return false
+    return insight.kind === 'knowledge' || !CHARACTER_RULE_ACTION_PATTERN.test(insight.text)
   })
 }
 
@@ -2168,25 +2177,31 @@ function renderHostOnlyWorldSections(
 function resolveHostWorldDirectorAssignment(
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   characterDecisions: readonly StoryCharacterDecisionRecord[],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
   worldNarrative: string,
   worldOutcome: string,
   storyMap: string,
   foreshadowing: string,
   allowSingleDialogue: boolean,
+  allowPublicActions: boolean,
   allowPrivateInsights: boolean,
 ): StoryDirectorAssignment | undefined {
   if (worldNarrative === '' || worldOutcome === ''
     || storyMap.trim() !== '' || foreshadowing.trim() !== '') return undefined
-  if (characterDecisions.some(record => record.decision.action !== ''
-    || (!allowPrivateInsights && record.decision.insights.length > 0))) return undefined
+  if (characterDecisions.some(record => record.decision.action !== '' && !allowPublicActions
+    || record.decision.insights.length > 0 && !allowPrivateInsights)) return undefined
   const speechCount = characterDecisions.filter(record => record.decision.speech !== undefined).length
   if (speechCount > 1 || (speechCount === 1 && !allowSingleDialogue)) return undefined
   const prose = outputs.filter(output => output.enabled && output.kind === 'prose')
   if (prose.length !== 1) return undefined
+  const characterNames = new Map(characters.map(character => [character.id, character.name]))
+  const publicActions = characterDecisions.flatMap(record => record.decision.action === ''
+    ? []
+    : [`${characterNames.get(record.characterId) ?? record.characterId}：${record.decision.action}`])
   return {
     sections: outputs.filter(output => output.enabled).map(output => ({
       sectionId: output.id,
-      beats: [],
+      beats: output.id === prose[0]!.id ? publicActions : [],
       speech: output.id === prose[0]!.id
         ? characterDecisions.flatMap(record => record.decision.speech === undefined
           ? []
@@ -2960,7 +2975,7 @@ async function runStage(
   subjectId?: string,
 ): Promise<StageOutput> {
   const first = await runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
-  if (first.retryable !== true) return first
+  if (first.retryable !== true || stage === 'voice') return first
   return runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
 }
 
@@ -3817,8 +3832,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           'current_world_outcome 列出程序已经完成的规则事实。world_narrative 给出本轮的呈现节奏、同一批事实，以及此人物可以回应的现场条件；现场条件提供选择，不表示人物已经采取行动。world_turn_assignment 只标明已完成规则动作的参与者。',
           'turn_participation 决定公开权限。publicResponse=allowed 时人物可以选择公开 action 或 speech；publicResponse=observe-only 时只形成 observation 和私有 insights，Host 会清除公开输出。',
           characterHasNarrativeCue
-            ? '本轮有此人物可回应的现场条件。action 可以是一项由该条件引起、会实际改变现场互动、关系或后续非规则选择的动作；规则动作仍由 Host 执行。'
-            : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串，规则动作仍由 Host 执行。',
+            ? '本轮有此人物可回应的现场条件。action 只能是一项已经完成、由该条件直接引起且即使人物不开口也会留下可观察结果的非规则行动；只看向别人、摆出姿态、拿着物品等待发言或等待别人接话时使用空字符串。规则动作仍由 Host 执行。'
+            : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串；除非 recent_public_exchange 明确标为尚待回答，speech 也使用 null。规则动作仍由 Host 执行。',
           'speech 用于完成一项当下确有必要的交流动作。respondsTo 指向当前事实或 recent_public_exchange 中尚未收束的最后前提；move 取 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose；focus 只写本句新增的对象、区别、态度或答案；effect 写它当场改变的理解、决定或关系。已经收束的话轮和没有信息增量的结果以 speech=null 延续。声音阶段会另行检索原作证据并写出台词。',
           'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体选择；规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
           '只返回 JSON：{"observation":"此人能观察到的事实","action":"本轮具体的非规则行动或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"本句新增的一点","effect":"本句当场完成的交流作用"},"insights":[{"kind":"knowledge|intention|decision|world-action","text":"新信息或当轮依据","futureChoice":"需要跨回合保存的一项选择，其他类型为空字符串"}]}。不开口时 speech 为 null；字段中不写逐字台词。',
@@ -3844,9 +3859,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       ), resultEventSeqs, character.id)
       if (decision.text === undefined) return undefined
       const parsed = parseCharacterDecision(decision.text)
+      const bounded = {
+        ...parsed,
+        insights: removeWorldRestatementInsights(parsed.insights, worldOutcome),
+      }
       const scoped = publicResponseAllowed
-        ? parsed
-        : { ...parsed, action: '', speech: undefined }
+        ? bounded
+        : { ...bounded, action: '', speech: undefined }
       const permitted = suppressForbiddenWorldOutcomeSpeech(scoped, playerInput, worldOutcome)
       const continuous = suppressClosedExchangeReprise(permitted, playerInput, recentExchange)
       const constrained = constrainAutomaticWorldDecision(
@@ -3881,11 +3900,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const hostDirectorAssignment = resolveHostWorldDirectorAssignment(
     enabledSections,
     characterDecisions,
+    enabledCharacters,
     worldNarrative,
     worldOutcome,
     storyMap,
     foreshadowing,
     automaticAdvance || playerForbidsWorldRecap(playerInput),
+    automaticAdvance,
     automaticAdvance,
   )
   const research = hostDirectorAssignment === undefined
@@ -4011,7 +4032,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '<prior_approved_dialogue>', priorDialogue === '' ? '（无）' : priorDialogue, '</prior_approved_dialogue>',
       ].join('\n')
       const subject = `${character.id}:${String(speechIndex + 1)}`
-      const voiceDraftReasoning = input.workspace.pipeline.voiceDraftReasoning
+      const voiceDraftReasoning: StoryStageReasoningMode = input.workspace.pipeline.voiceDraftReasoning === 'routine'
+        ? 'structural'
+        : 'quality'
       const voice = await runStage(input, 'voice', generateOptions(
         input,
         reasoning,
@@ -4037,7 +4060,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const reviewed = await runStage(input, 'voice', generateOptions(
           input,
           reasoning,
-          'routine',
+          'structural',
           VOICE_REVIEW_SYSTEM,
           [
             commonBody,
@@ -4055,38 +4078,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           return new Map()
         }
       }
-      let approvedCandidates = initialCandidates
-      let approved = await reviewDialogue(approvedCandidates, 'review')
-      if ([...initialCandidates.values()].some(dialogues => dialogues.length > 0)
-        && ![...approved.values()].some(dialogue => dialogue !== '')) {
-        const retry = await runStage(input, 'voice', generateOptions(
-          input,
-          reasoning,
-          voiceDraftReasoning,
-          '你仍是 character_context 中同一个人物自己的对白 Worker，正在进行唯一一次退回重写。严格审校已经拒绝 rejected_candidates，说明候选没有形成能立刻接在上一轮后的自然话轮：可能是 seed 映射不成立、把后台语义完整解释了一遍、留白字段又被换句话塞回对白、候选彼此只是改写，或使用了不属于此人物与当前场景的素材。不要解释、改写、倒装或缩短旧句。重新选择一条真实 [目标人物] seed 作为主要接话机制；其他 seed 只能旁证同一种机制，不能拼接多条原句的结构。[对话上下文] 仍只供理解。每个非空候选逐字复制 speech_plan 的 move，用 mechanics 简述主要 seed 支持的接话动作，并用 leftImplicit 明确一项由听者从刚才提问中自行补全、不会说出口的内容。对白只保留完成当前动作不可缺少的一点，不负责证明完整逻辑；若没有可安全省略的内容，返回空字符串、空 seedLineIds、空 mechanics 和空 leftImplicit。每一项 reference 必须逐字复制 required_reference。格式为 JSON：{"lines":[{"reference":"required_reference 中的编号","move":"speech_plan 中既定动作","seedLineIds":["主要目标人物 seed ID","可选旁证 seed ID"],"mechanics":"主要 seed 支持的接话机制","leftImplicit":"听者自行补全而未说出口的内容","dialogue":"“全新候选”或空字符串"}]}，最多三项。不要使用 Markdown 围栏。',
-          [
-            commonBody,
-            '<rejected_candidates>', renderDialogueCandidates(speechDecision, enabledCharacters, initialCandidates), '</rejected_candidates>',
-          ].join('\n'),
-          2_048,
-          0.6,
-        ), resultEventSeqs, `retry-draft:${subject}`)
-        let retryCandidates: ReadonlyMap<string, readonly StoryDialogueCandidate[]> = new Map()
-        if (retry.text !== undefined) {
-          try {
-            retryCandidates = parseDialogueCandidates(
-              retry.text,
-              speechDecision,
-              selectedVoiceEvidence,
-              new Set([...initialCandidates.values()].flat().map(candidate => candidate.dialogue)),
-            )
-          } catch {
-            retryCandidates = new Map()
-          }
-        }
-        approvedCandidates = retryCandidates
-        approved = await reviewDialogue(approvedCandidates, 'retry-review')
-      }
+      const approvedCandidates = initialCandidates
+      const approved = await reviewDialogue(approvedCandidates, 'review')
       const approvedDialogue = approved.get(speech.reference)
       if (approvedDialogue !== undefined && approvedDialogue !== '') {
         dialogueByReference.set(speech.reference, approvedDialogue)
@@ -4147,7 +4140,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const outputInstruction = section.kind === 'prose' && worldNarrative !== ''
-          ? '依照 world_narrative 的呈现节奏，把其中 facts 写进一段可直接阅读的连续场景。transition 压缩相似动作形成的时间流动；scene 展开事实引起的具体变化；resolution 收束本场已经形成的关系或目标。只返回本分区正文，不能返回 <omit-section />。'
+          ? '依照 world_narrative 的呈现节奏写成可直接阅读的连续场景。transition 用一两句带过相似动作；scene 围绕本轮现场变化展开；resolution 收束已经形成的结果。若除权威事实外没有获准对白或人物公开行动，用一个紧凑自然段写清可观察变化，不为凑篇幅制造人物互动；有新增人物材料时才按需要展开为多个自然段。不重复分区标题。'
           : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
           ? 'current_world_outcome 是本轮已经发生的权威结果，正文需要让读者看见事件和执行者。'
@@ -4169,7 +4162,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}`,
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
             worldInstruction,
-            'director_brief 只列本分区需要兑现的额外节拍。人物行动必须来自其中已经选定的决定；当前世界 facts 之外的规则变化不属于本轮。',
+            'director_brief 只列本分区需要兑现的额外节拍。叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动；感官细节不能改变物体位置、规则状态或人物认知。只写可观察行为，不从目光、表情、姿态或停顿推断故意、不以为意、期待、犹豫等人物内心。',
             '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
             outputInstruction,
           ].join('\n'),
@@ -4212,13 +4205,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     const edited = await runStage(input, 'editor', generateOptions(
       input,
       reasoning,
-      'routine',
+      'structural',
       [
         '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
-        'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留理解本轮所需的动作，删去规则播报、同义复述、空泛总结和只为拉长篇幅的装饰。',
+        'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留权威事实、获准对白和已选公开行动；删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞。没有新增人物材料时保留一个紧凑自然段，不补造互动。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
-        '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 内部标题从三级标题开始。',
+        '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
       ].join('\n'),
       [
         '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
@@ -4227,7 +4220,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
         '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
       ].join('\n'),
-      8_192,
+      4_096,
       0.2,
     ), resultEventSeqs)
     if (edited.text !== undefined) {

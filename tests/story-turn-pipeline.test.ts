@@ -693,10 +693,7 @@ test('runs logged story stages while keeping each character request privately sc
   let secondVoiceBody = ''
   let secondVoiceSystem = ''
   let voiceReviewBody = ''
-  let voiceRetryReviewBody = ''
   let voiceReviewSystem = ''
-  let voiceRetryBody = ''
-  let voiceRetrySystem = ''
   let voiceReviewCalls = 0
   let editorBody = ''
   let editorSystem = ''
@@ -859,13 +856,6 @@ test('runs logged story stages while keeping each character request privately sc
                 { reference: `${sectionId}:2`, dialogue: '先把刻痕看清楚。' },
               ],
             })
-          } else if (body.includes('先看“徽章”，别忙着猜。')) {
-            voiceRetryReviewBody = body
-            text = JSON.stringify({
-              lines: [
-                { reference: `${sectionId}:1`, dialogue: '先看“徽章”，别忙着猜。' },
-              ],
-            })
           } else {
             voiceReviewBody = body
             voiceReviewSystem = system
@@ -877,16 +867,7 @@ test('runs logged story stages while keeping each character request privately sc
           }
         }
         else if (system.includes('人物自己的对白 Worker')) {
-          if (system.includes('唯一一次退回重写')) {
-            voiceRetryBody = body
-            voiceRetrySystem = system
-            text = JSON.stringify({
-              lines: [
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds.slice(0, 1), mechanics: '没有真正留白的无效候选', leftImplicit: '', dialogue: '只看一条也够了。' },
-                { reference: `${sectionId}:1`, move: 'warn', seedLineIds: candidateSeeds, mechanics: '先指出眼前缺口，再截断过早结论', leftImplicit: '为什么刻痕不清时不能下结论。', dialogue: '先看“徽章”，别忙着猜。' },
-              ],
-            })
-          } else if (body.includes(`人物：柏舟（${bobId}）`)) {
+          if (body.includes(`人物：柏舟（${bobId}）`)) {
             secondVoiceBody = body
             secondVoiceSystem = system
             text = JSON.stringify({
@@ -913,7 +894,7 @@ test('runs logged story stages while keeping each character request privately sc
             ? JSON.stringify({ insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }] })
             : body.includes('kind=\\"history\\"')
               ? '<omit-section />'
-              : '尚显重复的粗稿。尚显重复的粗稿。\n\n阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」\n\n柏舟说：“谁都能说的胜利台词。”'
+              : '尚显重复的粗稿。尚显重复的粗稿。\n\n阿梨把徽章转向窗光。\n\n柏舟说：“先把刻痕看清楚。”'
         } else {
           editorBody = body
           editorSystem = system
@@ -921,7 +902,7 @@ test('runs logged story stages while keeping each character request privately sc
             sections: [
               {
                 sectionId,
-                text: '雨停后，阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」\n\n柏舟说：“编辑器新增的台词。”',
+                text: '雨停后，阿梨把徽章转向窗光。\n\n柏舟说：“先把刻痕看清楚。”\n\n阿梨说：“编辑器新增的台词。”',
               },
               { sectionId: historySectionId, text: '雨停：两人都看见雨停了。' },
             ],
@@ -987,22 +968,22 @@ test('runs logged story stages while keeping each character request privately sc
   const result = await runStoryTurnPipeline(input)
   const briefEvent = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
 
-  assert.equal(calls, 16)
-  assert.equal(voiceReviewCalls, 3)
+  assert.equal(calls, 14)
+  assert.equal(voiceReviewCalls, 2)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 0)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 11)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 5)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 4)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
-    .every(request => request.dispatch.reasoningEffort === 'low'), true)
+    .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.reasoningEffort === 'low'), true)
+    .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
-    .every(request => request.dispatch.maxTokens === 8_192), true)
-  assert.equal(maxTokenBudgets.filter(budget => budget === 8_192).length, 11)
+    .every(request => request.dispatch.maxTokens === 2_048), true)
+  assert.equal(maxTokenBudgets.filter(budget => budget === 8_192).length, 4)
   assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 5)
   assert.equal(characterBodies.length, 2)
   assert.equal(historyBodies.length, 2)
@@ -1063,6 +1044,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(directorBody, /发言焦点：先确认眼前的刻痕/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000001/u)
   assert.match(directorBody, /人物 ID：character-00000000-0000-4000-8000-000000000002/u)
+  assert.doesNotMatch(directorBody, /看见玩家举起徽章|阿梨把徽章刻痕和自己的旧站记忆联系起来/u)
   assert.doesNotMatch(directorBody, /语气依据|#seed-/u)
   assert.doesNotMatch(directorBody, /character:invented:example-dialogue|先别问车票/u)
   assert.doesNotMatch(characterBodies[0]!, /柏舟藏起了车票|下一幕会停电|第三幕打开/u)
@@ -1072,10 +1054,10 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(sectionSystems.length, 2)
   assert.match(sectionSystems[0]!, /叙事正文、环境、行动与对白/u)
   assert.match(sectionSystems[0]!, /同一事件换句话重复/u)
-  assert.match(sectionSystems[0]!, /人物行动必须来自其中已经选定的决定/u)
+  assert.match(sectionSystems[0]!, /叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动/u)
   assert.match(sectionSystems[1]!, /时间线、前情或档案/u)
   assert.match(sectionSystems[1]!, /非空内容，不能返回 <omit-section \/>/u)
-  assert.match(sectionBodies[0]!, /获准对白：阿梨｜「先看“徽章”，别忙着猜。」/u)
+  assert.match(sectionBodies[0]!, /获准对白：柏舟｜“先把刻痕看清楚。”/u)
   assert.doesNotMatch(sectionBodies[0]!, /记录已经发生的公开事实/u)
   assert.doesNotMatch(sectionBodies[1]!, /阿梨先观察徽章|获准对白：阿梨/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /<world_state>/u)
@@ -1121,7 +1103,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.doesNotMatch(secondVoiceBody, /\[目标人物\]\[参考译文\] 阿梨｜看清以后再作结论。/u)
   assert.doesNotMatch(secondVoiceBody, new RegExp(`character:${aliceId}:example-dialogue`, 'u'))
   assert.doesNotMatch(secondVoiceBody, /阿梨知道徽章/u)
-  assert.match(secondVoiceBody, /<prior_approved_dialogue>[\s\S]*先看“徽章”，别忙着猜/u)
+  assert.match(secondVoiceBody, /<prior_approved_dialogue>[\s\S]*（无）/u)
+  assert.doesNotMatch(secondVoiceBody, /先看“徽章”，别忙着猜/u)
   assert.match(secondVoiceSystem, /不得读取或推断导演故事图、其他人物档案和私有知识/u)
   assert.match(voiceSystem, /不得照抄、拼接、近似复述/u)
   assert.match(voiceSystem, /prior_approved_dialogue 非空，候选必须直接接住其中最后一句/u)
@@ -1151,21 +1134,13 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(voiceReviewSystem, /任意朋友、对手或竞争者/u)
   assert.match(voiceReviewSystem, /沉默优于为热闹批准套话/u)
   assert.match(voiceReviewSystem, /只能从同一人物的候选中逐字选一句/u)
-  assert.match(voiceRetrySystem, /唯一一次退回重写/u)
-  assert.match(voiceRetrySystem, /自然话轮/u)
-  assert.match(voiceRetrySystem, /leftImplicit/u)
-  assert.match(voiceRetryBody, /rejected_candidates/u)
-  assert.ok(voiceRetryBody.includes(`<required_reference>\\nspeech:${sectionId}:1\\n</required_reference>`))
-  assert.match(voiceRetryBody, /你拿这话说我，自己的徽章不是也没看清吗/u)
-  assert.doesNotMatch(voiceRetryReviewBody, /只看一条也够了/u)
-  assert.match(voiceRetryReviewBody, /「先看“徽章”，别忙着猜。」/u)
-  assert.match(sectionBodies[0]!, /获准对白：阿梨/u)
-  assert.doesNotMatch(sectionBodies[0]!, /对白收束/u)
+  assert.match(sectionBodies[0]!, /获准对白：柏舟/u)
+  assert.match(sectionBodies[0]!, /对白收束：1\/2 句通过声音校准/u)
   assert.doesNotMatch(sectionBodies.join('\n'), /kind=\\"character\\"/u)
   assert.ok(editorBody.indexOf(sectionId) < editorBody.indexOf(historySectionId))
   assert.doesNotMatch(editorBody, new RegExp(aliceCharacterSectionId, 'u'))
   assert.doesNotMatch(editorBody, /自己的旧站记忆/u)
-  assert.match(editorBody, /先看“徽章”，别忙着猜/u)
+  assert.match(editorBody, /先把刻痕看清楚/u)
   assert.doesNotMatch(editorBody, /谁都能说的胜利台词|先把眼前的事说清楚/u)
   assert.match(editorBody, new RegExp(`${historySectionId}[\\s\\S]*两人都看见雨停了`, 'u'))
   assert.match(editorBody, /<world_state>/u)
@@ -1173,6 +1148,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(editorSystem, /每条获准对白在原分区中逐字保留一次/u)
   assert.match(editorSystem, /可以整理其说话人标识和前后叙述/u)
   assert.match(editorSystem, /人物私有信息不在输入中，也不由编辑补写/u)
+  assert.match(editorSystem, /删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化/u)
   assert.match(directorBody, /## 结论所引用的原始证据/u)
   assert.match(directorBody, /终章原著/u)
   assert.match(directorSystem, /已经完成交流作用或没有新增内容的决定可以省略/u)
@@ -1183,8 +1159,9 @@ test('runs logged story stages while keeping each character request privately sc
     quote: '鸦青印记只在列车终章显现。',
     note: '本回合研究 Worker 引用',
   }])
-  assert.match(result.finalDraft, /阿梨把徽章转向窗光，对柏舟说：「先看“徽章”，别忙着猜。」/u)
-  assert.doesNotMatch(result.finalDraft, /^「先看“徽章”，别忙着猜。」$/mu)
+  assert.match(result.finalDraft, /阿梨把徽章转向窗光/u)
+  assert.match(result.finalDraft, /柏舟说：“先把刻痕看清楚。”/u)
+  assert.doesNotMatch(result.finalDraft, /先看“徽章”，别忙着猜/u)
   assert.doesNotMatch(result.finalDraft, /编辑器新增的台词/u)
   assert.deepEqual(result.finalSections.map(section => ({
     sectionId: section.sectionId,
@@ -1205,8 +1182,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-start'
     ? [{ workspaceId: event.data.workspaceId, turn: event.data.turn, step: event.data.step }]
     : []), [{ workspaceId: currentWorkspace.id, turn: 1, step: 1 }])
-  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-request').length, 16)
-  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-result').length, 16)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-request').length, 14)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-result').length, 14)
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-brief'
     ? [event.data.turn]
     : []), [0, 1])
@@ -1217,6 +1194,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+  assert.equal(stageRequests.some(request => request.subjectId?.startsWith('retry-draft:') === true
+    || request.subjectId?.startsWith('retry-review:') === true), false)
   const stageRequestEvents = new Map<number, import('@deepseek-ai/dsh-session').SessionEvent<'agent-rp/story-stage-request'>['data']>(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [[event.seq, event.data] as const]
     : []))
@@ -1238,7 +1217,7 @@ test('runs logged story stages while keeping each character request privately sc
     || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 16)
+  assert.equal(calls, 14)
   assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-turn-start').length, 1)
 })
 

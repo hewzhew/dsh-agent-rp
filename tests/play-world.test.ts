@@ -601,7 +601,7 @@ test('updates resource-authored narrative cards without resetting the current wo
       id: 'custom-card',
       trigger: { kind: 'consecutive-passes', count: 3 },
       event: { title: '茶杯倾斜', summary: '连续三轮停顿后，桌沿的茶杯向棋盘倾斜。' },
-      cue: { kind: 'pressure', text: '在场人物可以决定先顾棋盘还是先扶茶杯。', responders: 'all' },
+      cue: { kind: 'pressure', text: '其他人物可以决定先顾棋盘还是先扶茶杯。', responders: 'opponents' },
       repeat: false,
     }],
   }
@@ -1097,8 +1097,8 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
   assert.deepEqual(projection.cues.find(cue => cue.kind === 'pressure'), {
     eventSequences: [scene!.sequence],
     kind: 'pressure',
-    text: '棋盘需要先被重新压稳。由谁先处理、另一人是否搭手，可以成为这一刻实际发生的人物关系动作。',
-    characterIds: [reimuId, marisaId],
+    text: '棋盘需要先被重新压稳。刚完成本轮行动的人物可以决定怎样处理；动作完成后，其他人物只能在后续轮次回应。',
+    characterIds: [marisaId],
   })
   assert.match(compileStoryCharacterContext(workspace, reimuId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
   assert.match(compileStoryCharacterContext(workspace, marisaId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
@@ -1137,7 +1137,7 @@ test('projects first launch, ordinary movement, collision, and finish at their n
         id: 'fixture-two-passes',
         trigger: { kind: 'consecutive-passes', count: 2 },
         event: { title: '纸签落下', summary: '第二次停顿时，一张纸签落到棋盘中央。' },
-        cue: { kind: 'opportunity', text: '在场人物可以决定是否查看纸签。', responders: 'all' },
+        cue: { kind: 'opportunity', text: '其他人物可以决定是否查看纸签。', responders: 'opponents' },
         repeat: false,
       }],
     },
@@ -1151,10 +1151,19 @@ test('projects first launch, ordinary movement, collision, and finish at their n
   assert.equal(cardEvent.type, 'scene.changed')
   assert.equal(cardEvent.title, '纸签落下')
   assert.equal((cardEvent.data as { readonly cardId?: unknown }).cardId, 'fixture-two-passes')
+  assert.deepEqual((cardEvent.data as { readonly characterIds?: unknown }).characterIds, [reimuId])
 
   const rolls = [6, 2]
   const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
   let snapshot = module.create(playContext)
+
+  const opening = projectPlayWorldNarrative(
+    module.projectNarrative(snapshot, [snapshot.events[0]!.sequence], playContext),
+    [snapshot.events[0]!.sequence],
+    playContext,
+  )
+  assert.equal(opening.cadence, 'scene')
+  assert.deepEqual(opening.cues, [])
 
   let turn = module.characterTurn(snapshot, playContext)!
   const firstStart = snapshot.events.length
@@ -1168,7 +1177,7 @@ test('projects first launch, ordinary movement, collision, and finish at their n
     playContext,
   )
   assert.equal(firstLaunch.cadence, 'scene')
-  assert.equal(firstLaunch.cues.some(cue => cue.kind === 'change'), true)
+  assert.deepEqual(firstLaunch.cues, [])
 
   turn = module.characterTurn(snapshot, playContext)!
   const ordinaryStart = snapshot.events.length
@@ -1305,6 +1314,7 @@ test('shows recorded facts to every character but only offers a cue to its named
   const sceneText = '几轮骰声过去，两边的飞机都没能离开基地。风忽然掀起棋盘一角，灵梦伸手压住翻卷的边沿，木机的晃动才停下来。'
   const characterBodies: string[] = []
   let directorBody = ''
+  let sectionBody = ''
   const fake = {
     sessions: { flush: async () => true },
     llm: {
@@ -1313,6 +1323,7 @@ test('shows recorded facts to every character but only offers a cue to its named
         const body = JSON.stringify(options.messages ?? [])
         if (system.includes('指定人物认知')) characterBodies.push(body)
         if (system.includes('剧情导演 Worker')) directorBody = body
+        if (system.includes('分区的 prose Worker')) sectionBody = body
         const text = system.includes('单个人物的历史检索 Worker')
           ? JSON.stringify({ references: [] })
           : system.includes('指定人物认知')
@@ -1372,14 +1383,16 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.match(marisaBody, /棋盘被风掀动/u)
   assert.match(reimuBody, /棋盘需要先被重新压稳/u)
   assert.doesNotMatch(marisaBody, /棋盘需要先被重新压稳/u)
-  assert.doesNotMatch(directorBody, /魔理沙把手按到棋盘另一角/u)
+  assert.equal(directorBody, '')
+  assert.match(sectionBody, /博丽灵梦：灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住/u)
+  assert.doesNotMatch(sectionBody, /雾雨魔理沙：魔理沙把手按到棋盘另一角/u)
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   assert.equal(characterRequests.length, 2)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research'), false)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'director'), true)
+    && event.data.stage === 'director'), false)
   assert.equal(result.publicWorldEvents?.at(-1)?.type, 'scene.changed')
 })
 
@@ -1930,7 +1943,7 @@ test('writes a manually completed world result before another character acts', a
         const text = system.includes('指定人物认知')
           ? JSON.stringify({
               observation: '看见已结算结果。',
-              action: '拿起骰子准备下一回合',
+              action: '把骰盅举在半空，等魔理沙催促自己继续。',
               speech: {
                 respondsTo: '博丽灵梦本轮掷出 1 点，未达到起飞点数',
                 move: 'tease',
@@ -1988,7 +2001,7 @@ test('writes a manually completed world result before another character acts', a
   assert.equal(stageRequests.filter(request => request.stage === 'character')
     .every(request => request.dispatch.reasoningEffort === 'low' && request.dispatch.maxTokens === 4_096), true)
   assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'high')
-  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
+  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
   for (const dispatch of [proseDispatch, editorDispatch]) {
@@ -1997,6 +2010,7 @@ test('writes a manually completed world result before another character acts', a
     assert.match(dispatch, /此前棋局第 10 回合已经结束/u)
     assert.doesNotMatch(dispatch, /此前棋局第 7 回合已经结束/u)
   }
+  assert.doesNotMatch(proseDispatch, /把骰盅举在半空|刚发生的本轮结果/u)
   const brief = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
   assert.equal(brief?.data.publicDialogues, undefined)
   assert.match(characterBodies.join('\n'), /共同经历了此前棋局第 10 回合/u)
@@ -2109,9 +2123,16 @@ test('keeps the exact world outcome while preserving only private-section charac
                 speech: null,
                 insights: body.includes('# 人物：博丽灵梦')
                   ? [{
+                    kind: 'knowledge',
+                    text: '博丽灵梦本轮掷出 1 点，未达到起飞点数。',
+                  }, {
                     kind: 'decision',
                     text: '这局前几手全是小点，飞机全压在基地里，灵梦打算先按兵不动。',
                     futureChoice: '遇到不利结果时，仍会接受结算并继续这局。',
+                  }, {
+                    kind: 'intention',
+                    text: '灵梦想继续完成棋局。',
+                    futureChoice: '下一回合掷骰。',
                   }]
                   : [],
               })
@@ -2195,7 +2216,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
   assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
-  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
+  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
@@ -2468,7 +2489,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.equal(stageRequests.find(request => request.stage === 'voice'
     && request.subjectId?.startsWith('draft:') === true)?.dispatch.reasoningEffort, 'high')
   assert.equal(stageRequests.find(request => request.stage === 'voice'
-    && request.subjectId?.startsWith('review:') === true)?.dispatch.reasoningEffort, 'low')
+    && request.subjectId?.startsWith('review:') === true)?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.some(request => request.stage === 'cast'), true)
   const characterRequests = stageRequests.filter(request => request.stage === 'character')
   const reimuCharacterBody = JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages)

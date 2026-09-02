@@ -27,8 +27,8 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
     },
     cue: {
       kind: 'pressure',
-      text: '棋盘需要先被重新压稳。由谁先处理、另一人是否搭手，可以成为这一刻实际发生的人物关系动作。',
-      responders: 'all',
+      text: '棋盘需要先被重新压稳。刚完成本轮行动的人物可以决定怎样处理；动作完成后，其他人物只能在后续轮次回应。',
+      responders: 'actor',
     },
     repeat: false,
   }],
