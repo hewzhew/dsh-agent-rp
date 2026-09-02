@@ -3166,7 +3166,7 @@ test('writes a manually completed world result without persisting a character co
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
   })
-  const naturalWorldScene = '灵梦和魔理沙在棋盘两侧坐定。骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。'
+  const naturalWorldScene = '轮到灵梦。骰子在六点上停住。她把一号飞机移出基地，放在航线第一格。'
   const characterBodies: string[] = []
   const fake = {
     sessions: { flush: async () => true },
@@ -3259,6 +3259,8 @@ test('writes a manually completed world result without persisting a character co
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
+  assert.match(proseDispatch, /是否有获准对白或附加人物行动不决定 scene 的段落数量/u)
+  assert.match(editorDispatch, /没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由/u)
   for (const dispatch of [proseDispatch, editorDispatch]) {
     assert.match(dispatch, /<recent_public_prose>/u)
     assert.match(dispatch, /此前棋局第 8 回合已经结束/u)

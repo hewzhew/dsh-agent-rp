@@ -3479,8 +3479,15 @@ function narrativeFactWindows(prose: string): readonly string[] {
     .map(sentence => sentence.trim())
     .filter(sentence => sentence !== '')
   return sentences.flatMap((sentence, index) => {
-    const next = sentences[index + 1]
-    return next === undefined ? [sentence] : [sentence, `${sentence}${next}`]
+    const windows = [sentence]
+    let combined = sentence
+    for (let offset = 1; offset <= 2; offset += 1) {
+      const next = sentences[index + offset]
+      if (next === undefined) break
+      combined += next
+      windows.push(combined)
+    }
+    return windows
   })
 }
 
@@ -4686,7 +4693,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const outputInstruction = compactSection
           ? '本轮只有一项新的公开动作或一句获准对白。只写一个自然段、二至四句且不超过 320 个字符；直接从变化发生处接续，在可观察结果落定后停止。不得重述上一段静止状态，不把一个动作拆成反复停顿、伸手、收手、视线或物件位置盘点，也不添加气氛总结。比喻、象征和效果解读不能替动作解释意义；recent_public_prose 中已经发生的说话或动作不能改成没发生。'
           : section.kind === 'prose' && worldNarrative !== ''
-            ? '依照 world_narrative 的呈现节奏写成可直接阅读的连续场景。transition 用一两句带过相似动作；scene 围绕本轮现场变化展开；resolution 收束已经形成的结果。若除权威事实外没有获准对白或人物公开行动，用一个紧凑自然段写清可观察变化，不为凑篇幅制造人物互动；有新增人物材料时才按需要展开为多个自然段。不重复分区标题。'
+            ? '依照 world_narrative 的呈现节奏写成可直接阅读的连续场景。transition 用一两句带过相似动作；scene 依次呈现变化发生前的现场、触发动作与可观察后果，可以按事件进展使用多个自然段；resolution 收束已经形成的结果。是否有获准对白或附加人物行动不决定 scene 的段落数量；不能把完整场景压成规则摘要，也不为凑篇幅制造人物互动。不重复分区标题。'
             : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
           ? 'current_world_outcome 是本轮已经发生的权威结果，正文需要让读者看见事件和执行者。'
@@ -4771,7 +4778,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
         compactPublicTurn
           ? '本轮只有一项新的公开动作或一句获准对白。prose 只保留一个自然段、二至四句且不超过 320 个字符；从变化开始，在可观察结果落定后停止。合并反复停顿、伸手、收手、视线、物件位置盘点和气氛总结，删除解释动作意义的比喻、象征与效果判断。recent_public_prose 中已经发生的说话或动作不能改成没发生。'
-          : 'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留权威事实、获准对白和已选公开行动；删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞。没有新增人物材料时保留一个紧凑自然段，不补造互动。',
+          : 'prose 应读成连续场景：相似机械结果压缩成时间流动，scene 保留变化发生前的现场、触发动作与可观察后果，resolution 收束已经形成的结果。段落结构服从 world_narrative 的 cadence 和事件进展；没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由。保留权威事实、获准对白和已选公开行动；只删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞，不补造互动。',
         'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
         '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
