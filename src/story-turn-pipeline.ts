@@ -3157,6 +3157,65 @@ function renderWorldNarrativeBrief(
   ].join('\n')
 }
 
+function renderWorldNarrativeAuthority(
+  workspace: StoryWorkspaceSnapshot,
+  eventSequences: readonly number[],
+  projection: PlayWorldNarrativeProjection | undefined,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  characterDecisions: readonly StoryCharacterDecisionRecord[],
+  director: StoryDirectorDecision | undefined,
+  dialogueByReference: ReadonlyMap<string, string>,
+): string {
+  if (workspace.world === undefined || projection === undefined || eventSequences.length === 0) return ''
+  const characterNames = new Map(workspace.characters.map(character => [character.id, character.name]))
+  const selected = new Set(eventSequences)
+  const worldEvents = workspace.world.events.filter(event => selected.has(event.sequence)).map(event => ({
+    sequence: event.sequence,
+    type: event.type,
+    title: event.title,
+    summary: event.summary,
+    ...(event.actorId === undefined ? {} : {
+      actorId: event.actorId,
+      actorName: characterNames.get(event.actorId) ?? event.actorId,
+    }),
+    ...(event.data === undefined ? {} : { data: event.data }),
+  }))
+  const proseSectionIds = new Set(workspace.outputs
+    .filter(section => section.enabled && section.kind === 'prose')
+    .map(section => section.id))
+  const selectedBeats = director?.sections
+    .filter(section => proseSectionIds.has(section.sectionId))
+    .flatMap(section => section.beats) ?? []
+  const allowedPublicActions = characterDecisions.flatMap(record => {
+    const action = record.decision.action
+    if (action === '' || director !== undefined
+      && !selectedBeats.some(beat => substantiallyRestatesText(beat, action, 5))) return []
+    return [{
+      characterId: record.characterId,
+      characterName: characterNames.get(record.characterId) ?? record.characterId,
+      action,
+    }]
+  })
+  const charactersWithActions = new Set(allowedPublicActions.map(action => action.characterId))
+  const approvedDialogues = director?.sections.flatMap(section => section.speech.flatMap(speech => {
+    const dialogue = dialogueByReference.get(speech.reference)
+    return dialogue === undefined || dialogue === '' ? [] : [{
+      characterId: speech.characterId,
+      characterName: characterNames.get(speech.characterId) ?? speech.characterId,
+      dialogue,
+    }]
+  })) ?? []
+  return JSON.stringify({
+    invariants: projection.invariants ?? [],
+    worldEvents,
+    allowedPublicActions,
+    charactersWithoutAdditionalActions: characters
+      .filter(character => !charactersWithActions.has(character.id))
+      .map(character => ({ characterId: character.id, characterName: character.name })),
+    approvedDialogues,
+  }, null, 2)
+}
+
 function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): string {
   let remainder = text.replaceAll(worldNarrative, '')
   const sentences = worldNarrative.match(/[^。！？.!?]+[。！？.!?]+|[^。！？.!?]+$/gu) ?? []
@@ -4104,6 +4163,15 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     ? fallback
     : renderDirectorDecision(directorDecision, enabledSections, enabledCharacters, dialogueByReference)
   const approvedDialogue = new Set([...dialogueByReference.values()].filter(value => value !== ''))
+  const narrativeAuthority = renderWorldNarrativeAuthority(
+    input.workspace,
+    worldEventSequences,
+    worldNarrativeProjection,
+    enabledCharacters,
+    characterDecisions,
+    directorDecision,
+    dialogueByReference,
+  )
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0) {
     sectionDrafts = []
@@ -4163,6 +4231,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
             worldInstruction,
             'director_brief 只列本分区需要兑现的额外节拍。叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动；感官细节不能改变物体位置、规则状态或人物认知。只写可观察行为，不从目光、表情、姿态或停顿推断故意、不以为意、期待、犹豫等人物内心。',
+            'narrative_authority 是 Host 汇总的非叙事化校验材料，不要求逐项写进正文。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。',
             '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
             outputInstruction,
           ].join('\n'),
@@ -4174,6 +4243,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               : ['<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>']),
             '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
             '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
+            ...(narrativeAuthority === '' ? [] : ['<narrative_authority>', narrativeAuthority, '</narrative_authority>']),
             '<director_brief>', sectionDirectorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
           ].join('\n'),
@@ -4210,6 +4280,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
         'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留权威事实、获准对白和已选公开行动；删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞。没有新增人物材料时保留一个紧凑自然段，不补造互动。',
+        'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 invariants、worldEvents 的事件数值、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
         '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
       ].join('\n'),
@@ -4218,6 +4289,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
+        ...(narrativeAuthority === '' ? [] : ['<narrative_authority>', narrativeAuthority, '</narrative_authority>']),
         '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
       ].join('\n'),
       4_096,

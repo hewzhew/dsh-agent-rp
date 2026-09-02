@@ -174,9 +174,17 @@ export interface PlayWorldNarrativeCue {
   readonly characterIds: readonly string[]
 }
 
+/** One non-rendered world truth that every narrative rendering must preserve. */
+export interface PlayWorldNarrativeInvariant {
+  readonly id: string
+  readonly text: string
+}
+
 /** Public story material derived from one selected batch of authoritative events. */
 export interface PlayWorldNarrativeProjection {
   readonly cadence: PlayWorldNarrativeCadence
   readonly facts: readonly PlayWorldNarrativeFact[]
   readonly cues: readonly PlayWorldNarrativeCue[]
+  /** Stable facts used to reject contradictions without forcing them into the prose. */
+  readonly invariants?: readonly PlayWorldNarrativeInvariant[]
 }

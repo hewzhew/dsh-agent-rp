@@ -31,6 +31,19 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
       responders: 'actor',
     },
     repeat: false,
+  }, {
+    id: 'question-slip-step-eight',
+    trigger: { kind: 'piece-landed', step: 8 },
+    event: {
+      title: '格子下的折签弹开',
+      summary: '一架木机停在航线第 8 步时，格子下压着的折签弹开，正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
+    },
+    cue: {
+      kind: 'relationship',
+      text: '刚移动棋子的人物获得一次明确的提问机会，可以立即使用、留到以后或放弃；只有问题真正说出后，另一位人物才获得回答前提。',
+      responders: 'actor',
+    },
+    repeat: false,
   }],
 } satisfies FlyingChessWorldConfiguration & JsonValue
 for (const card of FLYING_CHESS_WORLD_CONFIGURATION.narrativeCards) {

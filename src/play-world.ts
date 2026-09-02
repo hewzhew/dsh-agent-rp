@@ -120,7 +120,7 @@ export interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection
-  /** Project immutable facts, optional dramatic directions, and presentation cadence for selected events. */
+  /** Project immutable facts, optional dramatic directions, non-rendered invariants, and presentation cadence. */
   projectNarrative(
     snapshot: PlayWorldSnapshot,
     eventSequences: readonly number[],
@@ -179,7 +179,9 @@ export function projectPlayWorldNarrative(
     throw new Error('游玩世界叙事节奏无效')
   }
   if (!Array.isArray(projection.facts) || projection.facts.length === 0 || projection.facts.length > 64
-    || !Array.isArray(projection.cues) || projection.cues.length > 32) {
+    || !Array.isArray(projection.cues) || projection.cues.length > 32
+    || projection.invariants !== undefined
+      && (!Array.isArray(projection.invariants) || projection.invariants.length > 32)) {
     throw new Error('游玩世界叙事投影无效')
   }
   const selected = new Set(eventSequences)
@@ -212,10 +214,23 @@ export function projectPlayWorldNarrative(
       characterIds: Object.freeze([...cue.characterIds]),
     })
   })
+  const invariantIds = new Set<string>()
+  const invariants = (projection.invariants ?? []).map((invariant, index) => {
+    const id = requiredProjectionText(invariant.id, `游玩世界叙事不变量 ${String(index + 1)} id`, 120)
+    if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id) || invariantIds.has(id)) {
+      throw new Error(`游玩世界叙事不变量 ${String(index + 1)} id 无效`)
+    }
+    invariantIds.add(id)
+    return Object.freeze({
+      id,
+      text: requiredProjectionText(invariant.text, `游玩世界叙事不变量 ${String(index + 1)}`, 2_000),
+    })
+  })
   return Object.freeze({
     cadence: projection.cadence,
     facts: Object.freeze(facts),
     cues: Object.freeze(cues),
+    ...(projection.invariants === undefined ? {} : { invariants: Object.freeze(invariants) }),
   })
 }
 

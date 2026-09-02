@@ -2533,6 +2533,26 @@ const narrativeResponderLabels: Readonly<Record<FlyingChessNarrativeCard['cue'][
   all: '所有在场人物',
 }
 
+const narrativeTriggerLabels: Readonly<Record<FlyingChessNarrativeCard['trigger']['kind'], string>> = {
+  'consecutive-passes': '连续回合无棋可走',
+  'piece-landed': '棋子停在指定步数',
+  'piece-captured': '撞回对方棋子',
+  'player-home-count': '己方棋子抵达终点',
+}
+
+function narrativeTriggerInvalid(trigger: FlyingChessNarrativeCard['trigger']): boolean {
+  if (trigger.kind === 'consecutive-passes') {
+    return !Number.isSafeInteger(trigger.count) || trigger.count < 2 || trigger.count > 32
+  }
+  if (trigger.kind === 'piece-landed') {
+    return !Number.isSafeInteger(trigger.step) || trigger.step < 1 || trigger.step >= 24
+  }
+  if (trigger.kind === 'player-home-count') {
+    return !Number.isSafeInteger(trigger.count) || trigger.count < 1 || trigger.count > 4
+  }
+  return false
+}
+
 function installedFlyingChessNarrativeCards(workspace: StoryWorkspaceSnapshot): readonly FlyingChessNarrativeCard[] {
   const configuration = workspace.worldBinding?.configuration
   if (typeof configuration !== 'object' || configuration === null || Array.isArray(configuration)) return []
@@ -2557,8 +2577,7 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
     setCards(current => current.map((card, cardIndex) => cardIndex === index ? transform(card) : card))
   }
   const invalid = cards.some(card => card.event.title.trim() === '' || card.event.summary.trim() === ''
-    || card.cue.text.trim() === '' || !Number.isSafeInteger(card.trigger.count)
-    || card.trigger.count < 2 || card.trigger.count > 32)
+    || card.cue.text.trim() === '' || narrativeTriggerInvalid(card.trigger))
   const save = (): void => {
     if (invalid || busy) return
     void onUpdate({ format: 0, ruleset: 'classic-24', narrativeCards: cards }).then(updated => {
@@ -2575,11 +2594,33 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
           <button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除${card.event.title || '事件牌'}`}
             onClick={() => { setCards(current => current.filter((_item, cardIndex) => cardIndex !== index)) }}>×</button></header>
         <div className="story-studio-field-row">
-          <Field label="触发条件"><span className="story-world-trigger-field">连续 <input className="story-studio-input" type="number" min={2} max={32}
+          <Field label="触发条件"><span className="story-world-trigger-field"><select className="story-studio-input" value={card.trigger.kind} onChange={event => {
+            const kind = event.currentTarget.value as FlyingChessNarrativeCard['trigger']['kind']
+            const trigger: FlyingChessNarrativeCard['trigger'] = kind === 'consecutive-passes'
+              ? { kind, count: 4 }
+              : kind === 'piece-landed'
+                ? { kind, step: 8 }
+                : kind === 'player-home-count'
+                  ? { kind, count: 1 }
+                  : { kind: 'piece-captured' }
+            updateCard(index, current => ({ ...current, trigger }))
+          }}>{Object.entries(narrativeTriggerLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>
+          {card.trigger.kind === 'consecutive-passes' && <><input className="story-studio-input" aria-label="连续回合数" type="number" min={2} max={32}
             value={card.trigger.count} onChange={event => {
               const count = Number(event.currentTarget.value)
-              updateCard(index, current => ({ ...current, trigger: { ...current.trigger, count } }))
-            }} /> 个回合无棋可走</span></Field>
+              updateCard(index, current => ({ ...current, trigger: { kind: 'consecutive-passes', count } }))
+            }} /><span>回合</span></>}
+          {card.trigger.kind === 'piece-landed' && <><span>第</span><input className="story-studio-input" aria-label="航线步数" type="number" min={1} max={23}
+            value={card.trigger.step} onChange={event => {
+              const step = Number(event.currentTarget.value)
+              updateCard(index, current => ({ ...current, trigger: { kind: 'piece-landed', step } }))
+            }} /><span>步</span></>}
+          {card.trigger.kind === 'player-home-count' && <><input className="story-studio-input" aria-label="抵达终点棋子数" type="number" min={1} max={4}
+            value={card.trigger.count} onChange={event => {
+              const count = Number(event.currentTarget.value)
+              updateCard(index, current => ({ ...current, trigger: { kind: 'player-home-count', count } }))
+            }} /><span>架</span></>}
+          </span></Field>
           <Field label="形成的叙事方向"><select className="story-studio-input" value={card.cue.kind} onChange={event => {
             const kind = event.currentTarget.value as FlyingChessNarrativeCard['cue']['kind']
             updateCard(index, current => ({ ...current, cue: { ...current.cue, kind } }))
@@ -2613,7 +2654,7 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
           repeat: false,
         }])
       }}>＋ 添加事件牌</button>
-      {invalid && <small className="story-world-cast-error">每张事件牌需要完整的公开事实与现场条件；连续回合数应为 2 至 32。</small>}
+      {invalid && <small className="story-world-cast-error">每张事件牌需要有效的触发条件、完整的公开事实与现场条件。</small>}
       <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
         disabled={busy || invalid} onClick={save}>{busy ? '正在保存…' : '保存事件牌'}</button>
         <button className="story-studio-button" type="button" disabled={busy} onClick={onClose}>取消</button></div>

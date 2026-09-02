@@ -1373,11 +1373,18 @@ interface PlayWorldNarrativeCue {
   readonly text: string;
   readonly characterIds: readonly string[];
 }
+/** One non-rendered world truth that every narrative rendering must preserve. */
+interface PlayWorldNarrativeInvariant {
+  readonly id: string;
+  readonly text: string;
+}
 /** Public story material derived from one selected batch of authoritative events. */
 interface PlayWorldNarrativeProjection {
   readonly cadence: PlayWorldNarrativeCadence;
   readonly facts: readonly PlayWorldNarrativeFact[];
   readonly cues: readonly PlayWorldNarrativeCue[];
+  /** Stable facts used to reject contradictions without forcing them into the prose. */
+  readonly invariants?: readonly PlayWorldNarrativeInvariant[];
 }
 /** Editable role assigned to one ordered output section. */
 type StoryOutputKind = 'prose' | 'character' | 'history';
@@ -1526,7 +1533,7 @@ interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection;
-  /** Project immutable facts, optional dramatic directions, and presentation cadence for selected events. */
+  /** Project immutable facts, optional dramatic directions, non-rendered invariants, and presentation cadence. */
   projectNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): PlayWorldNarrativeProjection;
 }
 /** Installed world modules keyed by stable module id. */

@@ -11,13 +11,37 @@ export interface FlyingChessConsecutivePassesTrigger {
   readonly count: number
 }
 
+/** Trigger after one moved piece settles on a relative route step. */
+export interface FlyingChessPieceLandedTrigger {
+  readonly kind: 'piece-landed'
+  readonly step: number
+}
+
+/** Trigger after one move sends at least one opposing piece back to base. */
+export interface FlyingChessPieceCapturedTrigger {
+  readonly kind: 'piece-captured'
+}
+
+/** Trigger when the moving player reaches an exact number of home pieces. */
+export interface FlyingChessPlayerHomeCountTrigger {
+  readonly kind: 'player-home-count'
+  readonly count: number
+}
+
+/** Rule-owned conditions that can draw one narrative card. */
+export type FlyingChessNarrativeTrigger =
+  | FlyingChessConsecutivePassesTrigger
+  | FlyingChessPieceLandedTrigger
+  | FlyingChessPieceCapturedTrigger
+  | FlyingChessPlayerHomeCountTrigger
+
 /** Characters invited to respond when a narrative card fires. */
 export type FlyingChessNarrativeResponders = 'actor' | 'opponents' | 'all'
 
 /** One structured scene event supplied by a flying-chess world resource. */
 export interface FlyingChessNarrativeCard {
   readonly id: string
-  readonly trigger: FlyingChessConsecutivePassesTrigger
+  readonly trigger: FlyingChessNarrativeTrigger
   readonly event: {
     readonly title: string
     readonly summary: string

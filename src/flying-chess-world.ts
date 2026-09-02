@@ -5,6 +5,7 @@ import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   type FlyingChessNarrativeCard,
+  type FlyingChessNarrativeTrigger,
   type FlyingChessPiece,
   type FlyingChessWorldAction,
   type FlyingChessWorldState,
@@ -21,6 +22,13 @@ const EVENT_ID_PATTERN = /^world-event-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89a
 const PIECE_ID_PATTERN = /^piece-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const TRACK_LENGTH = 24
 const PIECES_PER_PLAYER = 4
+const FLYING_CHESS_NARRATIVE_INVARIANTS = Object.freeze([Object.freeze({
+  id: 'single-board',
+  text: '场景中只有一张棋盘。',
+}), Object.freeze({
+  id: 'shared-die',
+  text: '场景中只有一枚由各回合共用的骰子；投掷次数不能改写成骰子数量。',
+})])
 
 interface FlyingChessWorldModuleOptions {
   readonly rollDie?: () => number
@@ -45,12 +53,39 @@ function configurationText(value: unknown, label: string, maxLength: number): st
   return value
 }
 
+function normalizeNarrativeTrigger(value: unknown, label: string): FlyingChessNarrativeTrigger {
+  if (!isRecord(value) || typeof value.kind !== 'string') throw new Error(`${label}触发条件无效`)
+  if (value.kind === 'consecutive-passes') {
+    if (!exactKeys(value, ['kind', 'count']) || !Number.isSafeInteger(value.count)
+      || (value.count as number) < 2 || (value.count as number) > 32) {
+      throw new Error(`${label}触发条件无效`)
+    }
+    return { kind: value.kind, count: value.count as number }
+  }
+  if (value.kind === 'piece-landed') {
+    if (!exactKeys(value, ['kind', 'step']) || !Number.isSafeInteger(value.step)
+      || (value.step as number) < 1 || (value.step as number) >= TRACK_LENGTH) {
+      throw new Error(`${label}触发条件无效`)
+    }
+    return { kind: value.kind, step: value.step as number }
+  }
+  if (value.kind === 'piece-captured') {
+    if (!exactKeys(value, ['kind'])) throw new Error(`${label}触发条件无效`)
+    return { kind: value.kind }
+  }
+  if (value.kind === 'player-home-count') {
+    if (!exactKeys(value, ['kind', 'count']) || !Number.isSafeInteger(value.count)
+      || (value.count as number) < 1 || (value.count as number) > PIECES_PER_PLAYER) {
+      throw new Error(`${label}触发条件无效`)
+    }
+    return { kind: value.kind, count: value.count as number }
+  }
+  throw new Error(`${label}触发条件无效`)
+}
+
 function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarrativeCard {
   const label = `飞行棋叙事事件牌 ${String(index + 1)}`
   if (!isRecord(value) || !exactKeys(value, ['id', 'trigger', 'event', 'cue', 'repeat'])
-    || !isRecord(value.trigger) || !exactKeys(value.trigger, ['kind', 'count'])
-    || value.trigger.kind !== 'consecutive-passes'
-    || !Number.isSafeInteger(value.trigger.count) || (value.trigger.count as number) < 2 || (value.trigger.count as number) > 32
     || !isRecord(value.event) || !exactKeys(value.event, ['title', 'summary'])
     || !isRecord(value.cue) || !exactKeys(value.cue, ['kind', 'text', 'responders'])
     || value.cue.kind !== 'change' && value.cue.kind !== 'pressure'
@@ -63,7 +98,7 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new Error(`${label} id 无效`)
   return {
     id,
-    trigger: { kind: 'consecutive-passes', count: value.trigger.count as number },
+    trigger: normalizeNarrativeTrigger(value.trigger, label),
     event: {
       title: configurationText(value.event.title, `${label}事件标题`, 120),
       summary: configurationText(value.event.summary, `${label}事件事实`, 2_000),
@@ -360,6 +395,7 @@ function isFirstLaunchEvent(
 
 function appendNarrativeCardEvents(
   events: readonly PlayWorldEvent[],
+  triggerEvents: readonly PlayWorldEvent[],
   state: FlyingChessWorldState,
   context: PlayWorldContext,
 ): readonly PlayWorldEvent[] {
@@ -369,15 +405,39 @@ function appendNarrativeCardEvents(
     return item.type === 'scene.changed' && data?.kind === 'narrative-card'
       && typeof data.cardId === 'string' ? [data.cardId] : []
   }))
-  const matching = narrativeCards(context).filter(card =>
-    passedTurns >= card.trigger.count
-      && (card.repeat ? passedTurns % card.trigger.count === 0 : !fired.has(card.id)))
-  return matching.reduce<readonly PlayWorldEvent[]>((current, card) => {
+  const matches = narrativeCards(context).flatMap(card => {
+    if (!card.repeat && fired.has(card.id)) return []
+    const trigger = card.trigger
+    let cause: PlayWorldEvent | undefined
+    if (trigger.kind === 'consecutive-passes') {
+      cause = triggerEvents.find(item => item.type === 'turn.passed')
+      if (cause === undefined || passedTurns < trigger.count
+        || card.repeat && passedTurns % trigger.count !== 0) return []
+    } else if (trigger.kind === 'piece-landed') {
+      cause = triggerEvents.find(item => {
+        const data = eventData(item)
+        return item.type === 'piece.moved' && data?.toStatus === 'track'
+          && data.toSteps === trigger.step
+      })
+    } else if (trigger.kind === 'piece-captured') {
+      cause = triggerEvents.find(item => item.type === 'piece.captured')
+    } else {
+      cause = triggerEvents.find(item => {
+        const data = eventData(item)
+        return item.type === 'piece.moved' && data?.toStatus === 'home'
+          && item.actorId !== undefined
+          && state.pieces.filter(piece => piece.ownerId === item.actorId && piece.status === 'home').length === trigger.count
+      })
+    }
+    return cause?.actorId === undefined ? [] : [{ card, actorId: cause.actorId, causeSequence: cause.sequence }]
+  })
+  return matches.reduce<readonly PlayWorldEvent[]>((current, match) => {
+    const { card, actorId, causeSequence } = match
     const characterIds = card.cue.responders === 'all'
       ? state.playerOrder
       : card.cue.responders === 'actor'
-        ? [state.currentPlayerId]
-        : state.playerOrder.filter(characterId => characterId !== state.currentPlayerId)
+        ? [actorId]
+        : state.playerOrder.filter(characterId => characterId !== actorId)
     return [
       ...current,
       event(current, 'scene.changed', card.event.title, card.event.summary, undefined, {
@@ -385,6 +445,7 @@ function appendNarrativeCardEvents(
         cardId: card.id,
         cueKind: card.cue.kind,
         cueText: card.cue.text,
+        causeSequence,
         characterIds: [...characterIds],
       }),
     ]
@@ -451,6 +512,7 @@ function projectNarrative(
     cadence,
     facts: [{ eventSequences: events.map(item => item.sequence), text }],
     cues,
+    invariants: FLYING_CHESS_NARRATIVE_INVARIANTS,
   }
 }
 
@@ -582,10 +644,12 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
             action.actorId,
             { kind: 'turn-passed', reason, rolled: value, required: 6, nextPlayerId },
           )
-          const nextEvents = appendNarrativeCardEvents([...normalized.events, rolled, passed], state, context)
+          const settledEvents = [...normalized.events, rolled, passed]
+          const nextState = { ...state, turn: state.turn + 1, currentPlayerId: nextPlayerId }
+          const nextEvents = appendNarrativeCardEvents(settledEvents, [rolled, passed], nextState, context)
           return this.normalize({
             ...normalized,
-            state: { ...state, turn: state.turn + 1, currentPlayerId: nextPlayerId },
+            state: nextState,
             events: nextEvents,
           }, context)
         }
@@ -640,7 +704,14 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         `${String(captured.length)} 架对方飞机返回基地。`, moving.ownerId)]
       const winnerEvents = winnerId === undefined ? [] : [event([...normalized.events, movedEvent, ...collisionEvents], 'game.finished',
         `${playerName(context, winnerId)}获胜`, '四架飞机全部抵达终点。', winnerId)]
-      return this.normalize({ ...normalized, state: nextState, events: [...normalized.events, movedEvent, ...collisionEvents, ...winnerEvents] }, context)
+      const settledEvents = [...normalized.events, movedEvent, ...collisionEvents, ...winnerEvents]
+      const nextEvents = appendNarrativeCardEvents(
+        settledEvents,
+        [movedEvent, ...collisionEvents, ...winnerEvents],
+        nextState,
+        context,
+      )
+      return this.normalize({ ...normalized, state: nextState, events: nextEvents }, context)
     },
     characterTurn(snapshot, context) {
       const normalized = this.normalize(snapshot, context)
