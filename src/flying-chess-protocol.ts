@@ -42,11 +42,13 @@ export type FlyingChessNarrativeTrigger =
   | FlyingChessPlayerHomeCountTrigger
 
 /** Characters invited to respond when a narrative card fires. */
-export type FlyingChessNarrativeResponders = 'actor' | 'opponents' | 'all'
+export type FlyingChessNarrativeResponders = 'none' | 'actor' | 'opponents' | 'all'
 
 /** One structured scene event supplied by a flying-chess world resource. */
 export interface FlyingChessNarrativeCard {
   readonly id: string
+  /** Earlier card that must have fired before this card can fire. */
+  readonly afterCardId?: string
   readonly trigger: FlyingChessNarrativeTrigger
   readonly event: {
     readonly title: string

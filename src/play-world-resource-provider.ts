@@ -22,13 +22,13 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
     id: 'first-launch-hidden-slip',
     trigger: { kind: 'piece-launched' },
     event: {
-      title: '第一格下露出一张折签',
-      summary: '本局第一架木机离开基地后，航线第一格下压着的一张折签露出画着问号的背面；签文仍被棋盘遮住。',
+      title: '棋盘下露出半张折签',
+      summary: '本局第一架木机驶上航线时，棋盘边缘轻轻一错，一张折签从棋盘下滑出半截，只露出画着问号的背面；写字的正面仍被压在下面。',
     },
     cue: {
-      kind: 'opportunity',
-      text: '折签尚未翻开，也不妨碍棋局；在场人物已经看见这里藏着东西，可以先继续走棋，等它自行揭开。',
-      responders: 'all',
+      kind: 'change',
+      text: '这张折签仍被棋盘压住，只作为所有在场人物都能看见的未完现场线索保留。',
+      responders: 'none',
     },
     repeat: false,
   }, {
@@ -46,10 +46,11 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
     repeat: false,
   }, {
     id: 'question-slip-step-eight',
+    afterCardId: 'first-launch-hidden-slip',
     trigger: { kind: 'piece-landed', step: 8 },
     event: {
-      title: '格子下的折签弹开',
-      summary: '一架木机停在航线第 8 步时，格子下压着的折签弹开，正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
+      title: '那张折签被带出棋盘',
+      summary: '一架木机停在航线第 8 步时，底座勾住先前露出的那张折签，将它从棋盘下完整带出；正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
     },
     cue: {
       kind: 'opportunity',

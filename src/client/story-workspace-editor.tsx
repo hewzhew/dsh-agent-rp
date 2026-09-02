@@ -2528,6 +2528,7 @@ const narrativeCueLabels: Readonly<Record<FlyingChessNarrativeCard['cue']['kind'
 }
 
 const narrativeResponderLabels: Readonly<Record<FlyingChessNarrativeCard['cue']['responders'], string>> = {
+  none: '不开放人物额外反应',
   actor: '触发本轮的行动人物',
   opponents: '行动人物以外的棋手',
   all: '所有在场人物',
@@ -2552,6 +2553,21 @@ function narrativeTriggerInvalid(trigger: FlyingChessNarrativeCard['trigger']): 
     return !Number.isSafeInteger(trigger.count) || trigger.count < 1 || trigger.count > 4
   }
   return false
+}
+
+function narrativeCardRelationsInvalid(cards: readonly FlyingChessNarrativeCard[]): boolean {
+  const cardsById = new Map(cards.map(card => [card.id, card]))
+  return cards.some(card => {
+    if (card.afterCardId !== undefined && !cardsById.has(card.afterCardId)) return true
+    const visited = new Set<string>()
+    let current: FlyingChessNarrativeCard | undefined = card
+    while (current !== undefined) {
+      if (visited.has(current.id)) return true
+      visited.add(current.id)
+      current = current.afterCardId === undefined ? undefined : cardsById.get(current.afterCardId)
+    }
+    return false
+  })
 }
 
 function installedFlyingChessNarrativeCards(workspace: StoryWorkspaceSnapshot): readonly FlyingChessNarrativeCard[] {
@@ -2579,6 +2595,7 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
   }
   const invalid = cards.some(card => card.event.title.trim() === '' || card.event.summary.trim() === ''
     || card.cue.text.trim() === '' || narrativeTriggerInvalid(card.trigger))
+    || narrativeCardRelationsInvalid(cards)
   const save = (): void => {
     if (invalid || busy) return
     void onUpdate({ format: 0, ruleset: 'classic-24', narrativeCards: cards }).then(updated => {
@@ -2629,6 +2646,15 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
             updateCard(index, current => ({ ...current, cue: { ...current.cue, kind } }))
           }}>{Object.entries(narrativeCueLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></Field>
         </div>
+        <Field label="承接事件"><select className="story-studio-input" value={card.afterCardId ?? ''} onChange={event => {
+          const afterCardId = event.currentTarget.value
+          updateCard(index, current => {
+            if (afterCardId !== '') return { ...current, afterCardId }
+            const { afterCardId: _afterCardId, ...independentCard } = current
+            return independentCard
+          })
+        }}><option value="">独立触发</option>{cards.filter(candidate => candidate.id !== card.id).map(candidate => <option
+          key={candidate.id} value={candidate.id}>{candidate.event.title.trim() || candidate.id}</option>)}</select></Field>
         <Field label="事件标题"><input className="story-studio-input" value={card.event.title} onChange={event => {
           const title = event.currentTarget.value
           updateCard(index, current => ({ ...current, event: { ...current.event, title } }))
@@ -2657,7 +2683,7 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
           repeat: false,
         }])
       }}>＋ 添加事件牌</button>
-      {invalid && <small className="story-world-cast-error">每张事件牌需要有效的触发条件、完整的公开事实与现场条件。</small>}
+      {invalid && <small className="story-world-cast-error">每张事件牌需要有效的触发条件、完整的公开事实与现场条件；承接事件必须存在且不能形成循环。</small>}
       <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
         disabled={busy || invalid} onClick={save}>{busy ? '正在保存…' : '保存事件牌'}</button>
         <button className="story-studio-button" type="button" disabled={busy} onClick={onClose}>取消</button></div>

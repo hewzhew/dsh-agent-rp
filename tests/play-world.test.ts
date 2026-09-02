@@ -9,8 +9,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
-import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
+import {
+  FLYING_CHESS_WORLD_MODULE_ID,
+  type FlyingChessWorldState,
+} from '../src/flying-chess-protocol.ts'
 import { PlayWorldRegistry, projectPlayWorldNarrative, type PlayWorldContext, type PlayWorldModule } from '../src/play-world.ts'
 import { RoleplayResourceCatalog } from '../src/roleplay-resource-catalog.ts'
 import {
@@ -1245,6 +1249,76 @@ test('draws authored scene cards from landing, collision, and home-count events'
     && (event.data as { readonly cardId?: unknown }).cardId === 'first-home')!
   const homeProjection = homeModule.projectNarrative(arrived, [homeCard.sequence], playContext)
   assert.deepEqual(homeProjection.cues[0]?.characterIds, [reimuId, marisaId])
+})
+
+test('unlocks linked scene cards in order and keeps their unresolved fact in world context', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const playContext: PlayWorldContext = {
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: {
+      format: 0,
+      ruleset: 'classic-24',
+      narrativeCards: [{
+        id: 'slip-appears',
+        trigger: { kind: 'piece-launched' },
+        event: { title: '折签露出', summary: '一张只露出背面的折签从棋盘下滑出半截。' },
+        cue: { kind: 'change', text: '折签仍被棋盘压住。', responders: 'none' },
+        repeat: false,
+      }, {
+        id: 'slip-opens',
+        afterCardId: 'slip-appears',
+        trigger: { kind: 'piece-launched' },
+        event: { title: '折签翻开', summary: '先前露出的折签被第二架起飞的木机完整带出。' },
+        cue: { kind: 'opportunity', text: '行动人物可以读取折签。', responders: 'actor' },
+        repeat: false,
+      }],
+    },
+    sourceReferences: [],
+  }
+  const rolls = [6, 1, 6]
+  const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
+  let snapshot = module.create(playContext)
+
+  let turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+
+  const appeared = snapshot.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-appears')!
+  assert.equal(snapshot.events.some(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-opens'), false)
+  assert.match(module.projectForCharacter(snapshot, reimuId, playContext).text, /尚未兑现的公开现场线索：[\s\S]*折签露出/u)
+  assert.deepEqual(module.projectNarrative(snapshot, [appeared.sequence], playContext).cues[0]?.characterIds, [])
+
+  for (let index = 0; index < 4; index += 1) {
+    turn = module.characterTurn(snapshot, playContext)!
+    snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  }
+  const opened = snapshot.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-opens')!
+  assert.equal((opened.data as { readonly predecessorSequence?: unknown }).predecessorSequence, appeared.sequence)
+  assert.doesNotMatch(module.projectForCharacter(snapshot, reimuId, playContext).text, /尚未兑现的公开现场线索/u)
+})
+
+test('rejects missing and cyclic scene-card prerequisites', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const baseCard = {
+    trigger: { kind: 'piece-launched' } as const,
+    event: { title: '折签变化', summary: '折签的状态发生变化。' },
+    cue: { kind: 'change' as const, text: '现场保留这项变化。', responders: 'none' as const },
+    repeat: false,
+  }
+  const module = createFlyingChessWorldModule()
+  const contextWith = (narrativeCards: JsonValue[]): PlayWorldContext => ({
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: { format: 0, ruleset: 'classic-24', narrativeCards },
+    sourceReferences: [],
+  })
+  assert.throws(() => module.create(contextWith([{ ...baseCard, id: 'second', afterCardId: 'missing' }])), /不存在的事件牌/u)
+  assert.throws(() => module.create(contextWith([
+    { ...baseCard, id: 'first', afterCardId: 'second' },
+    { ...baseCard, id: 'second', afterCardId: 'first' },
+  ])), /形成了循环/u)
 })
 
 test('keeps narrative opportunities private and durable until their explicit disposition', () => {

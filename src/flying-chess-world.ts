@@ -99,12 +99,12 @@ function normalizeNarrativeTrigger(value: unknown, label: string): FlyingChessNa
 
 function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarrativeCard {
   const label = `飞行棋叙事事件牌 ${String(index + 1)}`
-  if (!isRecord(value) || !exactKeys(value, ['id', 'trigger', 'event', 'cue', 'repeat'])
+  if (!isRecord(value) || !exactKeys(value, ['id', 'afterCardId', 'trigger', 'event', 'cue', 'repeat'])
     || !isRecord(value.event) || !exactKeys(value.event, ['title', 'summary'])
     || !isRecord(value.cue) || !exactKeys(value.cue, ['kind', 'text', 'responders', 'opportunity'])
     || value.cue.kind !== 'change' && value.cue.kind !== 'pressure'
       && value.cue.kind !== 'opportunity' && value.cue.kind !== 'relationship'
-    || value.cue.responders !== 'actor' && value.cue.responders !== 'opponents'
+    || value.cue.responders !== 'none' && value.cue.responders !== 'actor' && value.cue.responders !== 'opponents'
       && value.cue.responders !== 'all' || typeof value.repeat !== 'boolean'
     || value.cue.opportunity !== undefined && (!isRecord(value.cue.opportunity)
       || !exactKeys(value.cue.opportunity, ['kind', 'move', 'targets'])
@@ -116,6 +116,9 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new Error(`${label} id 无效`)
   return {
     id,
+    ...(value.afterCardId === undefined
+      ? {}
+      : { afterCardId: configurationText(value.afterCardId, `${label}承接事件牌 id`, 120) }),
     trigger: normalizeNarrativeTrigger(value.trigger, label),
     event: {
       title: configurationText(value.event.title, `${label}事件标题`, 120),
@@ -144,6 +147,19 @@ function narrativeCards(context: PlayWorldContext): readonly FlyingChessNarrativ
   const cards = (value.narrativeCards ?? []).map(normalizeNarrativeCard)
   if (cards.length > 64 || new Set(cards.map(card => card.id)).size !== cards.length) {
     throw new Error('飞行棋叙事事件牌集合无效')
+  }
+  const cardsById = new Map(cards.map(card => [card.id, card]))
+  for (const card of cards) {
+    if (card.afterCardId !== undefined && !cardsById.has(card.afterCardId)) {
+      throw new Error(`飞行棋叙事事件牌 ${JSON.stringify(card.id)} 承接了不存在的事件牌`)
+    }
+    const visited = new Set<string>()
+    let current: FlyingChessNarrativeCard | undefined = card
+    while (current !== undefined) {
+      if (visited.has(current.id)) throw new Error('飞行棋叙事事件牌承接关系形成了循环')
+      visited.add(current.id)
+      current = current.afterCardId === undefined ? undefined : cardsById.get(current.afterCardId)
+    }
   }
   return cards
 }
@@ -579,13 +595,15 @@ function appendNarrativeCardEvents(
   context: PlayWorldContext,
 ): readonly PlayWorldEvent[] {
   const passedTurns = consecutivePassedTurns(events)
-  const fired = new Set(events.flatMap(item => {
+  const fired = new Map(events.flatMap(item => {
     const data = eventData(item)
     return item.type === 'scene.changed' && data?.kind === 'narrative-card'
-      && typeof data.cardId === 'string' ? [data.cardId] : []
+      && typeof data.cardId === 'string' ? [[data.cardId, item] as const] : []
   }))
   const matches = narrativeCards(context).flatMap(card => {
     if (!card.repeat && fired.has(card.id)) return []
+    const predecessor = card.afterCardId === undefined ? undefined : fired.get(card.afterCardId)
+    if (card.afterCardId !== undefined && predecessor === undefined) return []
     const trigger = card.trigger
     let cause: PlayWorldEvent | undefined
     if (trigger.kind === 'consecutive-passes') {
@@ -614,11 +632,18 @@ function appendNarrativeCardEvents(
           && state.pieces.filter(piece => piece.ownerId === item.actorId && piece.status === 'home').length === trigger.count
       })
     }
-    return cause?.actorId === undefined ? [] : [{ card, actorId: cause.actorId, causeSequence: cause.sequence }]
+    return cause?.actorId === undefined ? [] : [{
+      card,
+      actorId: cause.actorId,
+      causeSequence: cause.sequence,
+      predecessorSequence: predecessor?.sequence,
+    }]
   })
   return matches.reduce<readonly PlayWorldEvent[]>((current, match) => {
-    const { card, actorId, causeSequence } = match
-    const characterIds = card.cue.responders === 'all'
+    const { card, actorId, causeSequence, predecessorSequence } = match
+    const characterIds = card.cue.responders === 'none'
+      ? []
+      : card.cue.responders === 'all'
       ? state.playerOrder
       : card.cue.responders === 'actor'
         ? [actorId]
@@ -632,6 +657,10 @@ function appendNarrativeCardEvents(
         cueText: card.cue.text,
         causeSequence,
         characterIds: [...characterIds],
+        ...(card.afterCardId === undefined || predecessorSequence === undefined ? {} : {
+          afterCardId: card.afterCardId,
+          predecessorSequence,
+        }),
         ...(card.cue.opportunity === undefined ? {} : {
           opportunityKind: card.cue.opportunity.kind,
           opportunityMove: card.cue.opportunity.move,
@@ -640,6 +669,29 @@ function appendNarrativeCardEvents(
       }),
     ]
   }, events)
+}
+
+function unresolvedNarrativeEvents(
+  events: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+): readonly PlayWorldEvent[] {
+  const cards = narrativeCards(context)
+  const fired = new Map(events.flatMap(item => {
+    const data = eventData(item)
+    return item.type === 'scene.changed' && data?.kind === 'narrative-card'
+      && typeof data.cardId === 'string' ? [[data.cardId, item] as const] : []
+  }))
+  const successors = new Map<string, string[]>()
+  for (const card of cards) {
+    if (card.afterCardId === undefined) continue
+    const items = successors.get(card.afterCardId) ?? []
+    items.push(card.id)
+    successors.set(card.afterCardId, items)
+  }
+  return [...successors].flatMap(([cardId, successorIds]) => {
+    const source = fired.get(cardId)
+    return source !== undefined && successorIds.some(id => !fired.has(id)) ? [source] : []
+  })
 }
 
 function narrativeCues(
@@ -742,12 +794,15 @@ function renderState(
                 : `，回应者为 ${names.get(opportunity.responderId) ?? opportunity.responderId}`}`
         return [`- [${opportunity.id}] ${status}：${data.cueText}`]
       })
+  const unresolvedNarrative = unresolvedNarrativeEvents(events, context)
+    .map(item => `- ${item.title}：${item.summary}`)
   return [
     '执行约束：棋局状态与世界事件只能由场地程序写入。只能描写下列已记录事件及人物反应；禁止自行掷骰、移动棋子、切换回合、决定胜负或声称任何未记录的棋局变化。',
     `当前第 ${String(state.turn)} 回合，轮到 ${names.get(state.currentPlayerId) ?? state.currentPlayerId}。`,
     state.pendingRoll === undefined ? '尚未掷骰。' : `已掷出 ${String(state.pendingRoll.value)}，等待选择合法棋子。`,
     ...lines,
     state.winnerId === undefined ? '' : `胜者：${names.get(state.winnerId) ?? state.winnerId}`,
+    unresolvedNarrative.length === 0 ? '' : `尚未兑现的公开现场线索：\n${unresolvedNarrative.join('\n')}`,
     opportunities.length === 0 ? '' : `你拥有的世界机会：\n${opportunities.join('\n')}`,
     recent === '' ? '' : `最近世界事件：\n${recent}`,
   ].filter(Boolean).join('\n')
