@@ -1035,7 +1035,8 @@ const DIRECT_DIALOGUE_PATTERN = /[“”「」『』"]/u
 const DIRECTOR_SPEECH_BEAT_PATTERN = /(?:开口|说出|发问|提问|问出|回答|答复|回话|回应|接话|接过[^。！？\r\n]{0,16}(?:问题|话)|拒答|拒绝回答|把话|话锋|话题)/u
 const COMPACT_PROSE_INTERPRETATION_PATTERN = /(?:仿佛|仿若|宛如|好像|像|似乎|余韵|(?:没(?:有)?动|未动)[^。！？\r\n]{0,16}(?:看|望|听))/u
 const INCOMPLETE_WORLD_VALUE_PATTERN = /(?:(?:点数|骰面|朝上)(?:是|为|的是)|(?:掷出|停在))\s*(?:[—–―-]+|…{1,2}|\.{3,})(?:\s*点)?(?=[，,。！？!?；;\s]|$)/u
-const COMPACT_WORLD_TURN_HANDOFF_PATTERN = /(?:轮到|下(?:一|个)回合(?:由)?|接下来(?:由)?)[^。！？\r\n]{0,24}(?:掷|行动|走棋|回合)|(?:该|换)[^。！？\r\n]{0,12}(?:掷|行动|走棋|了)/u
+const COMPACT_WORLD_TURN_HANDOFF_PATTERN = /(?:轮到|下(?:一|个)回合(?:由)?|接下来(?:由)?)[^。！？\r\n]{0,24}(?:掷|行动|走棋|回合)|(?:该|换)[^。！？\r\n]{0,12}(?:掷|行动|走棋|了)|骰子[^。！？\r\n]{0,24}(?:回到|转回|滚回|推给|递给|交给|还给|(?:停|落)(?:到|在)[^。！？\r\n]{0,12}(?:手边|面前))|(?:接过(?:来)?|拿过)骰子|把骰子[^。！？\r\n]{0,20}(?:推|递|交|还)/u
+const COMPACT_WORLD_UNOWNED_DETAIL_PATTERN = /(?:目光|视线|眼神|盯着)[^。！？\r\n]{0,24}(?:停|落|移|扫|看)|(?:指尖|手指|指节)[^。！？\r\n]{0,20}(?:叩|敲)|(?:抿(?:了)?抿(?:嘴)?|没(?:有)?(?:说话|吭声)|顿了片刻)|(?:折签|纸角)[^。！？\r\n]{0,32}(?:(?:挪|移动|滑|翻|露|晃)(?:了|动|出)|(?:仍|依旧)[^。！？\r\n]{0,12}(?:原样|背面朝上|没有变化))/u
 
 function parseDirectorDecision(
   text: string,
@@ -3616,7 +3617,9 @@ function compactProseWithinBudget(text: string): boolean {
 }
 
 function compactWorldTransitionWithinBudget(text: string): boolean {
-  return compactProseWithinBudget(text) && !COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(text)
+  return compactProseWithinBudget(text)
+    && !COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(text)
+    && !COMPACT_WORLD_UNOWNED_DETAIL_PATTERN.test(text)
 }
 
 function compactSectionsWithinBudget(
@@ -4327,6 +4330,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         [
           '你是一个只拥有指定人物认知的角色 Worker。只依据 character context、retrieved_history、公开玩家输入和当前世界投影，形成这个人物自己的决定。',
           'current_world_outcome 列出程序已经完成的规则事实。world_narrative 给出本轮的呈现节奏、同一批事实，以及此人物可以回应的现场条件；现场条件提供选择，不表示人物已经采取行动。world_turn_assignment 只标明已完成规则动作的参与者。',
+          '当前世界投影中标为持续只读的公开现场状态只说明它仍然存在；本轮 world_narrative 没有记录该对象的新变化时，不能改变它，也不能仅因再次看见这项旧状态而新增 action 或 speech。',
           'turn_participation 决定公开权限。publicResponse=allowed 时人物可以选择公开 action 或 speech；publicResponse=observe-only 时只形成 observation 和私有 insights，Host 会清除公开输出。',
           characterHasNarrativeCue
             ? '本轮有此人物可回应的现场条件。action 只能是一项已经完成、由该条件直接引起且即使人物不开口也会留下可观察结果的非规则行动；只看向别人、摆出姿态、拿着物品等待发言或等待别人接话时使用空字符串。规则动作仍由 Host 执行。'
@@ -4741,7 +4745,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
           ? 'current_world_outcome 是本轮已经发生的权威结果，正文需要让读者看见事件和执行者。'
-          : 'world_narrative 提供权威事实与本轮节奏。正文用场景中的动作、感官和人物关系呈现 facts；规则状态以 world_state 为准。'
+          : 'world_narrative 提供权威事实与本轮节奏。正文用场景中的动作、感官和人物关系呈现 facts；规则状态以 world_state 为准。world_state 中标为持续只读的状态不是本轮事件；除非 worldEvents 明确改变它，不能让物件移动、露出更多、被处置或引发额外人物动作。'
         const sectionPlan = directorDecision?.sections.find(plan => plan.sectionId === section.id)
         const sectionDirectorBrief = sectionPlan === undefined
           ? directorBrief
@@ -4822,6 +4826,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       [
         '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
+        'world_state 中标为持续只读的状态不是本轮事件；若 worldEvents 没有记录对应变化，删除物件的新移动、显露、处置及仅由这项旧状态引出的新增人物动作。',
         compactWorldTransition
           ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。prose 只保留一个自然段、二至四句且不超过 320 个字符；合并相似投掷和移动，在最终棋位落定后停止。可删除没有信息增长的单次骰点；保留的点数必须逐字使用 worldEvents 中的真实值，不能留下破折号、省略号或其他占位符。删除逐次拿骰、停顿、视线、静止物件盘点、气氛总结、下一行动者预告和没有权威事件支撑的骰子交接。'
           : compactPublicTurn

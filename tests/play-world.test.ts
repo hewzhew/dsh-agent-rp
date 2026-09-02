@@ -1287,16 +1287,25 @@ test('unlocks linked scene cards in order and keeps their unresolved fact in wor
 
   const appeared = snapshot.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-appears')!
   assert.equal(snapshot.events.some(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-opens'), false)
-  assert.match(module.projectForCharacter(snapshot, reimuId, playContext).text, /尚未兑现的公开现场线索：[\s\S]*折签露出/u)
+  assert.match(module.projectForCharacter(snapshot, reimuId, playContext).text, /持续只读的公开现场状态[\s\S]*折签露出/u)
   assert.deepEqual(module.projectNarrative(snapshot, [appeared.sequence], playContext).cues[0]?.characterIds, [])
 
-  for (let index = 0; index < 4; index += 1) {
+  turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  const laterEvent = snapshot.events.at(-1)!
+  assert.match(module.projectNarrative(snapshot, [laterEvent.sequence], playContext).invariants?.at(-1)?.text ?? '',
+    /物件的位置、朝向、可见内容与处置状态都保持不变/u)
+
+  for (let index = 1; index < 4; index += 1) {
     turn = module.characterTurn(snapshot, playContext)!
     snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
   }
   const opened = snapshot.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'slip-opens')!
   assert.equal((opened.data as { readonly predecessorSequence?: unknown }).predecessorSequence, appeared.sequence)
-  assert.doesNotMatch(module.projectForCharacter(snapshot, reimuId, playContext).text, /尚未兑现的公开现场线索/u)
+  assert.doesNotMatch(module.projectForCharacter(snapshot, reimuId, playContext).text, /持续只读的公开现场状态/u)
+  assert.equal(module.projectNarrative(snapshot, [opened.sequence], playContext).invariants?.some(
+    invariant => invariant.id.startsWith('unresolved-narrative-'),
+  ), false)
 })
 
 test('rejects missing and cyclic scene-card prerequisites', () => {
@@ -2905,6 +2914,35 @@ test('compacts routine world transitions and removes incomplete die values', asy
   })
   assert.equal(wrongHandoffResult.finalDraft, correctedHandoff)
   assert.doesNotMatch(wrongHandoffResult.finalDraft, /轮到她再掷/u)
+
+  const unownedDetailSession = Session.create(SessionId('compact-world-transition-unowned-detail'))
+  unownedDetailSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const unownedDetailDraft = '灵梦接过骰子掷出四点，木机继续前进。魔理沙盯着那架木机，指尖在桌沿轻轻叩了两下。棋盘边缘的折签又挪了挪。'
+  const correctedUnownedDetail = '两轮投掷后，灵梦的木机沿航线继续前进；魔理沙的木机仍留在基地。'
+  const unownedDetailResult = await runStoryTurnPipeline({
+    ctx: fakeContext(correctedUnownedDetail, unownedDetailDraft),
+    agent: {
+      id: unownedDetailSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: unownedDetailSession,
+    } as Agent,
+    store,
+    workspace,
+    turn: 5,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(unownedDetailResult.finalDraft, correctedUnownedDetail)
+  assert.equal(sessionEvents(unownedDetailSession).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'editor'), true)
+  assert.doesNotMatch(unownedDetailResult.finalDraft, /接过骰子|盯着|轻轻叩|折签又挪/u)
 
   const rejectedSession = Session.create(SessionId('compact-world-transition-rejected-editor'))
   rejectedSession.append('request/header', {

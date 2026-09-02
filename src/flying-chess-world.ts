@@ -740,6 +740,13 @@ function projectNarrative(
   context: PlayWorldContext,
 ): PlayWorldNarrativeProjection {
   const cues = narrativeCues(events, state)
+  const selectedSequences = new Set(events.map(item => item.sequence))
+  const unresolvedInvariants = unresolvedNarrativeEvents(allEvents, context)
+    .filter(item => !selectedSequences.has(item.sequence))
+    .map(item => ({
+      id: `unresolved-narrative-${String(item.sequence)}`,
+      text: `未完现场线索“${item.title}”只表示已经记录的公开状态仍然成立；除非本轮世界事件明确改变它，物件的位置、朝向、可见内容与处置状态都保持不变，也不能仅据此补写人物动作。`,
+    }))
   const cadence = events.some(item => item.type === 'game.finished')
     ? 'resolution'
     : cues.length > 0 || events.some(item => item.type === 'game.started'
@@ -753,7 +760,7 @@ function projectNarrative(
     cadence,
     facts: eventNarrativeFacts(events, allEvents, context),
     cues,
-    invariants: FLYING_CHESS_NARRATIVE_INVARIANTS,
+    invariants: [...FLYING_CHESS_NARRATIVE_INVARIANTS, ...unresolvedInvariants],
   }
 }
 
@@ -802,7 +809,9 @@ function renderState(
     state.pendingRoll === undefined ? '尚未掷骰。' : `已掷出 ${String(state.pendingRoll.value)}，等待选择合法棋子。`,
     ...lines,
     state.winnerId === undefined ? '' : `胜者：${names.get(state.winnerId) ?? state.winnerId}`,
-    unresolvedNarrative.length === 0 ? '' : `尚未兑现的公开现场线索：\n${unresolvedNarrative.join('\n')}`,
+    unresolvedNarrative.length === 0
+      ? ''
+      : `持续只读的公开现场状态（只有新的世界事件可以改变，不能据此补写物件变化或人物动作）：\n${unresolvedNarrative.join('\n')}`,
     opportunities.length === 0 ? '' : `你拥有的世界机会：\n${opportunities.join('\n')}`,
     recent === '' ? '' : `最近世界事件：\n${recent}`,
   ].filter(Boolean).join('\n')
