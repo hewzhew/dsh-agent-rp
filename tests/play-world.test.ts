@@ -1612,7 +1612,10 @@ test('does not consume a world opportunity when the public question is rejected'
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages ?? [])
         const deferredTurn = body.includes('保持沉默并自行处理是否以后回答')
-        const responseTurn = body.includes('让魔理沙自行决定是否回答') || deferredTurn
+        const quietTurn = body.includes('没有新的公开行动')
+        const floridTurn = body.includes('只轻敲桌面') || body.includes('灵梦没有动，只是看着')
+        const simileTurn = body.includes('把手掌平放')
+        const responseTurn = body.includes('让魔理沙自行决定是否回答') || deferredTurn || quietTurn || floridTurn || simileTurn
         const fallbackTurn = body.includes('导演失败时')
         const isReimu = body.includes('# 人物：博丽灵梦')
         const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
@@ -1643,8 +1646,14 @@ test('does not consume a world opportunity when the public question is rejected'
               })
               : JSON.stringify({
                 observation: '灵梦刚才公开问过终点以外还有什么在等她。',
-                action: '把骰子翻过来，对着灯看六个面上的刻痕。',
-                speech: deferredTurn
+                action: quietTurn
+                  ? ''
+                  : floridTurn
+                    ? '用指节轻敲桌面一下。'
+                    : simileTurn
+                      ? '把手掌平放在自己面前。'
+                      : '把骰子翻过来，对着灯看六个面上的刻痕。',
+                speech: deferredTurn || quietTurn || floridTurn || simileTurn
                   ? null
                   : {
                       respondsTo: '灵梦刚才公开问过终点以外还有什么在等她。',
@@ -1653,11 +1662,23 @@ test('does not consume a world opportunity when the public question is rejected'
                       effect: '把话绕回神社身上。',
                     },
                 opportunityDecisions: [],
-                insights: deferredTurn
+                insights: quietTurn
+                  ? [{
+                      kind: 'decision',
+                      text: '这一轮不再接话。',
+                      futureChoice: '若以后再次被追问，再决定是否回答。',
+                    }]
+                  : floridTurn || simileTurn
+                    ? []
+                    : deferredTurn
                   ? [{
                       kind: 'decision',
                       text: '这轮继续沉默，但以后仍可回答折签问题。',
                       futureChoice: '若以后回答折签问题，先把话绕回神社身上。',
+                    }, {
+                      kind: 'knowledge',
+                      text: '我准备回答：“要真是我动的手脚，哪会连自己也坑在第四把四上。”',
+                      futureChoice: '',
                     }]
                   : [{
                       kind: 'decision',
@@ -1731,15 +1752,23 @@ test('does not consume a world opportunity when the public question is rejected'
               : approvedQuestion,
           }] })
         } else if (system.includes('分区的 prose Worker')) {
-          text = responseTurn
-            ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
-            : `灵梦展开折签，问魔理沙：${approvedQuestion}`
+          text = floridTurn
+            ? '魔理沙用指节轻敲桌面一下。灵梦没有动，只是看着。'
+            : simileTurn
+              ? '魔理沙把手掌平放在自己面前，像一枚落定的棋子。'
+              : responseTurn
+                ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
+                : `灵梦展开折签，问魔理沙：${approvedQuestion}`
         } else if (system.includes('最终正文编辑 Worker')) {
           text = JSON.stringify({ sections: [{
             sectionId: proseId,
-            text: responseTurn
-              ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
-              : `灵梦展开折签，问魔理沙：${approvedQuestion}`,
+            text: floridTurn
+              ? '魔理沙用指节在桌面上轻敲一下，随即收回手。'
+              : simileTurn
+                ? '魔理沙把手掌平放在自己面前，随后停手。'
+                : responseTurn
+                  ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
+                  : `灵梦展开折签，问魔理沙：${approvedQuestion}`,
           }] })
         } else {
           text = JSON.stringify({ sections: [] })
@@ -1803,6 +1832,7 @@ test('does not consume a world opportunity when the public question is rejected'
   approvedSession.append('step/end', { turn: 4, step: 1 })
   approvedSession.append('turn/start', { turn: 5 })
   approvedSession.append('step/start', { turn: 5, step: 1 })
+  const responseCharacterBodyStart = approvedCharacterBodies.length
   const responseResult = await runStoryTurnPipeline({
     ctx: approvedContext,
     agent: approvedAgent,
@@ -1816,15 +1846,14 @@ test('does not consume a world opportunity when the public question is rejected'
     })],
     signal: new AbortController().signal,
   })
-  const responseTurnBodies = approvedCharacterBodies.slice(-2)
+  const responseTurnBodies = approvedCharacterBodies.slice(responseCharacterBodyStart)
   const responseReimuBody = responseTurnBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
   const responseMarisaBody = responseTurnBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
+  assert.equal(responseTurnBodies.length, 1)
   assert.match(responseMarisaBody, /status=open/u)
   assert.equal(responseMarisaBody.includes(approvedQuestion), true)
   assert.match(responseMarisaBody, /publicResponse=allowed/u)
-  assert.match(responseReimuBody, /status=closed/u)
-  assert.match(responseReimuBody, /publicResponse=observe-only/u)
-  assert.match(responseReimuBody, /已使用/u)
+  assert.equal(responseReimuBody, '')
   assert.equal(responseResult.publicDialogues, undefined)
   assert.equal(responseResult.privateCharacterStates, undefined)
   assert.match(responseResult.directorBrief, /把骰子翻过来/u)
@@ -1832,6 +1861,14 @@ test('does not consume a world opportunity when the public question is rejected'
   assert.match(responseResult.finalDraft, /把骰子翻过来/u)
   assert.doesNotMatch(responseResult.finalDraft, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
   assert.doesNotMatch(responseResult.modelContext, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
+  const responseStageRequests = sessionEvents(approvedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.turn === 5 ? [event.data] : [])
+  assert.equal(responseStageRequests.some(request => ['research', 'director', 'editor'].includes(request.stage)), false)
+  assert.deepEqual(responseStageRequests.filter(request => request.stage === 'character')
+    .map(request => request.subjectId), [marisaId])
+  const compactSectionRequest = responseStageRequests.find(request => request.stage === 'section')
+  assert.equal(compactSectionRequest?.dispatch.maxTokens, 768)
+  assert.match(compactSectionRequest?.dispatch.system ?? '', /一个自然段、二至四句且不超过 320 个字符/u)
 
   approvedSession.append('assistant/message', {
     turn: 5,
@@ -1859,7 +1896,7 @@ test('does not consume a world opportunity when the public question is rejected'
   })
   assert.equal(fallbackResult.publicDialogues, undefined)
   assert.match(fallbackResult.directorBrief, /把骰子翻过来/u)
-  assert.match(fallbackResult.directorBrief, /获准对白：无/u)
+  assert.match(fallbackResult.directorBrief, /对白收束：0\/1/u)
   assert.doesNotMatch(fallbackResult.directorBrief, /终点以外|不会连自己也坑|回答后|绕回神社/u)
   assert.doesNotMatch(fallbackResult.finalDraft, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
 
@@ -1880,6 +1917,76 @@ test('does not consume a world opportunity when the public question is rejected'
   })
   assert.equal(deferredResult.publicDialogues, undefined)
   assert.equal(deferredResult.privateCharacterStates, undefined)
+  assert.equal(sessionEvents(approvedSession).some(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.turn === 7 && event.data.stage === 'character' && event.data.result.kind === 'failure'), false)
+
+  approvedSession.append('turn/start', { turn: 8 })
+  approvedSession.append('step/start', { turn: 8, step: 1 })
+  const quietResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 8,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙自行决定；她没有新的公开行动，棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(quietResult.finalDraft, '')
+  assert.equal(quietResult.privateCharacterStates, undefined)
+  const quietStageRequests = sessionEvents(approvedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.turn === 8 ? [event.data] : [])
+  assert.equal(quietStageRequests.some(request => ['research', 'director', 'section', 'editor'].includes(request.stage)), false)
+  assert.deepEqual(quietStageRequests.filter(request => request.stage === 'character')
+    .map(request => request.subjectId), [marisaId])
+
+  approvedSession.append('turn/start', { turn: 9 })
+  approvedSession.append('step/start', { turn: 9, step: 1 })
+  const floridResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 9,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙只轻敲桌面一下；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(floridResult.finalDraft, '魔理沙用指节在桌面上轻敲一下，随即收回手。')
+  const floridStageRequests = sessionEvents(approvedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.turn === 9 ? [event.data] : [])
+  assert.equal(floridStageRequests.some(request => request.stage === 'editor'), true)
+  assert.match(floridStageRequests.find(request => request.stage === 'section')?.dispatch.system ?? '',
+    /比喻、象征和效果解读/u)
+  assert.match(floridStageRequests.find(request => request.stage === 'character')?.dispatch.system ?? '',
+    /action 只写外部可观察的动作与落定结果/u)
+
+  approvedSession.append('turn/start', { turn: 10 })
+  approvedSession.append('step/start', { turn: 10, step: 1 })
+  const simileResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 10,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙把手掌平放在自己面前；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(simileResult.finalDraft, '魔理沙把手掌平放在自己面前，随后停手。')
+  const simileStageRequests = sessionEvents(approvedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.turn === 10 ? [event.data] : [])
+  assert.equal(simileStageRequests.some(request => request.stage === 'editor'), true)
+  assert.equal(simileStageRequests.some(request => ['research', 'director'].includes(request.stage)), false)
 
   const failedUseSession = Session.create(SessionId('world-opportunity-subagent-missed-submission'))
   failedUseSession.append('request/header', {
@@ -1960,10 +2067,8 @@ test('does not consume a world opportunity when the public question is rejected'
   const failedOwnerRequests = failedUseRequests.filter(request => request.label?.includes('博丽灵梦') === true)
   const failedObserverRequests = failedUseRequests.filter(request => request.label?.includes('雾雨魔理沙') === true)
   assert.equal(failedOwnerRequests.length, 2)
-  assert.equal(failedObserverRequests.length, 1)
+  assert.equal(failedObserverRequests.length, 0)
   assert.match(failedOwnerRequests[1]!.prompt.map(block => block.text ?? '').join('\n'), /structured_output_retry/u)
-  assert.equal(failedObserverRequests.every(request =>
-    !request.prompt.some(block => block.text?.includes('灵梦现在使用收好的折签向魔理沙提问') === true)), true)
   assert.equal(module.characterOpportunities!(store.get(workspace.id).world!, reimuId, worldContext)[0]?.status, 'retained')
 
   assert.throws(() => store.materializeTurn(workspace.id, {

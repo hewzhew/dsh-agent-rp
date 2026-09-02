@@ -1060,8 +1060,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(voiceReviewCalls, 2)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 6)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 4)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 8)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 2)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
@@ -1071,7 +1071,7 @@ test('runs logged story stages while keeping each character request privately sc
     .every(request => request.dispatch.reasoningEffort === 'off'), true)
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('review:'))
     .every(request => request.dispatch.maxTokens === 2_048), true)
-  assert.equal(maxTokenBudgets.filter(budget => budget === 8_192).length, 4)
+  assert.equal(maxTokenBudgets.filter(budget => budget === 8_192).length, 2)
   assert.equal(maxTokenBudgets.filter(budget => budget >= 16_384).length, 5)
   assert.equal(characterBodies.length, 2)
   assert.equal(historyBodies.length, 2)
@@ -1293,7 +1293,11 @@ test('runs logged story stages while keeping each character request privately sc
         && stageResult.turn === request.turn && stageResult.step === request.step
         && stageResult.stage === request.stage && stageResult.subjectId === request.subjectId
     }), true)
-  assert.deepEqual(stageRequests.filter(request => request.stage === 'history').map(request => request.subjectId), [aliceId, bobId])
+  const historyRequests = stageRequests.filter(request => request.stage === 'history')
+  assert.deepEqual(historyRequests.map(request => request.subjectId), [aliceId, bobId])
+  assert.equal(historyRequests.every(request => request.dispatch.reasoningEffort === 'off'), true)
+  assert.equal(historyRequests.every(request => request.dispatch.maxTokens === 1_024), true)
+  assert.equal(historyRequests.every(request => /最少记录，最多 8 项/u.test(request.dispatch.system ?? '')), true)
   assert.equal(stageRequests.some(request => request.stage === 'section'
     && request.subjectId?.startsWith(`${characterSectionId}:`)), false)
   assert.ok(stageRequests.findLastIndex(request => request.stage === 'history')
@@ -1728,6 +1732,102 @@ test('materializes continuity from the actually visible reply instead of the pre
   }), result)
   assert.equal(store.get(workspace.id).revision, saved.revision)
   assert.equal(store.get(workspace.id).citations.length, 2)
+})
+
+test('uses structural continuity for a single compact public change', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-compact-continuity-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '短回合沉淀' })
+  const characterId = createStoryCharacterId()
+  const proseSectionId = createStoryOutputId()
+  const workspace = store.save({
+    ...created,
+    characters: [character(characterId, '雾雨魔理沙', '好胜。')],
+    outputs: [{ id: proseSectionId, name: '正文', kind: 'prose', enabled: true, instructions: '' }],
+  })
+  const session = Session.create(SessionId('compact-continuity'))
+  session.append('turn/start', { turn: 1 })
+  session.append('step/start', { turn: 1, step: 1 })
+  const text = '魔理沙用指节在桌面上轻敲一下，随即收回手。'
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 1,
+    step: 1,
+    resultEventSeqs: [],
+    directorBrief: '',
+    finalSections: [{ sectionId: proseSectionId, name: '正文', kind: 'prose', text }],
+    finalDraft: text,
+    modelContext: '',
+  })
+  session.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 1, step: 1 })
+  let continuityOptions: {
+    readonly reasoningEffort?: string
+    readonly maxTokens?: number
+    readonly system?: string
+  } | undefined
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [{ id: 'off', name: 'Off' }, { id: 'low', name: 'Low' }],
+            defaultEffort: 'low',
+          },
+        }
+      },
+      stream(options: typeof continuityOptions & { readonly messages: readonly unknown[] }) {
+        continuityOptions = options
+        const output = JSON.stringify({
+          history: { text, sourceSectionIds: [proseSectionId] },
+          changes: {
+            characters: [],
+            facts: [{ sourceSectionId: proseSectionId, text: '魔理沙敲了一下桌面。', knownBy: [characterId] }],
+            nodes: [],
+            edges: [],
+          },
+        })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text: output }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text: output } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+
+  const result = await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: workspace.id,
+    turn: 1,
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(continuityOptions?.reasoningEffort, 'off')
+  assert.equal(continuityOptions?.maxTokens, 2_048)
+  assert.match(continuityOptions?.system ?? '', /不为普通动作制造剧情节点/u)
+  assert.equal(result?.eventSummary, text)
+  assert.deepEqual(result?.changes.facts, [])
+  assert.equal(result?.publicTrace?.stages[0]?.stage, 'continuity')
 })
 
 test('keeps materialization idempotency separate across sessions with matching local event sequences', async (context) => {
