@@ -1548,6 +1548,88 @@ test('does not consume a world opportunity when the public question is rejected'
     webResearch: [],
   })
   assert.equal(module.characterOpportunities!(retainedWorkspace.world!, reimuId, worldContext)[0]?.status, 'retained')
+
+  const failedUseSession = Session.create(SessionId('world-opportunity-subagent-missed-submission'))
+  failedUseSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const failedUseRequests: Array<{
+    readonly label?: string
+    readonly prompt: readonly { readonly type: string; readonly text?: string }[]
+  }> = []
+  const failedUseSubagents = {
+    getProvider(name: string) {
+      return name === 'spawn' ? { name: 'spawn' } : undefined
+    },
+    async start(_name: string, request: typeof failedUseRequests[number]) {
+      failedUseRequests.push(request)
+      const childId = `opportunity-subagent-${String(failedUseRequests.length)}`
+      const owner = request.label?.includes('博丽灵梦') === true
+      return {
+        id: SessionId(childId),
+        result: Promise.resolve(owner
+          ? {
+              output: [{ type: 'reasoning' as const, text: '决定使用折签，却没有提交 structured_output。' }],
+              stopReason: 'max-tokens' as const,
+            }
+          : {
+              output: [],
+              structured: { observation: '', action: '', speech: null, opportunityDecisions: [], insights: [] },
+              stopReason: 'completed' as const,
+            }),
+        async dispose() {},
+      }
+    },
+  }
+  const failedUseContext = {
+    get(name: string) {
+      return name === 'subagents' ? failedUseSubagents : undefined
+    },
+    logger: { warn() {} },
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : system.includes('剧情研究 Worker')
+            ? JSON.stringify({ findings: [], followUps: [] })
+            : system.includes('人物参与路由 Worker')
+              ? JSON.stringify({ publicCharacterIds: [reimuId] })
+              : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const failedUseResult = await runStoryTurnPipeline({
+    ctx: failedUseContext,
+    agent: {
+      id: failedUseSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: failedUseSession,
+    } as Agent,
+    store,
+    workspace: retainedWorkspace,
+    turn: 3,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '灵梦现在使用收好的折签向魔理沙提问；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(failedUseResult.worldOpportunityResolutions, undefined)
+  const failedOwnerRequests = failedUseRequests.filter(request => request.label?.includes('博丽灵梦') === true)
+  assert.equal(failedOwnerRequests.length, 2)
+  assert.match(failedOwnerRequests[1]!.prompt.map(block => block.text ?? '').join('\n'), /structured_output_retry/u)
+  assert.equal(module.characterOpportunities!(store.get(workspace.id).world!, reimuId, worldContext)[0]?.status, 'retained')
+
   assert.throws(() => store.materializeTurn(workspace.id, {
     key: 'world-opportunity-use-without-visible-question',
     turn: 4,

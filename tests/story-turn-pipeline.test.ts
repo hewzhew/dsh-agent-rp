@@ -598,6 +598,94 @@ test('delegates isolated character decisions to durable DSH Subagent sessions', 
   assert.equal(characterResults.every(result => result.result.kind === 'success'), true)
 })
 
+test('retries a reasoning-only character Subagent with an explicit structured submission request', async () => {
+  const session = Session.create(SessionId('story-character-subagent-structured-retry'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const requests: Array<{
+    readonly label?: string
+    readonly prompt: readonly { readonly type: string; readonly text?: string }[]
+  }> = []
+  const attempts = new Map<string, number>()
+  const disposed: string[] = []
+  const subagents = {
+    getProvider(name: string) {
+      return name === 'spawn' ? { name: 'spawn' } : undefined
+    },
+    async start(_name: string, request: typeof requests[number]) {
+      requests.push(request)
+      const label = request.label ?? ''
+      const attempt = (attempts.get(label) ?? 0) + 1
+      attempts.set(label, attempt)
+      const childId = `structured-retry-child-${String(requests.length)}`
+      const missedSubmission = label.includes('阿梨') && attempt === 1
+      return {
+        id: SessionId(childId),
+        result: Promise.resolve(missedSubmission
+          ? {
+              output: [{ type: 'reasoning' as const, text: '已经形成决定，但没有提交工具调用。' }],
+              stopReason: 'max-tokens' as const,
+            }
+          : {
+              output: [],
+              structured: { observation: '', action: '', speech: null, opportunityDecisions: [], insights: [] },
+              stopReason: 'completed' as const,
+            }),
+        async dispose() { disposed.push(childId) },
+      }
+    },
+  }
+  const fake = {
+    get(name: string) {
+      return name === 'subagents' ? subagents : undefined
+    },
+    logger: { warn() {} },
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : system.includes('剧情研究 Worker')
+            ? JSON.stringify({ findings: [], followUps: [] })
+            : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    workspace: { ...base, pipeline: { ...base.pipeline, researchMaxPasses: 1 }, outputs: [], sources: [] },
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(attempts.get('人物推演 · 阿梨'), 2)
+  assert.equal(attempts.get('人物推演 · 柏舟'), 1)
+  assert.deepEqual(disposed.length, requests.length)
+  const aliceRequests = requests.filter(request => request.label === '人物推演 · 阿梨')
+  assert.equal(aliceRequests.length, 2)
+  assert.doesNotMatch(aliceRequests[0]!.prompt.map(block => block.text ?? '').join('\n'), /structured_output_retry/u)
+  assert.match(aliceRequests[1]!.prompt.map(block => block.text ?? '').join('\n'), /structured_output_retry/u)
+  const characterResults = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-result'
+    && event.data.stage === 'character' ? [event.data.result] : [])
+  assert.equal(characterResults.some(result => result.kind === 'failure'
+    && result.detail?.code === 'STORY_WORKER_INVALID_OUTPUT'), true)
+  assert.equal(characterResults.filter(result => result.kind === 'success').length, 2)
+})
+
 test('records prose-only character Subagent replies as invalid instead of silently accepting them', async () => {
   const session = Session.create(SessionId('story-character-subagent-prose'))
   session.append('request/header', {

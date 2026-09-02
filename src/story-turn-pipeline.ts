@@ -2792,6 +2792,13 @@ function subagentStageFailure(result: SubagentResult): StorySubagentStageError |
   )
 }
 
+function subagentMissedStructuredSubmission(result: SubagentResult): boolean {
+  if (result.structured !== undefined || result.stopReason === 'aborted' || result.stopReason === 'refusal') {
+    return false
+  }
+  return result.stopReason === 'completed' || result.output.length > 0
+}
+
 async function runStorySubagentStage(
   input: RunStoryTurnPipelineInput,
   runtime: SubagentRuntime,
@@ -2828,12 +2835,10 @@ async function runStorySubagentStage(
   let output: StorySubagentStageOutput | undefined
   try {
     const result = await run.result
-    if (result.structured === undefined
-      && result.stopReason === 'error'
-      && subagentStageText(result) !== '') {
+    if (subagentMissedStructuredSubmission(result)) {
       throw new StoryStageOutputError(
         'STORY_WORKER_INVALID_OUTPUT',
-        '人物 Subagent 返回了普通文字，但没有通过 structured_output 提交人物决策',
+        `人物 Subagent ${subagentStageText(result) === '' ? '产生了内容' : '返回了普通文字'}，但没有通过 structured_output 提交人物决策`,
       )
     }
     const failure = subagentStageFailure(result)
@@ -2870,6 +2875,27 @@ async function runStorySubagentStage(
     throw new StorySubagentStageError('STORY_SUBAGENT_RUN_FAILED', 'unknown', '人物 Subagent 没有可用结果')
   }
   return output
+}
+
+function storyStageRetryRequest(stage: StoryTurnStage, request: GenerateOptions): GenerateOptions {
+  if (stage !== 'character') return request
+  return {
+    ...request,
+    messages: [
+      ...request.messages,
+      createUserMessage({
+        source: { kind: 'plugin', plugin: 'dsh-agent-rp-story-engine' },
+        content: [{
+          type: 'text',
+          text: [
+            '<structured_output_retry>',
+            '上一次尝试没有提交结构化结果。不要解释、复述或输出普通文字；现在立即调用 structured_output，并以完全符合给定 schema 的最终对象作为参数。',
+            '</structured_output_retry>',
+          ].join('\n'),
+        }],
+      }),
+    ],
+  }
 }
 
 function boundedStoryStageFailureText(value: string, max: number): string {
@@ -3057,7 +3083,7 @@ async function runStage(
 ): Promise<StageOutput> {
   const first = await runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
   if (first.retryable !== true || stage === 'voice') return first
-  return runStageAttempt(input, stage, request, resultEventSeqs, subjectId)
+  return runStageAttempt(input, stage, storyStageRetryRequest(stage, request), resultEventSeqs, subjectId)
 }
 
 const MAX_WORLD_ACTIONS_PER_STORY_TURN = 12
