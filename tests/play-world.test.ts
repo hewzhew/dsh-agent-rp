@@ -1151,6 +1151,12 @@ test('draws authored scene cards from landing, collision, and home-count events'
       format: 0,
       ruleset: 'classic-24',
       narrativeCards: [{
+        id: 'launch-hook',
+        trigger: { kind: 'piece-launched' },
+        event: { title: '折签露出', summary: '第一架棋子离开基地时，一张折签露出半角。' },
+        cue: { kind: 'opportunity', text: '所有人物都看见了折签。', responders: 'all' },
+        repeat: false,
+      }, {
         id: 'landing-eight',
         trigger: { kind: 'piece-landed', step: 8 },
         event: { title: '折签弹开', summary: '棋子停在第 8 步时，一张折签弹开。' },
@@ -1182,6 +1188,11 @@ test('draws authored scene cards from landing, collision, and home-count events'
     turn = landingModule.characterTurn(landed, playContext)!
     landed = landingModule.dispatch(landed, turn.actions[0]!.action, playContext)
   }
+  const launchCards = landed.events.filter(event => event.type === 'scene.changed'
+    && (event.data as { readonly cardId?: unknown }).cardId === 'launch-hook')
+  assert.equal(launchCards.length, 1)
+  const launchProjection = landingModule.projectNarrative(landed, [launchCards[0]!.sequence], playContext)
+  assert.deepEqual(launchProjection.cues[0]?.characterIds, [reimuId, marisaId])
   const landingCard = landed.events.find(event => event.type === 'scene.changed'
     && (event.data as { readonly cardId?: unknown }).cardId === 'landing-eight')!
   assert.equal(typeof (landingCard.data as { readonly causeSequence?: unknown }).causeSequence, 'number')
@@ -3244,7 +3255,7 @@ test('writes a manually completed world result without persisting a character co
   assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [reimuId, marisaId])
   assert.equal(stageRequests.filter(request => request.stage === 'character')
     .every(request => request.dispatch.reasoningEffort === 'low' && request.dispatch.maxTokens === 4_096), true)
-  assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'low')
+  assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'high')
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
@@ -3478,6 +3489,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
   assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
+  assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'low')
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])

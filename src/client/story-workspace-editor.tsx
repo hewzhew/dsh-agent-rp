@@ -2535,6 +2535,7 @@ const narrativeResponderLabels: Readonly<Record<FlyingChessNarrativeCard['cue'][
 
 const narrativeTriggerLabels: Readonly<Record<FlyingChessNarrativeCard['trigger']['kind'], string>> = {
   'consecutive-passes': '连续回合无棋可走',
+  'piece-launched': '飞机离开基地',
   'piece-landed': '棋子停在指定步数',
   'piece-captured': '撞回对方棋子',
   'player-home-count': '己方棋子抵达终点',
@@ -2598,6 +2599,8 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
             const kind = event.currentTarget.value as FlyingChessNarrativeCard['trigger']['kind']
             const trigger: FlyingChessNarrativeCard['trigger'] = kind === 'consecutive-passes'
               ? { kind, count: 4 }
+              : kind === 'piece-launched'
+                ? { kind }
               : kind === 'piece-landed'
                 ? { kind, step: 8 }
                 : kind === 'player-home-count'

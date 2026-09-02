@@ -17,6 +17,11 @@ export interface FlyingChessPieceLandedTrigger {
   readonly step: number
 }
 
+/** Trigger after one piece leaves its base. */
+export interface FlyingChessPieceLaunchedTrigger {
+  readonly kind: 'piece-launched'
+}
+
 /** Trigger after one move sends at least one opposing piece back to base. */
 export interface FlyingChessPieceCapturedTrigger {
   readonly kind: 'piece-captured'
@@ -31,6 +36,7 @@ export interface FlyingChessPlayerHomeCountTrigger {
 /** Rule-owned conditions that can draw one narrative card. */
 export type FlyingChessNarrativeTrigger =
   | FlyingChessConsecutivePassesTrigger
+  | FlyingChessPieceLaunchedTrigger
   | FlyingChessPieceLandedTrigger
   | FlyingChessPieceCapturedTrigger
   | FlyingChessPlayerHomeCountTrigger

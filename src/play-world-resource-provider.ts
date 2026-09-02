@@ -19,6 +19,19 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
   format: 0,
   ruleset: 'classic-24',
   narrativeCards: [{
+    id: 'first-launch-hidden-slip',
+    trigger: { kind: 'piece-launched' },
+    event: {
+      title: '第一格下露出一张折签',
+      summary: '本局第一架木机离开基地后，航线第一格下压着的一张折签露出画着问号的背面；签文仍被棋盘遮住。',
+    },
+    cue: {
+      kind: 'opportunity',
+      text: '折签尚未翻开，也不妨碍棋局；在场人物已经看见这里藏着东西，可以先继续走棋，等它自行揭开。',
+      responders: 'all',
+    },
+    repeat: false,
+  }, {
     id: 'stalled-opening-wind',
     trigger: { kind: 'consecutive-passes', count: 4 },
     event: {

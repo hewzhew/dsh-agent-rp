@@ -79,6 +79,10 @@ function normalizeNarrativeTrigger(value: unknown, label: string): FlyingChessNa
     }
     return { kind: value.kind, step: value.step as number }
   }
+  if (value.kind === 'piece-launched') {
+    if (!exactKeys(value, ['kind'])) throw new Error(`${label}触发条件无效`)
+    return { kind: value.kind }
+  }
   if (value.kind === 'piece-captured') {
     if (!exactKeys(value, ['kind'])) throw new Error(`${label}触发条件无效`)
     return { kind: value.kind }
@@ -588,6 +592,12 @@ function appendNarrativeCardEvents(
       cause = triggerEvents.find(item => item.type === 'turn.passed')
       if (cause === undefined || passedTurns < trigger.count
         || card.repeat && passedTurns % trigger.count !== 0) return []
+    } else if (trigger.kind === 'piece-launched') {
+      cause = triggerEvents.find(item => {
+        const data = eventData(item)
+        return item.type === 'piece.moved' && data?.kind === 'piece-moved'
+          && data.fromStatus === 'base'
+      })
     } else if (trigger.kind === 'piece-landed') {
       cause = triggerEvents.find(item => {
         const data = eventData(item)
