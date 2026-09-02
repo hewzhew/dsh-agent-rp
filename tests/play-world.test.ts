@@ -2638,6 +2638,172 @@ test('restores the causal roll when generated prose jumps straight to a first la
   assert.match(result.finalDraft, /雾雨魔理沙掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
 })
 
+test('compacts routine world transitions and removes incomplete die values', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-compact-world-transition-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const rolls = [1, 1, 1, 1, 2, 5, 1, 1]
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift()! }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const created = store.create({ format: 2, name: '紧凑规则过渡' })
+  const configured = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  let workspace = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  for (let turn = 0; turn < 4; turn += 1) {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: 'roll',
+    })
+  }
+  const processedSequences = workspace.world!.events.map(event => event.sequence)
+  workspace = store.save({
+    ...editable(workspace),
+    events: [{
+      id: createStoryEventId(),
+      key: 'turn:1',
+      turn: 1,
+      title: '开局风波',
+      summary: '此前的开局场景已经写完。',
+      evidence: '此前的开局场景已经写完。',
+      participantIds: [reimuId, marisaId],
+      worldEventSequences: processedSequences,
+    }],
+  })
+  for (let turn = 0; turn < 4; turn += 1) {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: 'roll',
+    })
+  }
+  const pendingSequences = storyPendingWorldEvents(workspace).map(event => event.sequence)
+  const projection = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).projectNarrative(
+    workspace.world!,
+    pendingSequences,
+    resolveStoryPlayWorldContext(workspace),
+  )
+  assert.equal(projection.cadence, 'transition')
+  assert.equal(projection.cues.length, 0)
+  assert.equal(projection.facts.every(fact => fact.retention === 'compressible'), true)
+
+  const verboseDraft = [
+    '骰子先回到灵梦手里。她拢在掌心里停了一阵，才让它滚过棋盘。点数是—。基地里的木机没有动。',
+    '魔理沙接过骰子，翻来覆去看了看，再把它丢回纸面。五点朝上。她低头看了一会儿。',
+    '后面的两次投掷也被逐一铺开，窗边的光影跟着慢慢移动，棋盘仍旧安静。',
+  ].join('\n\n')
+  const compactDraft = '骰子又在两人手里走过两轮，红蓝两方仍没有木机离开基地。四次投掷过后，跑道依旧空着。'
+  const session = Session.create(SessionId('compact-world-transition'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const fakeContext = (editedText: string): Context => ({
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
+      stream(options: { readonly system?: string }) {
+        const system = options.system ?? ''
+        const text = system.includes('指定人物认知')
+          ? JSON.stringify({ observation: '棋局继续。', action: '', speech: null, insights: [] })
+          : system.includes('分区的 prose Worker')
+            ? verboseDraft
+            : system.includes('最终正文编辑 Worker')
+              ? JSON.stringify({ sections: [{ sectionId: proseId, text: editedText }] })
+              : JSON.stringify({ sections: [] })
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  }) as unknown as Context
+  const result = await runStoryTurnPipeline({
+    ctx: fakeContext(compactDraft),
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data]
+    : [])
+  const sectionRequest = stageRequests.find(request => request.stage === 'section')
+  const editorRequest = stageRequests.find(request => request.stage === 'editor')
+  assert.equal(sectionRequest?.dispatch.maxTokens, 768)
+  assert.match(sectionRequest?.dispatch.system ?? '', /没有现场变化、人物额外行动或获准对白/u)
+  assert.equal(editorRequest?.dispatch.maxTokens, 1_024)
+  assert.match(editorRequest?.dispatch.system ?? '', /不能留下破折号、省略号或其他占位符/u)
+  assert.equal(result.finalDraft, compactDraft)
+  assert.doesNotMatch(result.finalDraft, /点数是—|\n\s*\n/u)
+
+  const rejectedSession = Session.create(SessionId('compact-world-transition-rejected-editor'))
+  rejectedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const rejectedResult = await runStoryTurnPipeline({
+    ctx: fakeContext(verboseDraft),
+    agent: {
+      id: rejectedSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: rejectedSession,
+    } as Agent,
+    store,
+    workspace,
+    turn: 3,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(rejectedResult.finalDraft, projection.facts.map(fact => fact.text).join(''))
+  assert.doesNotMatch(rejectedResult.finalDraft, /点数是—|\n\s*\n/u)
+})
+
 test('scaffolds fresh world authoring surfaces without replacing authored work', (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-play-world-scaffold-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -3166,7 +3332,7 @@ test('writes a manually completed world result without persisting a character co
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
   })
-  const naturalWorldScene = '轮到灵梦。骰子在六点上停住。她把一号飞机移出基地，放在航线第一格。'
+  const naturalWorldScene = '红方起跑线前依然空着。灵梦探身把骰子捞回来，这一次握在指间多停了片刻。她松手时，骰子滚过三格跑道，停在空地中央。六点朝上。她低头确认骰面，随后把手探进红方基地。四架木机中靠外的一架，翼根刻着“壹”。她把那架木机提出来，放上航线第一格。木机落定时，第一格下露出一张折签。折签背面画着问号，签文仍被棋盘遮住。'
   const characterBodies: string[] = []
   const fake = {
     sessions: { flush: async () => true },

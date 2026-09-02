@@ -1034,6 +1034,7 @@ function renderFallbackCharacterDecision(
 const DIRECT_DIALOGUE_PATTERN = /[“”「」『』"]/u
 const DIRECTOR_SPEECH_BEAT_PATTERN = /(?:开口|说出|发问|提问|问出|回答|答复|回话|回应|接话|接过[^。！？\r\n]{0,16}(?:问题|话)|拒答|拒绝回答|把话|话锋|话题)/u
 const COMPACT_PROSE_INTERPRETATION_PATTERN = /(?:仿佛|仿若|宛如|好像|像|似乎|余韵|(?:没(?:有)?动|未动)[^。！？\r\n]{0,16}(?:看|望|听))/u
+const INCOMPLETE_WORLD_VALUE_PATTERN = /(?:(?:点数|骰面|朝上)(?:是|为|的是)|(?:掷出|停在))\s*(?:[—–―-]+|…{1,2}|\.{3,})(?:\s*点)?(?=[，,。！？!?；;\s]|$)/u
 
 function parseDirectorDecision(
   text: string,
@@ -1493,6 +1494,7 @@ function renderDialogueCandidates(
 
 const QUOTED_DIALOGUE_LINE_PATTERN = /^(?:“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*")$/u
 const QUOTED_DIALOGUE_SPAN_PATTERN = /“[^”\r\n]*”|「[^」\r\n]*」|『[^』\r\n]*』|"[^"\r\n]*"/u
+const NARRATIVE_LABEL_PREFIX_PATTERN = /(?:写着|写有|刻着|刻有|画着|画有|标着|标有|题着|印着|印有|字样为|标记为)[^。！？!?；;\r\n]{0,24}$/u
 const DIALOGUE_QUOTE_CHARACTER_PATTERN = /[“”「」『』"]/u
 const DIALOGUE_QUOTE_PAIRS = [['“', '”'], ['「', '」'], ['『', '』'], ['"', '"']] as const
 
@@ -1854,8 +1856,7 @@ function retainReviewedDialogue(
 function applyApprovedDialoguePolicy(text: string, approved: ReadonlySet<string>): string {
   const used = new Set<string>()
   return text.split(/\r?\n/u).flatMap(line => {
-    const spans = [...line.matchAll(new RegExp(QUOTED_DIALOGUE_SPAN_PATTERN.source, 'gu'))]
-      .map(match => match[0])
+    const spans = quotedDialogueSpans(line)
     if (spans.length === 0) return [line]
     const lineSpans = new Set<string>()
     if (spans.some(span => !approved.has(span) || used.has(span) || lineSpans.has(span))) return []
@@ -1868,9 +1869,15 @@ function applyApprovedDialoguePolicy(text: string, approved: ReadonlySet<string>
 }
 
 function approvedDialogueLines(text: string, approved: ReadonlySet<string>): readonly string[] {
-  return text.split(/\r?\n/u).flatMap(line => [...line.matchAll(new RegExp(QUOTED_DIALOGUE_SPAN_PATTERN.source, 'gu'))]
-    .map(match => match[0])
+  return text.split(/\r?\n/u).flatMap(line => quotedDialogueSpans(line)
     .filter(dialogue => approved.has(dialogue)))
+}
+
+function quotedDialogueSpans(line: string): readonly string[] {
+  return [...line.matchAll(new RegExp(QUOTED_DIALOGUE_SPAN_PATTERN.source, 'gu'))].flatMap(match => {
+    const prefix = line.slice(0, match.index ?? 0)
+    return NARRATIVE_LABEL_PREFIX_PATTERN.test(prefix) ? [] : [match[0]]
+  })
 }
 
 function appendMissingApprovedDialogue(text: string, approved: ReadonlySet<string>): string {
@@ -3481,7 +3488,7 @@ function narrativeFactWindows(prose: string): readonly string[] {
   return sentences.flatMap((sentence, index) => {
     const windows = [sentence]
     let combined = sentence
-    for (let offset = 1; offset <= 2; offset += 1) {
+    for (let offset = 1; offset <= 5; offset += 1) {
       const next = sentences[index + offset]
       if (next === undefined) break
       combined += next
@@ -3595,6 +3602,13 @@ function compactProseWithinBudget(text: string): boolean {
   return compact.length <= 320
     && !/\n\s*\n/u.test(compact)
     && !COMPACT_PROSE_INTERPRETATION_PATTERN.test(compact)
+    && !INCOMPLETE_WORLD_VALUE_PATTERN.test(compact)
+}
+
+function compactSectionsWithinBudget(sections: readonly StorySectionDraft[]): boolean {
+  return sections.length === 1
+    && sections[0]?.kind === 'prose'
+    && compactProseWithinBudget(sections[0].text)
 }
 
 function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): string {
@@ -4640,6 +4654,15 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     && publicActionCount + approvedDialogue.size > 0
     && publicActionCount <= 1
     && approvedDialogue.size <= 1
+  const compactWorldTransition = hostDirectorAssignment !== undefined
+    && worldNarrativeProjection?.cadence === 'transition'
+    && worldNarrativeProjection.cues.length === 0
+    && worldNarrativeProjection.facts.every(fact => fact.retention === 'compressible')
+    && enabledSections.length === 1
+    && enabledSections[0]?.kind === 'prose'
+    && publicActionCount === 0
+    && approvedDialogue.size === 0
+  const compactProseTurn = compactPublicTurn || compactWorldTransition
   const narrativeAuthority = renderNarrativeAuthority(
     input.workspace,
     worldEventSequences,
@@ -4684,14 +4707,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             const dialogue = dialogueByReference.get(speech.reference)
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
-        const compactSection = compactPublicTurn && section.kind === 'prose'
+        const compactSection = compactProseTurn && section.kind === 'prose'
         const routineWorldSection = section.kind === 'prose'
           && worldNarrativeProjection !== undefined
           && worldNarrativeProjection.cues.length === 0
           && publicActionCount === 0
           && approvedDialogue.size === 0
-        const outputInstruction = compactSection
-          ? '本轮只有一项新的公开动作或一句获准对白。只写一个自然段、二至四句且不超过 320 个字符；直接从变化发生处接续，在可观察结果落定后停止。不得重述上一段静止状态，不把一个动作拆成反复停顿、伸手、收手、视线或物件位置盘点，也不添加气氛总结。比喻、象征和效果解读不能替动作解释意义；recent_public_prose 中已经发生的说话或动作不能改成没发生。'
+        const outputInstruction = compactWorldTransition && section.kind === 'prose'
+          ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。只写一个自然段、二至四句且不超过 320 个字符；把相似投掷和移动合成时间流动，在本轮最终棋位落定后停止。可省略没有信息增长的单次骰点；若选择写出点数，只能使用 worldEvents 中的真实值，不能写破折号、省略号或其他占位符。不得逐次铺陈拿骰、停顿、视线、光影和静止物件，也不添加气氛总结。'
+          : compactSection
+            ? '本轮只有一项新的公开动作或一句获准对白。只写一个自然段、二至四句且不超过 320 个字符；直接从变化发生处接续，在可观察结果落定后停止。不得重述上一段静止状态，不把一个动作拆成反复停顿、伸手、收手、视线或物件位置盘点，也不添加气氛总结。比喻、象征和效果解读不能替动作解释意义；recent_public_prose 中已经发生的说话或动作不能改成没发生。'
           : section.kind === 'prose' && worldNarrative !== ''
             ? '依照 world_narrative 的呈现节奏写成可直接阅读的连续场景。transition 用一两句带过相似动作；scene 依次呈现变化发生前的现场、触发动作与可观察后果，可以按事件进展使用多个自然段；resolution 收束已经形成的结果。是否有获准对白或附加人物行动不决定 scene 的段落数量；不能把完整场景压成规则摘要，也不为凑篇幅制造人物互动。不重复分区标题。'
             : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
@@ -4761,13 +4786,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
-  const compactDraftReady = compactPublicTurn && sectionDrafts.length === 1
+  const compactDraftReady = compactProseTurn && sectionDrafts.length === 1
     && compactProseWithinBudget(sectionDrafts[0]!.text)
-    && compactProseRetainsPlan(
-      sectionDrafts[0]!,
-      directorDecision?.sections.find(section => section.sectionId === sectionDrafts[0]!.sectionId),
-      approvedDialogue,
-    )
+    && (compactWorldTransition || compactProseRetainsPlan(
+        sectionDrafts[0]!,
+        directorDecision?.sections.find(section => section.sectionId === sectionDrafts[0]!.sectionId),
+        approvedDialogue,
+      ))
   if (sectionDrafts.length > 0 && !compactDraftReady) {
     const edited = await runStage(input, 'editor', generateOptions(
       input,
@@ -4776,22 +4801,24 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       [
         '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
         'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
-        compactPublicTurn
-          ? '本轮只有一项新的公开动作或一句获准对白。prose 只保留一个自然段、二至四句且不超过 320 个字符；从变化开始，在可观察结果落定后停止。合并反复停顿、伸手、收手、视线、物件位置盘点和气氛总结，删除解释动作意义的比喻、象征与效果判断。recent_public_prose 中已经发生的说话或动作不能改成没发生。'
+        compactWorldTransition
+          ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。prose 只保留一个自然段、二至四句且不超过 320 个字符；合并相似投掷和移动，在最终棋位落定后停止。可删除没有信息增长的单次骰点；保留的点数必须逐字使用 worldEvents 中的真实值，不能留下破折号、省略号或其他占位符。删除逐次拿骰、停顿、视线、静止物件盘点和气氛总结。'
+          : compactPublicTurn
+            ? '本轮只有一项新的公开动作或一句获准对白。prose 只保留一个自然段、二至四句且不超过 320 个字符；从变化开始，在可观察结果落定后停止。合并反复停顿、伸手、收手、视线、物件位置盘点和气氛总结，删除解释动作意义的比喻、象征与效果判断。recent_public_prose 中已经发生的说话或动作不能改成没发生。'
           : 'prose 应读成连续场景：相似机械结果压缩成时间流动，scene 保留变化发生前的现场、触发动作与可观察后果，resolution 收束已经形成的结果。段落结构服从 world_narrative 的 cadence 和事件进展；没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由。保留权威事实、获准对白和已选公开行动；只删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞，不补造互动。',
         'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
         '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
       ].join('\n'),
       [
-        '<recent_public_prose>', compactPublicTurn ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
+        '<recent_public_prose>', compactProseTurn ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
         ...(narrativeAuthority === '' ? [] : ['<narrative_authority>', narrativeAuthority, '</narrative_authority>']),
         '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
       ].join('\n'),
-      compactPublicTurn ? 1_024 : 4_096,
+      compactProseTurn ? 1_024 : 4_096,
       0.2,
     ), resultEventSeqs)
     if (edited.text !== undefined) {
@@ -4810,6 +4837,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         editedSections = sectionDrafts
       }
     }
+  }
+  if (compactWorldTransition && !compactSectionsWithinBudget(editedSections)) {
+    editedSections = compactSectionsWithinBudget(sectionDrafts)
+      ? sectionDrafts
+      : renderHostOnlyWorldSections(enabledSections, worldNarrative, worldOutcome) ?? sectionDrafts
   }
   const enforcedSections = enforceFinalSections(
     editedSections,
