@@ -524,9 +524,14 @@ function eventNarrativeFacts(
         text: eventNarrative(current, context),
       })
     } else {
+      const outcomeData = eventData(outcome!)
+      const compressibleMove = outcome!.type === 'piece.moved'
+        && outcomeData?.kind === 'piece-moved'
+        && outcomeData.fromStatus === 'track'
+        && outcomeData.toStatus === 'track'
       facts.push({
         eventSequences: [current.sequence, outcome!.sequence],
-        retention: outcome!.type === 'turn.passed' ? 'compressible' : 'essential',
+        retention: outcome!.type === 'turn.passed' || compressibleMove ? 'compressible' : 'essential',
         text: paired,
       })
       index += 1

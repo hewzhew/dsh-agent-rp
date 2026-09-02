@@ -2166,6 +2166,7 @@ test('projects first launch, ordinary movement, collision, and finish at their n
     playContext,
   )
   assert.equal(firstLaunch.cadence, 'scene')
+  assert.equal(firstLaunch.facts.find(fact => fact.eventSequences.length === 2)?.retention, 'essential')
   assert.deepEqual(firstLaunch.cues, [])
 
   turn = module.characterTurn(snapshot, playContext)!
@@ -2180,6 +2181,7 @@ test('projects first launch, ordinary movement, collision, and finish at their n
     playContext,
   )
   assert.equal(ordinaryMove.cadence, 'transition')
+  assert.equal(ordinaryMove.facts.find(fact => fact.eventSequences.length === 2)?.retention, 'compressible')
   assert.deepEqual(ordinaryMove.cues, [])
 
   const collisionModule = createFlyingChessWorldModule()

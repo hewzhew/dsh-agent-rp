@@ -3485,7 +3485,7 @@ function renderWorldNarrativeBrief(
     : projection.cadence === 'scene' ? '完整场景节拍' : '场景收束'
   return [
     `呈现节奏：${cadence}`,
-    '必须保留的事实：',
+    '本轮已经发生的事实：',
     ...projection.facts.map(fact => `- [世界事件 ${fact.eventSequences.join('、')}；${fact.retention === 'essential' ? '不可省略' : '可与同类事实压缩'}] ${fact.text}`),
     ...(cues.length === 0
       ? []
