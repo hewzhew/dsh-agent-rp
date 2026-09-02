@@ -4678,6 +4678,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const compactSection = compactPublicTurn && section.kind === 'prose'
+        const routineWorldSection = section.kind === 'prose'
+          && worldNarrativeProjection !== undefined
+          && worldNarrativeProjection.cues.length === 0
+          && publicActionCount === 0
+          && approvedDialogue.size === 0
         const outputInstruction = compactSection
           ? '本轮只有一项新的公开动作或一句获准对白。只写一个自然段、二至四句且不超过 320 个字符；直接从变化发生处接续，在可观察结果落定后停止。不得重述上一段静止状态，不把一个动作拆成反复停顿、伸手、收手、视线或物件位置盘点，也不添加气氛总结。比喻、象征和效果解读不能替动作解释意义；recent_public_prose 中已经发生的说话或动作不能改成没发生。'
           : section.kind === 'prose' && worldNarrative !== ''
@@ -4698,7 +4703,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         const draft = await runStage(input, 'section', generateOptions(
           input,
           reasoning,
-          compactSection ? 'structural' : 'quality',
+          compactSection ? 'structural' : routineWorldSection ? 'routine' : 'quality',
           [
             `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}`,
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',

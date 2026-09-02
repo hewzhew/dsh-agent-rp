@@ -3244,7 +3244,7 @@ test('writes a manually completed world result without persisting a character co
   assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [reimuId, marisaId])
   assert.equal(stageRequests.filter(request => request.stage === 'character')
     .every(request => request.dispatch.reasoningEffort === 'low' && request.dispatch.maxTokens === 4_096), true)
-  assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'high')
+  assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'low')
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
