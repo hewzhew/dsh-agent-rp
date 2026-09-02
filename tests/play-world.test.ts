@@ -11,9 +11,10 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
 import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
-import { PlayWorldRegistry, projectPlayWorldNarrative, type PlayWorldModule } from '../src/play-world.ts'
+import { PlayWorldRegistry, projectPlayWorldNarrative, type PlayWorldContext, type PlayWorldModule } from '../src/play-world.ts'
 import { RoleplayResourceCatalog } from '../src/roleplay-resource-catalog.ts'
 import {
+  FLYING_CHESS_WORLD_CONFIGURATION,
   FLYING_CHESS_WORLD_CAST_SLOTS,
   FLYING_CHESS_WORLD_RESOURCE_ID,
   flyingChessWorldResourceProvider,
@@ -226,7 +227,9 @@ function fixtureWorldResources(worlds: PlayWorldRegistry): RoleplayResourceCatal
       moduleId: selection.id === FLYING_CHESS_WORLD_RESOURCE_ID
         ? FLYING_CHESS_WORLD_MODULE_ID
         : selection.id.slice('world:'.length),
-      configuration: {},
+      configuration: selection.id === FLYING_CHESS_WORLD_RESOURCE_ID
+        ? FLYING_CHESS_WORLD_CONFIGURATION
+        : {},
       sources: [],
       castSlots: [],
     }),
@@ -558,7 +561,7 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   ])
   assert.deepEqual(upgraded.worldBinding?.resource, { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID })
   assert.equal(upgraded.worldBinding?.moduleId, FLYING_CHESS_WORLD_MODULE_ID)
-  assert.deepEqual(upgraded.worldBinding?.configuration, { format: 0, ruleset: 'classic-24' })
+  assert.deepEqual(upgraded.worldBinding?.configuration, FLYING_CHESS_WORLD_CONFIGURATION)
   assert.deepEqual(upgraded.worldBinding?.sourceReferences, [])
   assert.deepEqual(upgraded.worldBinding?.sourceIds, [])
   assert.deepEqual(upgraded.worldBinding?.cast, [{ slotId: 'reimu', characterId: reimuId }, {
@@ -1032,6 +1035,16 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
   })
   assert.match(compileStoryCharacterContext(workspace, reimuId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
   assert.match(compileStoryCharacterContext(workspace, marisaId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
+  for (let turn = 0; turn < 4; turn += 1) {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: 'roll',
+    })
+  }
+  assert.equal(workspace.world?.events.filter(event => event.type === 'scene.changed').length, 1)
   assert.throws(() => projectPlayWorldNarrative({
     cadence: 'scene',
     facts: projection.facts,
@@ -1047,6 +1060,31 @@ test('projects first launch, ordinary movement, collision, and finish at their n
     configuration: {},
     sourceReferences: [],
   }
+  const cardModule = createFlyingChessWorldModule({ rollDie: () => 1 })
+  const cardContext: PlayWorldContext = {
+    ...playContext,
+    configuration: {
+      format: 0,
+      ruleset: 'classic-24',
+      narrativeCards: [{
+        id: 'fixture-two-passes',
+        trigger: { kind: 'consecutive-passes', count: 2 },
+        event: { title: '纸签落下', summary: '第二次停顿时，一张纸签落到棋盘中央。' },
+        cue: { kind: 'opportunity', text: '在场人物可以决定是否查看纸签。', responders: 'all' },
+        repeat: false,
+      }],
+    },
+  }
+  let cardSnapshot = cardModule.create(cardContext)
+  for (let turnIndex = 0; turnIndex < 2; turnIndex += 1) {
+    const cardTurn = cardModule.characterTurn(cardSnapshot, cardContext)!
+    cardSnapshot = cardModule.dispatch(cardSnapshot, cardTurn.actions[0]!.action, cardContext)
+  }
+  const cardEvent = cardSnapshot.events.at(-1)!
+  assert.equal(cardEvent.type, 'scene.changed')
+  assert.equal(cardEvent.title, '纸签落下')
+  assert.equal((cardEvent.data as { readonly cardId?: unknown }).cardId, 'fixture-two-passes')
+
   const rolls = [6, 2]
   const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
   let snapshot = module.create(playContext)

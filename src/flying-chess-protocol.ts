@@ -5,6 +5,35 @@ export const FLYING_CHESS_WORLD_MODULE_ID = 'agent-rp/flying-chess'
 
 export type FlyingChessPieceStatus = 'base' | 'track' | 'home'
 
+/** Supported trigger for one resource-authored flying-chess narrative card. */
+export interface FlyingChessConsecutivePassesTrigger {
+  readonly kind: 'consecutive-passes'
+  readonly count: number
+}
+
+/** One structured scene event supplied by a flying-chess world resource. */
+export interface FlyingChessNarrativeCard {
+  readonly id: string
+  readonly trigger: FlyingChessConsecutivePassesTrigger
+  readonly event: {
+    readonly title: string
+    readonly summary: string
+  }
+  readonly cue: {
+    readonly kind: 'change' | 'pressure' | 'opportunity' | 'relationship'
+    readonly text: string
+    readonly responders: 'all'
+  }
+  readonly repeat: boolean
+}
+
+/** Durable recipe configuration understood by the first-party flying-chess module. */
+export interface FlyingChessWorldConfiguration {
+  readonly format: 0
+  readonly ruleset: 'classic-24'
+  readonly narrativeCards?: readonly FlyingChessNarrativeCard[]
+}
+
 /** One authoritative piece in a flying-chess match. */
 export interface FlyingChessPiece {
   readonly id: string

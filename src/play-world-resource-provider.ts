@@ -1,14 +1,46 @@
 /** First-party resource recipes for trusted executable play worlds. */
 
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   createFlyingChessWorldModule,
 } from './flying-chess-world.ts'
-import { FLYING_CHESS_WORLD_MODULE_ID } from './flying-chess-protocol.ts'
+import {
+  FLYING_CHESS_WORLD_MODULE_ID,
+  type FlyingChessWorldConfiguration,
+} from './flying-chess-protocol.ts'
 import type { RoleplayResourceProvider } from './roleplay-resource-catalog.ts'
 import type { RoleplayWorldCastSlotDetail } from './roleplay-resource-catalog-protocol.ts'
 
 /** Stable resource selected by a workspace before the trusted flying-chess module is invoked. */
 export const FLYING_CHESS_WORLD_RESOURCE_ID = 'world:agent-rp/flying-chess'
+
+/** Structured rule and narrative recipe installed by the built-in flying-chess resource. */
+export const FLYING_CHESS_WORLD_CONFIGURATION = {
+  format: 0,
+  ruleset: 'classic-24',
+  narrativeCards: [{
+    id: 'stalled-opening-wind',
+    trigger: { kind: 'consecutive-passes', count: 4 },
+    event: {
+      title: '棋盘被风掀动',
+      summary: '接连几轮都没有飞机起飞时，一阵风掀起棋盘一角，基地里的木机随之晃动。',
+    },
+    cue: {
+      kind: 'pressure',
+      text: '棋盘需要先被重新压稳。由谁先处理、另一人是否搭手，可以成为这一刻实际发生的人物关系动作。',
+      responders: 'all',
+    },
+    repeat: false,
+  }],
+} satisfies FlyingChessWorldConfiguration & JsonValue
+for (const card of FLYING_CHESS_WORLD_CONFIGURATION.narrativeCards) {
+  Object.freeze(card.trigger)
+  Object.freeze(card.event)
+  Object.freeze(card.cue)
+  Object.freeze(card)
+}
+Object.freeze(FLYING_CHESS_WORLD_CONFIGURATION.narrativeCards)
+Object.freeze(FLYING_CHESS_WORLD_CONFIGURATION)
 
 /** Character-card openings recommended by the first-party Touhou play-space recipe. */
 export const FLYING_CHESS_WORLD_CAST_SLOTS: readonly RoleplayWorldCastSlotDetail[] = Object.freeze([
@@ -69,7 +101,7 @@ export function flyingChessWorldResourceProvider(): RoleplayResourceProvider {
       if (selection.variant !== undefined) throw new Error('幻想乡飞行棋不提供资源变体')
       return {
         moduleId: FLYING_CHESS_WORLD_MODULE_ID,
-        configuration: { format: 0, ruleset: 'classic-24' },
+        configuration: FLYING_CHESS_WORLD_CONFIGURATION,
         sources: [],
         castSlots: FLYING_CHESS_WORLD_CAST_SLOTS,
       }
