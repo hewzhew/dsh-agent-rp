@@ -2716,7 +2716,7 @@ test('compacts routine world transitions and removes incomplete die values', asy
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
   })
-  const fakeContext = (editedText: string): Context => ({
+  const fakeContext = (editedText: string, sectionText = verboseDraft): Context => ({
     sessions: { flush: async () => true },
     llm: {
       async resolveModelInfo(provider: string, model: string) {
@@ -2739,7 +2739,7 @@ test('compacts routine world transitions and removes incomplete die values', asy
         const text = system.includes('指定人物认知')
           ? JSON.stringify({ observation: '棋局继续。', action: '', speech: null, insights: [] })
           : system.includes('分区的 prose Worker')
-            ? verboseDraft
+            ? sectionText
             : system.includes('最终正文编辑 Worker')
               ? JSON.stringify({ sections: [{ sectionId: proseId, text: editedText }] })
               : JSON.stringify({ sections: [] })
@@ -2777,6 +2777,60 @@ test('compacts routine world transitions and removes incomplete die values', asy
   assert.match(editorRequest?.dispatch.system ?? '', /不能留下破折号、省略号或其他占位符/u)
   assert.equal(result.finalDraft, compactDraft)
   assert.doesNotMatch(result.finalDraft, /点数是—|\n\s*\n/u)
+
+  const fragmentedSession = Session.create(SessionId('compact-world-transition-fragmented'))
+  fragmentedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const fragmentedDraft = '灵梦掷出二点。木机没动。魔理沙掷出五点。木机仍没动。灵梦又掷一点。魔理沙也掷一点。'
+  const fragmentedResult = await runStoryTurnPipeline({
+    ctx: fakeContext(compactDraft, fragmentedDraft),
+    agent: {
+      id: fragmentedSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: fragmentedSession,
+    } as Agent,
+    store,
+    workspace,
+    turn: 3,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(fragmentedResult.finalDraft, compactDraft)
+  assert.equal(sessionEvents(fragmentedSession).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'editor'), true)
+
+  const wrongHandoffSession = Session.create(SessionId('compact-world-transition-wrong-handoff'))
+  wrongHandoffSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const wrongHandoffDraft = '几轮过后，红蓝两边的木机落在新的位置。骰子停到魔理沙手边，轮到她再掷。'
+  const correctedHandoff = '几轮投掷很快过去，两边仍没有木机离开基地。跑道依旧空着。'
+  const wrongHandoffResult = await runStoryTurnPipeline({
+    ctx: fakeContext(correctedHandoff, wrongHandoffDraft),
+    agent: {
+      id: wrongHandoffSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: wrongHandoffSession,
+    } as Agent,
+    store,
+    workspace,
+    turn: 4,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(wrongHandoffResult.finalDraft, correctedHandoff)
+  assert.doesNotMatch(wrongHandoffResult.finalDraft, /轮到她再掷/u)
 
   const rejectedSession = Session.create(SessionId('compact-world-transition-rejected-editor'))
   rejectedSession.append('request/header', {

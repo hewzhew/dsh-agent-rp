@@ -686,6 +686,83 @@ test('retries a reasoning-only character Subagent with an explicit structured su
   assert.equal(characterResults.filter(result => result.kind === 'success').length, 2)
 })
 
+test('retries a reasoning-only direct story stage with an explicit final-output request', async () => {
+  const session = Session.create(SessionId('story-direct-stage-final-retry'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const base = workspace()
+  const directorBodies: string[] = []
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages: readonly unknown[] }) {
+        const system = options.system ?? ''
+        let text: string
+        if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('剧情研究 Worker')) {
+          text = JSON.stringify({ findings: [], followUps: [] })
+        } else if (system.includes('指定人物认知')) {
+          text = JSON.stringify({ observation: '', action: '', speech: null, opportunityDecisions: [], insights: [] })
+        } else if (system.includes('剧情导演 Worker')) {
+          directorBodies.push(JSON.stringify(options.messages))
+          if (directorBodies.length === 1) {
+            return (async function* () {
+              yield { type: 'block-start' as const, index: 0, blockType: 'reasoning' as const }
+              yield { type: 'reasoning-delta' as const, index: 0, text: '已经完成分析，但还没有提交结果。' }
+              yield {
+                type: 'block-end' as const,
+                index: 0,
+                block: { type: 'reasoning' as const, text: '已经完成分析，但还没有提交结果。' },
+              }
+              yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+            })()
+          }
+          text = JSON.stringify({
+            sections: [{ sectionId, beats: ['两人沿着雨后的站台继续往前。'], speech: [] }],
+          })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = '雨已经停了，两人沿着湿漉漉的站台继续往前。'
+        } else if (system.includes('最终正文编辑 Worker')) {
+          text = JSON.stringify({
+            sections: [{ sectionId, text: '雨已经停了，两人沿着湿漉漉的站台继续往前。' }],
+          })
+        } else {
+          text = JSON.stringify({ sections: [] })
+        }
+        return (async function* () {
+          yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
+          yield { type: 'text-delta' as const, index: 0, text }
+          yield { type: 'block-end' as const, index: 0, block: { type: 'text' as const, text } }
+          yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    workspace: {
+      ...base,
+      pipeline: { ...base.pipeline, researchMaxPasses: 1 },
+      outputs: [base.outputs[0]!],
+      sources: [],
+    },
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '继续往前。' }] })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(directorBodies.length, 2)
+  assert.doesNotMatch(directorBodies[0]!, /final_output_retry/u)
+  assert.match(directorBodies[1]!, /final_output_retry/u)
+  assert.equal(result.finalDraft, '雨已经停了，两人沿着湿漉漉的站台继续往前。')
+})
+
 test('records prose-only character Subagent replies as invalid instead of silently accepting them', async () => {
   const session = Session.create(SessionId('story-character-subagent-prose'))
   session.append('request/header', {
