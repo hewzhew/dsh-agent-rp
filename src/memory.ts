@@ -1,8 +1,9 @@
 /** Durable Agent RP memory reconstructed from native tool events. */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import { Session, SessionId, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import { sessionEvents } from './session-events.ts'
 
 const PERSISTENT_MEMORY_INTENT = /(?:记住|记得|别忘|不要忘|以后|今后|下次|从现在起|remember|do(?:n['’]?t| not) forget|from now on|next time)/iu
 
@@ -481,7 +482,7 @@ export function appendAgentRpMemorySeed(
   const time = Math.max(Date.now(), (seed.at(-1)?.time ?? 0) + 1)
   const events: SessionEvent[] = [...seed, {
     type: 'agent-rp/memory-seed',
-    seq: seed.length,
+    seq: SessionSeq(seed.length),
     time,
     ignorable: true,
     data: {
@@ -490,11 +491,11 @@ export function appendAgentRpMemorySeed(
       memories: memories.map(memory => ({ kind: memory.kind, subject: memory.subject, text: memory.text })),
     },
   }]
-  return Object.freeze(Session.create(SessionId('agent-rp-memory-seed-validation'), events).events.slice(0, events.length))
+  return Object.freeze(sessionEvents(Session.create(SessionId('agent-rp-memory-seed-validation'), events)).slice(0, events.length))
 }
 
 function findRememberCall(session: Session, callId: string): SessionEvent<'tool/call'> {
-  const call = session.events.findLast(event => event.type === 'tool/call' && event.data.callId === callId)
+  const call = sessionEvents(session).findLast(event => event.type === 'tool/call' && event.data.callId === callId)
   if (call?.type !== 'tool/call' || call.data.name !== 'remember') {
     throw new Error('remember execution has no matching direct Session tool call')
   }
@@ -513,7 +514,7 @@ export function prepareAgentRpMemory(
   callId: string,
   input: AgentRpMemoryInput,
 ): AgentRpMemoryRecord {
-  const history = readAgentRpMemoryHistory(session.events)
+  const history = readAgentRpMemoryHistory(sessionEvents(session))
   const call = findRememberCall(session, callId)
   const sourceInput = sourceArguments(call)
   if (sourceInput.kind !== input.kind

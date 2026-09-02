@@ -30,6 +30,7 @@ import {
   initializeTavernHelperState,
   parseTavernHelperMutationRequest,
 } from '../src/tavern-helper.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function cardWithEntries(entries: readonly object[]) {
   return parseCharacterCardJson(JSON.stringify({
@@ -73,7 +74,7 @@ test('adopts browser-initialized MVU state when a card has no static initializer
     commandId: CommandId('mvu-runtime-init'), kind: 'success', text: encodeTavernHelperState(state),
   })
 
-  assert.deepEqual(readCurrentMvuState(card, session.events), {
+  assert.deepEqual(readCurrentMvuState(card, sessionEvents(session)), {
     statData: { 角色: { 等级: 1 } }, updateCount: 0,
   })
 })
@@ -162,7 +163,7 @@ test('replays an exact MVU version checkpoint before applying the new visible re
     statData: { 角色: { 等级: 5 } }, updateCount: 3,
   })
   appendMvuState(session, { statData: { 角色: { 等级: 4 } }, updateCount: 1 })
-  assert.deepEqual(readCurrentSessionMvuState(card, Session.create(session.id, session.events)), {
+  assert.deepEqual(readCurrentSessionMvuState(card, Session.create(session.id, sessionEvents(session))), {
     statData: { 角色: { 等级: 4 } }, updateCount: 1,
   })
 })
@@ -178,7 +179,7 @@ test('repairs a missing MVU block from only the frozen act plan in a cardless Se
   })
   const plan: RoleplayTurnPlan = {
     format: 0,
-    input: { sessionId: String(session.id), sessionSeq: session.events.length, pendingMessageIds: [] },
+    input: { sessionId: String(session.id), sessionSeq: sessionEvents(session).length, pendingMessageIds: [] },
     runtime: {
       format: 0,
       lifecycle: ROLEPLAY_TURN_PHASES,
@@ -251,7 +252,7 @@ test('repairs a missing MVU block from only the frozen act plan in a cardless Se
     return original()
   })
   assert.equal(bypassed, 1)
-  assert.equal(session.events.some(event => event.type === 'agent-rp/act-model-request'), false)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/act-model-request'), false)
 
   const options = Object.freeze(markAgentLoopRequest({
     provider: 'fixture', model: 'fixture', sessionId: session.id,
@@ -268,8 +269,8 @@ test('repairs a missing MVU block from only the frozen act plan in a cardless Se
   assert.match(requestText, /只用冻结规则/u)
   const outputText = output.flatMap(chunk => chunk.type === 'text-delta' ? [chunk.text] : []).join('')
   assert.match(outputText, /<UpdateVariable>/u)
-  const requestEvent = session.events.find(event => event.type === 'agent-rp/act-model-request')
-  const resultEvent = session.events.find(event => event.type === 'agent-rp/act-model-result')
+  const requestEvent = sessionEvents(session).find(event => event.type === 'agent-rp/act-model-request')
+  const resultEvent = sessionEvents(session).find(event => event.type === 'agent-rp/act-model-result')
   assert.equal(requestEvent?.type, 'agent-rp/act-model-request')
   assert.equal(resultEvent?.type, 'agent-rp/act-model-result')
   if (requestEvent?.type !== 'agent-rp/act-model-request'
@@ -291,7 +292,7 @@ test('repairs a missing MVU block from only the frozen act plan in a cardless Se
   }, { surfaceOp: 'append', sourceEventSeqs: [] })
   session.append('step/end', { turn: 1, step: 1 })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-  const receipt = compileRoleplayActReceipt(session.events, 1, 'completed', [planEvent.data.reference])
+  const receipt = compileRoleplayActReceipt(sessionEvents(session), 1, 'completed', [planEvent.data.reference])
   assert.deepEqual(receipt.steps[0]?.modelCalls, [{
     requestEventSeq: requestEvent.seq,
     resultEventSeq: resultEvent.seq,
@@ -307,7 +308,7 @@ test('repairs a missing MVU block from only the frozen act plan in a cardless Se
     turn: 1,
     result: 'completed',
     plans: [{ step: 1, plan }],
-    events: session.events,
+    events: sessionEvents(session),
     after: plan.runtime,
   })
   appendRoleplayTurnSettlement(session, settlement)

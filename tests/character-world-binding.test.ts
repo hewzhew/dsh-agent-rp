@@ -15,6 +15,7 @@ import { resolveSessionRoleplayRuntime } from '../src/session-roleplay-runtime.t
 import { SillyTavernChatLibrary } from '../src/sillytavern-chat-library.ts'
 import { readSessionLorebookSourcesFromEvents } from '../src/world-info-configuration.ts'
 import { WorldInfoLibrary } from '../src/world-info-library.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function integratedLibraries(context: test.TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-character-world-binding-'))
@@ -223,7 +224,7 @@ test('edits a character world composition across future launch, runtime, project
   assert.ok(worldSeeds.every(event => event.data.purpose === 'character-binding'))
 
   const session = Session.create(SessionId('character-world-binding-runtime'), prepared.seed)
-  const sources = readSessionLorebookSourcesFromEvents(session.events)
+  const sources = readSessionLorebookSourcesFromEvents(sessionEvents(session))
   assert.deepEqual(sources.map(source => source.id), [
     `character:library:${primary.id}`,
     `character:library:${supporting.id}`,
@@ -240,14 +241,14 @@ test('edits a character world composition across future launch, runtime, project
   assert.ok(runtime.lorebooks.every(lorebook => lorebook.source.source === 'character'))
   assert.deepEqual(runtime.mvu?.statData, { 角色: { 等级: 1 } })
 
-  let projectionState = agentRpProjectionDefinition.init(session.header)
-  for (const event of session.events) projectionState = agentRpProjectionDefinition.apply(projectionState, event)
+  let projectionState = agentRpProjectionDefinition.init(session.header, session.inheritedEventCount)
+  for (const event of sessionEvents(session)) projectionState = agentRpProjectionDefinition.apply(projectionState, event)
   const projection = agentRpProjectionDefinition.wire.view(projectionState)
   assert.equal(projection.worldInfo.books.length, 3)
   assert.ok(projection.worldInfo.books.every(book => book.source === 'character'))
   assert.deepEqual(projection.mvu?.statData, { 角色: { 等级: 1 } })
 
-  const oldSources = readSessionLorebookSourcesFromEvents(oldSession.events)
+  const oldSources = readSessionLorebookSourcesFromEvents(sessionEvents(oldSession))
   assert.equal(oldSources.length, 1)
   assert.equal(oldSources[0]?.source, 'character')
   const oldRuntime = resolveSessionRoleplayRuntime({
@@ -255,8 +256,8 @@ test('edits a character world composition across future launch, runtime, project
     deployment: resolveConfig({ characterName: 'fallback' }),
   })
   assert.equal(oldRuntime.lorebooks.length, 1)
-  let oldProjectionState = agentRpProjectionDefinition.init(oldSession.header)
-  for (const event of oldSession.events) {
+  let oldProjectionState = agentRpProjectionDefinition.init(oldSession.header, oldSession.inheritedEventCount)
+  for (const event of sessionEvents(oldSession)) {
     oldProjectionState = agentRpProjectionDefinition.apply(oldProjectionState, event)
   }
   const oldProjection = agentRpProjectionDefinition.wire.view(oldProjectionState)

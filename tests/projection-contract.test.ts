@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import { agentRpProjectionDefinition, createAgentRpProjectionDefinition } from '../src/projection.ts'
 import { appendAgentRpSessionEvent } from '../src/session-event-append.ts'
 
 test('serves the same Agent RP view through current and newer DSH projection contracts', () => {
-  const state = agentRpProjectionDefinition.init(Session.create(SessionId('projection-contract')).header)
+  const state = agentRpProjectionDefinition.init(
+    Session.create(SessionId('projection-contract')).header,
+    SessionLogOffset(0),
+  )
   const currentHostView = agentRpProjectionDefinition.schema.parse(
     agentRpProjectionDefinition.view(state),
   )
@@ -19,9 +22,12 @@ test('serves the same Agent RP view through current and newer DSH projection con
 
 test('projects the selected turn mode through the required Session event capability', () => {
   const definition = createAgentRpProjectionDefinition()
-  const selected = definition.apply(definition.init(Session.create(SessionId('projection-turn-mode')).header), {
+  const selected = definition.apply(definition.init(
+    Session.create(SessionId('projection-turn-mode')).header,
+    SessionLogOffset(0),
+  ), {
     type: 'agent-rp/turn-mode',
-    seq: 0,
+    seq: SessionSeq(0),
     time: 1,
     data: { format: 0, mode: 'agent', source: 'default' },
   })
@@ -33,10 +39,13 @@ test('projects the selected turn mode through the required Session event capabil
 
 test('keeps the selected story workspace visible while the Session is idle', () => {
   const definition = createAgentRpProjectionDefinition()
-  let state = definition.init(Session.create(SessionId('projection-story-workspace')).header)
+  let state = definition.init(
+    Session.create(SessionId('projection-story-workspace')).header,
+    SessionLogOffset(0),
+  )
   state = definition.apply(state, {
     type: 'agent-rp/story-workspace-selection',
-    seq: 0,
+    seq: SessionSeq(0),
     time: 1,
     ignorable: true,
     data: { format: 0, workspaceId: 'workspace-1', source: 'launch' },
@@ -45,7 +54,7 @@ test('keeps the selected story workspace visible while the Session is idle', () 
 
   state = definition.apply(state, {
     type: 'agent-rp/story-workspace-selection',
-    seq: 2,
+    seq: SessionSeq(2),
     time: 2,
     ignorable: true,
     data: { format: 0, sourceEventSeq: 1 },
@@ -56,7 +65,7 @@ test('keeps the selected story workspace visible while the Session is idle', () 
 test('projects a story turn from its durable start through materialization', () => {
   const session = Session.create(SessionId('projection-story-progress'))
   const definition = createAgentRpProjectionDefinition()
-  let state = definition.init(session.header)
+  let state = definition.init(session.header, session.inheritedEventCount)
   const turnStart = appendAgentRpSessionEvent(session, 'agent-rp/story-turn-start', {
     format: 0,
     sessionId: String(session.id),

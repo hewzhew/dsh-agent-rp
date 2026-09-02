@@ -4,6 +4,7 @@ import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { RoleplayResponseRepairPlan, RoleplayTurnPlan } from './roleplay-turn-plan.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Exact credential-free provider request dispatched by an act-phase program. */
 export interface RoleplayActModelDispatch {
@@ -75,7 +76,7 @@ export function resolveRoleplayActModelBoundary(
   session: Session,
   plan: RoleplayTurnPlan,
 ): RoleplayActModelBoundary | undefined {
-  const events = session.events
+  const events = sessionEvents(session)
   const openStarts = events.filter((event): event is SessionEvent<'step/start'> =>
     event.type === 'step/start' && !events.some(candidate => candidate.seq > event.seq
       && candidate.type === 'step/end' && candidate.data.turn === event.data.turn

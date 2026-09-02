@@ -1,6 +1,6 @@
 /** Source-neutral assembly of reusable resources into one replayable Roleplay Session seed. */
 
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
   RoleplayExperienceSessionLaunchRequest,
 } from './session-launch-protocol.ts'
@@ -8,6 +8,7 @@ import type { PreparedAgentRpSession } from './session-launch.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 import { RoleplayResourceCatalog } from './roleplay-resource-catalog.ts'
 import { appendRoleplayExperienceSelection } from './roleplay-experience-selection.ts'
+import { sessionEvents } from './session-events.ts'
 
 type ExperienceSelection = Omit<RoleplayExperienceSessionLaunchRequest, 'format' | 'sourceSessionId' | 'kind'>
 
@@ -30,15 +31,15 @@ function navigableSeed(events: readonly SessionEvent[]): readonly SessionEvent[]
   if (events.some(event => event.type === 'turn/start')) return events
   const next: SessionEvent[] = [...structuredClone(events)]
   const time = Date.now()
-  next.push({ type: 'turn/start', seq: next.length, time, data: { turn: 1 } })
+  next.push({ type: 'turn/start', seq: SessionSeq(next.length), time, data: { turn: 1 } })
   next.push({
     type: 'turn/end',
-    seq: next.length,
+    seq: SessionSeq(next.length),
     time,
     data: { turn: 1, reason: { kind: 'completed' } },
   })
   const validated = Session.create(SessionId('agent-rp-experience-navigation-validation'), next)
-  return Object.freeze(validated.events.slice(0, next.length))
+  return Object.freeze(sessionEvents(validated).slice(0, next.length))
 }
 
 /**

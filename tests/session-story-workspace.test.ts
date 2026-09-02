@@ -12,6 +12,7 @@ import {
 } from '../src/session-story-workspace.ts'
 import type { StoryWorkspaceSaveRequest, StoryWorkspaceSnapshot } from '../src/story-workspace-protocol.ts'
 import { createStoryOutputId, StoryWorkspaceStore } from '../src/story-workspace.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   return {
@@ -52,7 +53,7 @@ test('selects and clears a story workspace when private command args are not rec
   })
 
   executeStoryWorkspaceCommand(store, { commandId: selectId, agent, rawInput: selectInput })
-  assert.equal(readSessionStoryWorkspaceId(session.events), workspace.id)
+  assert.equal(readSessionStoryWorkspaceId(sessionEvents(session)), workspace.id)
 
   const clearId = CommandId('story-workspace-clear')
   session.append('command/run', {
@@ -66,7 +67,7 @@ test('selects and clears a story workspace when private command args are not rec
     agent,
     rawInput: JSON.stringify({ format: 0, workspaceId: null }),
   })
-  assert.equal(readSessionStoryWorkspaceId(session.events), undefined)
+  assert.equal(readSessionStoryWorkspaceId(sessionEvents(session)), undefined)
 })
 
 test('rejects a story workspace without an enabled prose output', (context) => {
@@ -90,5 +91,5 @@ test('rejects a story workspace without an enabled prose output', (context) => {
       rawInput: JSON.stringify({ format: 0, workspaceId: workspace.id }),
     })
   }, /启用至少一个正文分区/u)
-  assert.equal(readSessionStoryWorkspaceId(session.events), undefined)
+  assert.equal(readSessionStoryWorkspaceId(sessionEvents(session)), undefined)
 })

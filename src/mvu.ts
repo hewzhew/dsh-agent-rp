@@ -12,6 +12,7 @@ import {
   substituteSillyTavernIdentityMacros,
   type SillyTavernIdentityMacroValues,
 } from './sillytavern-identity-macro.ts'
+import { sessionEvents } from './session-events.ts'
 
 export const MVU_ROLEPLAY_MODULE_ID = 'adapter:mvu'
 export const MVU_ROLEPLAY_STATE_ID = 'state:mvu'
@@ -213,7 +214,7 @@ export function readCurrentSessionMvuStateFromLorebooks(
   session: Session,
 ): ReturnType<typeof readCurrentMvuStateFromLorebooks> {
   const surface = new Set(session.surface.nodes)
-  return readCurrentMvuStateFromLorebooks(lorebooks, session.events.filter(event =>
+  return readCurrentMvuStateFromLorebooks(lorebooks, sessionEvents(session).filter(event =>
     event.type !== 'assistant/message' || surface.has(event.seq)))
 }
 
@@ -230,7 +231,7 @@ export function mvuTurnSettlementContribution(input: {
     return { moduleId: MVU_ROLEPLAY_MODULE_ID, outcome: 'failed', error }
   }
   const visible = new Set(input.session.surface.nodes)
-  const failedThisTurn = input.session.events.some(event => event.seq >= input.firstSeq
+  const failedThisTurn = sessionEvents(input.session).some(event => event.seq >= input.firstSeq
     && event.type === 'assistant/message' && event.data.turn === input.turn && visible.has(event.seq)
     && /<UpdateVariable(?:variable)?>/iu.test(event.data.message.content
       .flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')))

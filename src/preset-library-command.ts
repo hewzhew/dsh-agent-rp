@@ -4,6 +4,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { readActiveSessionPreset } from './import/session-preset.ts'
 import { PresetLibrary } from './preset-library.ts'
 import { encodePresetLibraryResult, type PresetLibraryCommandResult } from './preset-library-protocol.ts'
+import { sessionEvents } from './session-events.ts'
 
 type LibraryRequest =
   | { readonly operation: 'list' }
@@ -40,7 +41,7 @@ export function parsePresetLibraryRequest(source: string): LibraryRequest {
 }
 
 function publish(agent: Agent, library: PresetLibrary, operation: PresetLibraryCommandResult['operation']): PresetLibraryCommandResult {
-  const active = readActiveSessionPreset(agent.session.events)
+  const active = readActiveSessionPreset(sessionEvents(agent.session))
   let linkedLibraryId: string | undefined
   if (active !== undefined && active.libraryId === undefined) {
     const imported = library.import(active.importedPreset, active.result.name)
@@ -65,7 +66,7 @@ export function executePresetLibraryCommand(
     const entry = library.get(request.id)
     selected = { libraryId: entry.id, name: entry.name, preset: entry.preset }
   } else if (request.operation === 'save') {
-    const active = readActiveSessionPreset(invocation.agent.session.events)
+    const active = readActiveSessionPreset(sessionEvents(invocation.agent.session))
     if (active === undefined) throw new Error('当前会话还没有可保存的预设')
     library.save(request.name, active.preset)
   } else if (request.operation === 'delete') {

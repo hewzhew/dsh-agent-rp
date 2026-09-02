@@ -23,7 +23,7 @@ const script = {
 test('projects the initial Session without loading the React client entry', () => {
   const projectionSession = Session.create(SessionId('snapshot-session'))
   const projection = agentRpProjectionDefinition.wire.view(
-    agentRpProjectionDefinition.init(projectionSession.header),
+    agentRpProjectionDefinition.init(projectionSession.header, projectionSession.inheritedEventCount),
   )
   const page = tavernPageSnapshot(projection, SessionId('snapshot-session'))
   const snapshot = tavernScriptSnapshot(

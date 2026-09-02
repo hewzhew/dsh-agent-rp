@@ -31,6 +31,7 @@ import { prepareRoleplayExperienceSession } from './roleplay-experience-material
 import { isAgentRpCapabilityPresetId } from './agent-capability-preset-protocol.ts'
 import { SillyTavernChatLibrary } from './sillytavern-chat-library.ts'
 import { WorldInfoLibrary } from './world-info-library.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Complete seed and display metadata used to create one Agent. */
 export interface PreparedAgentRpSession {
@@ -394,18 +395,19 @@ export function prepareAgentRpSession(
 
 /** Cut one completed user turn from an Agent RP transcript without changing its source. */
 export function prepareAgentRpRewriteSession(
-  session: Pick<Session, 'events'>,
+  session: Pick<Session, 'snapshotEvents'>,
   turn: number,
   sourceTitle?: string,
 ): PreparedAgentRpSession {
   if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('改写轮次无效')
-  const start = session.events.find(event => event.type === 'turn/start' && event.data.turn === turn)
+  const events = sessionEvents(session)
+  const start = events.find(event => event.type === 'turn/start' && event.data.turn === turn)
   if (start === undefined) throw new Error(`第 ${turn} 轮不存在`)
-  const end = session.events.find(event => event.seq > start.seq && event.type === 'turn/end' && event.data.turn === turn)
+  const end = events.find(event => event.seq > start.seq && event.type === 'turn/end' && event.data.turn === turn)
   if (end === undefined) throw new Error(`第 ${turn} 轮尚未完成，请等待回复结束`)
-  const userMessage = session.events.find(event => event.seq > start.seq && event.seq < end.seq && event.type === 'user/message')
+  const userMessage = events.find(event => event.seq > start.seq && event.seq < end.seq && event.type === 'user/message')
   if (userMessage === undefined) throw new Error('这一轮没有可改写的用户消息')
-  const seed = session.events.slice(0, start.seq)
+  const seed = events.slice(0, start.seq)
   const characterName = readActiveSessionCharacter(seed)?.result.name
   const title = sourceTitle?.trim() || characterName?.trim() || '角色对话'
   return { seed, title: `${title} · 改写` }

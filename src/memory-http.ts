@@ -11,6 +11,7 @@ import {
 import { readAgentRpMemoryHistory } from './memory.ts'
 import { AGENT_RP_MEMORY_PATH, type AgentRpMemoryResponse } from './memory-protocol.ts'
 import { agentHasAgentRpRuntime, type AgentPresetGateway } from './agent-capability-preset.ts'
+import { sessionEvents } from './session-events.ts'
 
 interface AgentRegistryGateway {
   get(sessionId: SessionId): Agent | undefined
@@ -40,7 +41,7 @@ export function installAgentRpMemoryHttp(routeCtx: Context, hostCtx: Context, se
         const agent = (hostCtx.get('agents') as AgentRegistryGateway | undefined)?.get(SessionId(sourceSessionId))
         const presets = hostCtx.get('agentPresets') as AgentPresetGateway | undefined
         if (presets === undefined || !agentHasAgentRpRuntime(presets, agent)) throw new Error('角色会话当前不可用')
-        const history = readAgentRpMemoryHistory(agent.session.events)
+        const history = readAgentRpMemoryHistory(sessionEvents(agent.session))
         const value: AgentRpMemoryResponse = {
           format: 0,
           memories: history.active.map(memory => ({
@@ -48,9 +49,9 @@ export function installAgentRpMemoryHttp(routeCtx: Context, hostCtx: Context, se
             kind: memory.kind,
             subject: memory.subject,
             text: memory.text,
-            source: agent.session.events[memory.sourceEventSeq]?.type === 'command/run'
+            source: sessionEvents(agent.session)[memory.sourceEventSeq]?.type === 'command/run'
               ? 'user'
-              : agent.session.events[memory.sourceEventSeq]?.type === 'agent-rp/memory-seed' ? 'inherited' : 'character',
+              : sessionEvents(agent.session)[memory.sourceEventSeq]?.type === 'agent-rp/memory-seed' ? 'inherited' : 'character',
           })),
         }
         json(response, 200, value)

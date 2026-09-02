@@ -19,6 +19,7 @@ import {
   renderLegacyRoleplayStateActionGuidance,
   renderRoleplayStateActionGuidance,
 } from './roleplay-state-action.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Exact prepared input consumed by one model step in the settled turn. */
 export interface RoleplayTurnPlanReference {
@@ -407,7 +408,7 @@ function exactTurnEvents(
   turn: number,
   result: string,
 ): readonly SessionEvent[] {
-  const eventsBySeq = new Map(events.map(event => [event.seq, event]))
+  const eventsBySeq = new Map<number, SessionEvent>(events.map(event => [event.seq, event]))
   const starts = events.filter((event): event is SessionEvent<'turn/start'> =>
     event.type === 'turn/start' && event.data.turn === turn)
   const ends = events.filter((event): event is SessionEvent<'turn/end'> =>
@@ -448,7 +449,7 @@ export function compileRoleplayActReceipt(
   plans: readonly RoleplayTurnPlanReference[],
 ): NonNullable<RoleplayTurnSettlement['act']> {
   const bounded = exactTurnEvents(events, turn, result)
-  const eventsBySeq = new Map(events.map(event => [event.seq, event]))
+  const eventsBySeq = new Map<number, SessionEvent>(events.map(event => [event.seq, event]))
   const plannedSteps = new Set(plans.map(plan => plan.step))
   const byStep = new Map(plans.map(plan => [plan.step, {
     step: plan.step,
@@ -916,7 +917,7 @@ export function appendRoleplayTurnSettlement(
   session: Session,
   settlement: RoleplayTurnSettlement,
 ): SessionEvent<'agent-rp/turn-settlement'> {
-  const existing = session.events.find(event => event.type === 'agent-rp/turn-settlement'
+  const existing = sessionEvents(session).find(event => event.type === 'agent-rp/turn-settlement'
     && event.data.turn === settlement.turn)
   if (existing?.type === 'agent-rp/turn-settlement') return existing
   return appendAgentRpSessionEvent(session, 'agent-rp/turn-settlement', settlement)

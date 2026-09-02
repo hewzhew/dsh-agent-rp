@@ -5,6 +5,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isSurfaceEvent, type SessionEvent, type SurfaceEvent, type SurfaceIntent } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { TavernChatMessageInput, TavernChatMutationRequest, TavernHiddenMessage } from './tavern-helper.ts'
+import { sessionEvents } from './session-events.ts'
 
 type JsonRecord = Readonly<Record<string, JsonValue>>
 
@@ -40,7 +41,7 @@ function textContent(event: SurfaceEvent): string | undefined {
 
 function surfaceEntries(agent: Agent): readonly SurfaceEntry[] {
   return agent.session.surface.nodes.map(seq => {
-    const event = agent.session.events[seq]
+    const event = sessionEvents(agent.session)[seq]
     if (event === undefined || !isSurfaceEvent(event)) throw new Error('current Session surface contains an invalid node')
     return { kind: 'existing' as const, event }
   })
@@ -93,7 +94,7 @@ function appendEntry(agent: Agent, entry: SurfaceEntry, intent: SurfaceIntent): 
       source: { kind: 'user' },
     }), intent))
   }
-  const coordinates = assistantCoordinates(agent.session.events)
+  const coordinates = assistantCoordinates(sessionEvents(agent.session))
   return requireSurfaceEvent(agent.session.append('assistant/message', {
     ...coordinates,
     message: createAssistantMessage({
@@ -109,7 +110,7 @@ function rewriteSurface(agent: Agent, before: readonly SurfaceEntry[], after: re
     for (const entry of after) appendEntry(agent, entry, { surfaceOp: 'append' })
     return
   }
-  const sourceEventSeqs = before.map(entry => entry.kind === 'existing' ? entry.event.seq : -1).filter(seq => seq >= 0)
+  const sourceEventSeqs = before.flatMap(entry => entry.kind === 'existing' ? [entry.event.seq] : [])
   const start = sourceEventSeqs[0]
   const end = sourceEventSeqs.at(-1)
   if (start === undefined || end === undefined) throw new Error('当前角色会话没有可重写的聊天楼层')

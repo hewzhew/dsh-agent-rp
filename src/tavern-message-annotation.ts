@@ -1,6 +1,6 @@
 /** Replayable per-message compatibility fields owned by isolated Tavern Helper scripts. */
 
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { decodeGenerationCommandResult } from './generation-command-result.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
@@ -179,7 +179,7 @@ export function validateTavernMessageAnnotationState(state: TavernMessageAnnotat
 export function appendTavernMessageAnnotationRecords(
   session: Session,
   records: readonly TavernMessageAnnotationRecord[],
-): readonly number[] {
+): readonly SessionSeq[] {
   return records.map(record => appendAgentRpSessionEvent(
     session,
     'agent-rp/tavern-message-annotation',

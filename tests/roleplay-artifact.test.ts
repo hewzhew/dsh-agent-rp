@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId, type ImageAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -26,6 +26,7 @@ import {
   ROLEPLAY_ARTIFACT_PUBLISH_TOOL,
   ROLEPLAY_ARTIFACT_STAGE_TOOL,
 } from '../src/roleplay-artifact.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
 
@@ -79,13 +80,13 @@ function openSession(id: string, cwd?: string): { readonly session: Session; rea
   const sessionId = SessionId(id)
   const session = cwd === undefined
     ? Session.create(sessionId)
-    : Session.create(sessionId, [], { version: 0, id: sessionId, createdAt: 0, cwd })
+    : Session.create(sessionId, [], { version: 0, id: sessionId, createdAt: 0, cwd, isSeeded: false })
   session.append('turn/start', { turn: 1 })
   session.append('step/start', { turn: 1, step: 1 })
   return { session, agent: { session } as Agent }
 }
 
-function appendCall(session: Session, callId: string, name: string, args: unknown): number {
+function appendCall(session: Session, callId: string, name: string, args: unknown): SessionSeq {
   return session.append('tool/call', {
     turn: 1,
     step: 1,
@@ -98,7 +99,7 @@ function appendCall(session: Session, callId: string, name: string, args: unknow
 function appendResult(
   session: Session,
   callId: string,
-  callSeq: number,
+  callSeq: SessionSeq,
   meta: JsonValue | undefined,
   content: Parameters<typeof createToolResultMessage>[0]['content'] = [{ type: 'text', text: 'ok' }],
 ): number {
@@ -177,13 +178,13 @@ test('stages one explicit same-turn durable artifact and replays its provenance'
     caption: '雨落在钟楼外。',
   })
   const stageResultSeq = appendResult(session, 'stage-1', stageCallSeq, result.meta)
-  assert.deepEqual(readStagedRoleplayArtifacts(session.events, 1, stageResultSeq + 1), [record])
+  assert.deepEqual(readStagedRoleplayArtifacts(sessionEvents(session), 1, stageResultSeq + 1), [record])
 })
 
 test('keeps the narrative lane when an image tool runs before prose', () => {
   const toolOnly = openSession('artifact-followup-tool-only').session
   appendCall(toolOnly, 'image-before-prose', 'mcp__image__generate', { prompt: '雨夜钟楼' })
-  assert.equal(detectRoleplayArtifactFollowup(toolOnly.events, 'image-before-prose', {
+  assert.equal(detectRoleplayArtifactFollowup(sessionEvents(toolOnly), 'image-before-prose', {
     isError: false,
     content: [{ type: 'image', attachment: IMAGE }],
   }), undefined)
@@ -221,7 +222,7 @@ test('accepts Thetail publish_roleplay_image calls over legacy native image resu
     caption: '雨落在钟楼外。',
   })
   const publishResultSeq = appendResult(session, 'publish-1', publishCallSeq, result.meta)
-  assert.deepEqual(readStagedRoleplayArtifacts(session.events, 1, publishResultSeq + 1), [{
+  assert.deepEqual(readStagedRoleplayArtifacts(sessionEvents(session), 1, publishResultSeq + 1), [{
     format: 'agent-rp.staged-artifact',
     version: 0,
     artifact: { type: 'image', attachment: IMAGE },
@@ -260,7 +261,7 @@ test('replays early Thetail publication results that carried a native image bloc
     [{ type: 'text', text: 'published' }, { type: 'image', attachment: IMAGE }],
   )
 
-  assert.deepEqual(readStagedRoleplayArtifacts(session.events, 1, publishResultSeq + 1), [{
+  assert.deepEqual(readStagedRoleplayArtifacts(sessionEvents(session), 1, publishResultSeq + 1), [{
     format: 'agent-rp.staged-artifact',
     version: 0,
     artifact: { type: 'image', attachment: IMAGE },
@@ -311,7 +312,7 @@ test('publishes a real workspace image through the compatibility tool without ac
   assert.equal(meta?.artifacts[0]?.attachment.name, 'scene.png')
   assert.equal(meta?.artifacts[0]?.attachment.mediaType, 'image/png')
   const publishResultSeq = appendResult(session, 'publish-path', publishCallSeq, result.meta)
-  assert.equal(readStagedRoleplayArtifacts(session.events, 1, publishResultSeq + 1).length, 1)
+  assert.equal(readStagedRoleplayArtifacts(sessionEvents(session), 1, publishResultSeq + 1).length, 1)
 })
 
 test('rejects paths, old-turn ids, and unrecorded artifacts instead of guessing', async (context) => {

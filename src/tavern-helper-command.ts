@@ -1,6 +1,8 @@
 /** Host adapter for isolated Tavern Helper variable writes. */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import {
   roleplayPresentedState,
 } from './roleplay-turn-presentation-state.ts'
@@ -33,10 +35,11 @@ import {
   type TavernMessageAnnotationRecord,
 } from './tavern-message-annotation.ts'
 import { tavernScriptIdentity } from './tavern-script-identity.ts'
+import { sessionEvents } from './session-events.ts'
 
 function latestCausalPresentation(agent: Agent, replySeq: number): RoleplayTurnPresentation | undefined {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index]
+  for (let index = sessionEvents(agent.session).length - 1; index >= 0; index -= 1) {
+    const event = sessionEvents(agent.session)[index]
     if (event?.type !== 'agent-rp/turn-presentation') continue
     if (event.data.selectedReply?.sourceSeq === replySeq || event.data.selectedReply?.surfaceSeq === replySeq) {
       return event.data
@@ -47,7 +50,7 @@ function latestCausalPresentation(agent: Agent, replySeq: number): RoleplayTurnP
 
 function latestVisibleAssistantSeq(agent: Agent): number | undefined {
   for (const seq of [...agent.session.surface.nodes].reverse()) {
-    const event = agent.session.events.find(candidate => candidate.seq === seq)
+    const event = sessionEvents(agent.session).find(candidate => candidate.seq === seq)
     if (event?.type === 'assistant/message') return event.seq
   }
   return undefined
@@ -59,15 +62,15 @@ export function validateTavernMutationCause(agent: Agent, cause: TavernMutationC
   if (cause.sessionId !== String(agent.session.id)) {
     throw new Error('Tavern Helper mutation cause belongs to another Session')
   }
-  const reply = agent.session.events.find(event => event.seq === cause.replySeq)
+  const reply = sessionEvents(agent.session).find(event => event.seq === cause.replySeq)
   if (reply?.type !== 'assistant/message') {
     throw new Error('Tavern Helper mutation cause does not reference an assistant reply')
   }
 }
 
 /** Rebuild the active card and preset script namespaces around an optional prior snapshot. */
-export function prepareTavernHelperState(agent: Agent, previous = readTavernHelperState(agent.session.events)) {
-  const events = agent.session.events
+export function prepareTavernHelperState(agent: Agent, previous = readTavernHelperState(sessionEvents(agent.session))) {
+  const events = sessionEvents(agent.session)
   const active = readActiveSessionCharacter(events)
   if (active === undefined) throw new Error('this roleplay Session has no imported Character Card')
   const card = cardFromImportMeta(active.meta)
@@ -87,7 +90,7 @@ export function prepareTavernHelperState(agent: Agent, previous = readTavernHelp
 export function executeTavernHelperMutation(invocation: {
   readonly agent: Agent
   readonly rawInput: string
-}): { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number } {
+}): Extract<CommandResult, { readonly kind: 'success' }> {
   const request = parseTavernHelperMutationRequest(invocation.rawInput)
   validateTavernMutationCause(invocation.agent, request.cause)
   const presentation = request.cause === undefined
@@ -95,9 +98,9 @@ export function executeTavernHelperMutation(invocation: {
     : latestCausalPresentation(invocation.agent, request.cause.replySeq)
   const presentedTavern = roleplayPresentedState(presentation, TAVERN_HELPER_ROLEPLAY_STATE_ID)
   const previous = presentedTavern?.eventSeq === undefined
-    ? readTavernHelperState(invocation.agent.session.events)
+    ? readTavernHelperState(sessionEvents(invocation.agent.session))
     : readTavernHelperStateSnapshotAt(
-        invocation.agent.session.events,
+        sessionEvents(invocation.agent.session),
         presentedTavern.eventSeq,
       ).state
   const initialized = prepareTavernHelperState(invocation.agent, previous)
@@ -113,14 +116,14 @@ export function executeTavernHelperMutation(invocation: {
     const records: TavernMessageAnnotationRecord[] = request.messages.map(replacement => {
       const surfaceSeq = messageSeqs[replacement.message_id]
       if (surfaceSeq === undefined) throw new Error('Tavern message annotation references an unknown message_id')
-      const messageSeq = logicalTavernMessageSeq(invocation.agent.session.events, surfaceSeq)
-      const message = invocation.agent.session.events[messageSeq]
+      const messageSeq = logicalTavernMessageSeq(sessionEvents(invocation.agent.session), surfaceSeq)
+      const message = sessionEvents(invocation.agent.session)[messageSeq]
       if (message?.type !== 'user/message' && message?.type !== 'assistant/message') {
         throw new Error('Tavern message annotation does not reference a durable transcript message')
       }
       return { format: 0, messageSeq, owner: request.owner, value: replacement.value }
     })
-    const current = readTavernMessageAnnotations(invocation.agent.session.events)
+    const current = readTavernMessageAnnotations(sessionEvents(invocation.agent.session))
     validateTavernMessageAnnotationState(applyTavernMessageAnnotationRecords(current, records))
     const seqs = appendTavernMessageAnnotationRecords(invocation.agent.session, records)
     const sourceEventSeq = seqs.at(-1)
@@ -145,7 +148,7 @@ export function executeTavernHelperMutation(invocation: {
   }
   if (request.cause !== undefined) {
     const attached = appendTavernHelperStateAttachment(invocation.agent.session, next, request.cause, active)
-    return { kind: 'success', sourceEventSeq: attached.eventSeq }
+    return { kind: 'success', sourceEventSeq: SessionSeq(attached.eventSeq) }
   }
   return { kind: 'success', text: encodeTavernHelperState(next) }
 }

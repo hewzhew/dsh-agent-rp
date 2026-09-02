@@ -10,6 +10,7 @@ import {
   encodeWorldInfoLibraryImport,
   type WorldInfoLibraryLaunchRequest,
 } from './world-info-library-protocol.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Validate a private browser-owned World Info import request. */
 export function parseWorldInfoLibraryLaunchRequest(source: string): WorldInfoLibraryLaunchRequest {
@@ -35,7 +36,7 @@ export function executeWorldInfoLibraryCommand(
   invocation: { readonly commandId: CommandId; readonly agent: Agent; readonly rawInput: string },
 ): { readonly kind: 'success'; readonly text: string } {
   const request = parseWorldInfoLibraryLaunchRequest(invocation.rawInput)
-  const source = invocation.agent.session.events.at(-1)
+  const source = sessionEvents(invocation.agent.session).at(-1)
   if (source?.type !== 'command/run' || source.data.name !== 'rp-world-info-import'
     || String(source.data.commandId) !== String(invocation.commandId)) {
     throw new Error('世界书导入命令不是当前 Session 事件')

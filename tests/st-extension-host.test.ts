@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import {
   installStExtensionHost,
   type StExtensionSessionBinding,
@@ -67,6 +67,7 @@ class FakeSessionSource {
     sessionId: SessionId('session-a'),
     projection: agentRpProjectionDefinition.wire.view(agentRpProjectionDefinition.init(
       Session.create(SessionId('session-a')).header,
+      SessionLogOffset(0),
     )),
   }
   readonly listeners = new Set<() => void>()

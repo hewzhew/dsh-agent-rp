@@ -24,6 +24,7 @@ import {
   storyWebFetchAvailable,
   storyWebSearchAvailable,
 } from '../src/story-turn-pipeline.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const aliceId = 'character-00000000-0000-4000-8000-000000000001'
 const bobId = 'character-00000000-0000-4000-8000-000000000002'
@@ -463,10 +464,10 @@ test('omits character outputs when their isolated character decision is unavaila
     messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }] })],
     signal: new AbortController().signal,
   })
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
 
   assert.deepEqual(stageRequests.filter(request => request.stage === 'character').map(request => request.subjectId), [aliceId, bobId, bobId])
-  const characterFailures = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+  const characterFailures = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-result'
     && event.data.result.kind === 'failure'
     && stageRequests.some(request => request.requestId === event.data.requestId && request.stage === 'character')
     ? [event.data.result]
@@ -486,7 +487,7 @@ test('omits character outputs when their isolated character decision is unavaila
       },
     },
   ])
-  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-result'
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-result'
     && event.data.result.kind === 'success'
     && stageRequests.some(request => request.requestId === event.data.requestId
       && request.stage === 'character' && request.subjectId === bobId)), true)
@@ -586,12 +587,12 @@ test('delegates isolated character decisions to durable DSH Subagent sessions', 
   assert.match(prompts[1]!, /柏舟藏起了车票/u)
   assert.doesNotMatch(prompts[1]!, /阿梨知道徽章/u)
   assert.deepEqual(disposed, ['story-child-1', 'story-child-2'])
-  const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   assert.equal(characterRequests.length, 2)
   assert.equal(characterRequests.every(request => request.execution?.kind === 'subagent'
     && request.execution.provider === 'spawn'), true)
-  const characterResults = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+  const characterResults = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-result'
     && event.data.stage === 'character' ? [event.data] : [])
   assert.deepEqual(characterResults.map(result => result.childSessionId), ['story-child-1', 'story-child-2'])
   assert.equal(characterResults.every(result => result.result.kind === 'success'), true)
@@ -657,7 +658,7 @@ test('records prose-only character Subagent replies as invalid instead of silent
 
   assert.equal(starts.length, 4)
   assert.deepEqual(disposed, starts)
-  const characterResults = session.events.flatMap(event => event.type === 'agent-rp/story-stage-result'
+  const characterResults = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-result'
     && event.data.stage === 'character' ? [event.data.result] : [])
   assert.equal(characterResults.length, 4)
   assert.equal(characterResults.every(stageResult => stageResult.kind === 'failure'
@@ -984,7 +985,7 @@ test('runs logged story stages while keeping each character request privately sc
   }
 
   const result = await runStoryTurnPipeline(input)
-  const briefEvent = session.events.findLast(event => event.type === 'agent-rp/story-turn-brief')
+  const briefEvent = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
 
   assert.equal(calls, 16)
   assert.equal(voiceReviewCalls, 3)
@@ -993,7 +994,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 0)
   assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 11)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
-  const voiceStageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const voiceStageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice' ? [event.data] : [])
   assert.equal(voiceStageRequests.filter(request => request.subjectId?.includes('draft:'))
     .every(request => request.dispatch.reasoningEffort === 'low'), true)
@@ -1206,25 +1207,25 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(result.modelContext, /阿梨把徽章转向窗光/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
-  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-turn-start'
+  assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-start'
     ? [{ workspaceId: event.data.workspaceId, turn: event.data.turn, step: event.data.step }]
     : []), [{ workspaceId: currentWorkspace.id, turn: 1, step: 1 }])
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-request').length, 16)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-stage-result').length, 16)
-  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-turn-brief'
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-request').length, 16)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-result').length, 16)
+  assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-brief'
     ? [event.data.turn]
     : []), [0, 1])
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-fetch-request').length, 1)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-web-fetch-result').length, 1)
-  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-web-search-request').length, 1)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-web-search-result').length, 1)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-web-fetch-request').length, 1)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-web-fetch-result').length, 1)
+  assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
-  const stageRequestEvents = new Map(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
+  const stageRequestEvents = new Map<number, import('@deepseek-ai/dsh-session').SessionEvent<'agent-rp/story-stage-request'>['data']>(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [[event.seq, event.data] as const]
     : []))
-  assert.equal(session.events.flatMap(event => event.type === 'agent-rp/story-stage-result' ? [event.data] : [])
+  assert.equal(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-result' ? [event.data] : [])
     .every(stageResult => {
       const request = stageRequestEvents.get(stageResult.requestSeq)
       return request !== undefined && stageResult.sessionId === request.sessionId
@@ -1238,12 +1239,12 @@ test('runs logged story stages while keeping each character request privately sc
     && request.subjectId?.startsWith(`${characterSectionId}:`)), false)
   assert.ok(stageRequests.findLastIndex(request => request.stage === 'history')
     < stageRequests.findIndex(request => request.stage === 'character'))
-  assert.equal(session.events.every(event => !event.type.startsWith('agent-rp/story-')
+  assert.equal(sessionEvents(session).every(event => !event.type.startsWith('agent-rp/story-')
     || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
   assert.equal(calls, 16)
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-start').length, 1)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-turn-start').length, 1)
 })
 
 test('stops malformed research output and falls back to exact local evidence', async () => {
@@ -1322,7 +1323,7 @@ test('stops malformed research output and falls back to exact local evidence', a
   assert.equal(researchCalls, 1)
   assert.equal(reasoningEfforts.every(effort => effort === undefined), true)
   assert.match(directorBody, /\[local:source-[0-9a-f-]+:1\].*鸦青印记只在列车终章显现/u)
-  assert.equal(session.events.some(event => event.type === 'agent-rp/story-web-search-request'), false)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-web-search-request'), false)
 })
 
 test('materializes continuity from the actually visible reply instead of the prepared draft', async (context) => {
@@ -1655,8 +1656,8 @@ test('materializes continuity from the actually visible reply instead of the pre
     snippet: '原著正文：雨水会让旧徽章显出刻痕，并露出旧站编号。',
   }])
   assert.equal(saved.researchInbox[0]?.query, '雨停之后徽章会怎样反光')
-  assert.equal(session.events.filter(event => event.type === 'agent-rp/story-turn-materialized').length, 1)
-  assert.equal(session.events.find(event => event.type === 'agent-rp/story-stage-request')?.data.stage, 'continuity')
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-turn-materialized').length, 1)
+  assert.equal(sessionEvents(session).find(event => event.type === 'agent-rp/story-stage-request')?.data.stage, 'continuity')
 
   assert.deepEqual(await materializeStoryTurn({
     ctx: fake,

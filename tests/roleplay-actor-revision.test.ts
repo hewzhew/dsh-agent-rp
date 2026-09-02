@@ -6,7 +6,7 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
@@ -27,6 +27,7 @@ import {
   type RoleplayActorRevisionProvider,
   type RoleplayActorRevisionSnapshot,
 } from '../src/roleplay-actor-revision.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const ACTOR = { kind: 'actor' as const, id: 'actor:fixture' }
 
@@ -129,7 +130,7 @@ function openSession(id: string): { readonly session: Session; readonly agent: A
   return { session, agent: { session } as Agent }
 }
 
-function appendCall(session: Session, callId: string, name: string, args: unknown): number {
+function appendCall(session: Session, callId: string, name: string, args: unknown): SessionSeq {
   return session.append('tool/call', {
     turn: 1,
     step: 1,
@@ -142,7 +143,7 @@ function appendCall(session: Session, callId: string, name: string, args: unknow
 function appendResult(
   session: Session,
   callId: string,
-  callSeq: number,
+  callSeq: SessionSeq,
   result: Awaited<ReturnType<ToolRegistry['execute']>>,
 ): void {
   session.append('tool/result', {
@@ -178,7 +179,7 @@ test('reads the exact editable actor revision without mutating the provider', as
     definition: BASE_DEFINITION,
   })
   assert.equal(provider.reviseCount(), 0)
-  assert.equal(session.events.some(event => event.type === 'approval/asked'), false)
+  assert.equal(sessionEvents(session).some(event => event.type === 'approval/asked'), false)
 })
 
 test('maps source-neutral actor fields onto a reversible CharacterLibrary overlay', (context) => {
@@ -241,14 +242,14 @@ test('native rejection leaves the actor untouched and replays as rejected', asyn
   assert.equal(result.isError, true)
   assert.equal(provider.reviseCount(), 0)
   assert.deepEqual(provider.current().definition, BASE_DEFINITION)
-  const asked = session.events.find(event => event.type === 'approval/asked')
+  const asked = sessionEvents(session).find(event => event.type === 'approval/asked')
   assert.equal(asked?.type, 'approval/asked')
   if (asked?.type === 'approval/asked') {
     assert.equal(asked.data.toolName, ROLEPLAY_ACTOR_REVISION_TOOL)
     assert.equal(String(asked.data.callId), callId)
     assert.match(asked.data.reason ?? '', /角色描述、性格/u)
   }
-  assert.deepEqual(readRoleplayActorRevisionAttempts(session.events).map(value => value.settlement), ['rejected'])
+  assert.deepEqual(readRoleplayActorRevisionAttempts(sessionEvents(session)).map(value => value.settlement), ['rejected'])
 })
 
 test('one-shot approval applies the exact diff and is reconstructable from the Session Log', async (context) => {
@@ -270,7 +271,7 @@ test('one-shot approval applies the exact diff and is reconstructable from the S
   assert.equal(provider.current().revision, '2')
   assert.equal(provider.current().definition.description, CHANGES.description.after)
   assert.equal(provider.current().definition.personality, CHANGES.personality.after)
-  const attempts = readRoleplayActorRevisionAttempts(session.events)
+  const attempts = readRoleplayActorRevisionAttempts(sessionEvents(session))
   assert.equal(attempts.length, 1)
   assert.deepEqual(attempts[0], {
     callId,
@@ -287,7 +288,10 @@ test('one-shot approval applies the exact diff and is reconstructable from the S
     },
   })
   assert.deepEqual(
-    readRoleplayActorRevisionAttempts(Session.create(SessionId('actor-revision-replay'), session.events).events),
+    readRoleplayActorRevisionAttempts(sessionEvents(Session.create(
+      SessionId('actor-revision-replay'),
+      sessionEvents(session),
+    ))),
     attempts,
   )
 })
@@ -315,5 +319,5 @@ test('a concurrent local revision after approval was shown settles as conflict w
   assert.equal(provider.reviseCount(), 0)
   assert.equal(provider.current().definition.scenario, '已经由另一处改为晴天。')
   assert.equal(provider.current().definition.description, BASE_DEFINITION.description)
-  assert.deepEqual(readRoleplayActorRevisionAttempts(session.events).map(value => value.settlement), ['conflict'])
+  assert.deepEqual(readRoleplayActorRevisionAttempts(sessionEvents(session)).map(value => value.settlement), ['conflict'])
 })

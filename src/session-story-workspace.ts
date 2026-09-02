@@ -2,10 +2,11 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** User-authored selection event applied before later story turns. */
 export interface SessionStoryWorkspaceSelectionRecord {
@@ -95,13 +96,13 @@ export function createStoryWorkspaceSessionSeed(
     seed: [
       {
         type: 'agent-rp/story-workspace-selection',
-        seq: 0,
+        seq: SessionSeq(0),
         time,
         ignorable: true,
         data: { format: 0, workspaceId: workspace.id, source: 'launch' },
       },
-      { type: 'turn/start', seq: 1, time, data: { turn: 1 } },
-      { type: 'turn/end', seq: 2, time, data: { turn: 1, reason: { kind: 'completed' } } },
+      { type: 'turn/start', seq: SessionSeq(1), time, data: { turn: 1 } },
+      { type: 'turn/end', seq: SessionSeq(2), time, data: { turn: 1, reason: { kind: 'completed' } } },
     ],
   }
 }
@@ -114,10 +115,10 @@ export function executeStoryWorkspaceCommand(
     readonly agent: Agent
     readonly rawInput: string
   },
-): { readonly kind: 'success'; readonly sourceEventSeq: number } {
+): { readonly kind: 'success'; readonly sourceEventSeq: SessionSeq } {
   const request = parseRequest(invocation.rawInput)
   if (request.workspaceId !== null) assertStoryWorkspaceOutputReady(store.get(request.workspaceId))
-  const source = invocation.agent.session.events.findLast(event => event.type === 'command/run'
+  const source = sessionEvents(invocation.agent.session).findLast(event => event.type === 'command/run'
     && String(event.data.commandId) === String(invocation.commandId))
   if (source?.type !== 'command/run' || source.data.name !== 'rp-story-workspace'
     || source.data.source.kind !== 'user') {

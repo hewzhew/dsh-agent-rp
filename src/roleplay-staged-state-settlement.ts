@@ -35,6 +35,7 @@ import type {
   RoleplayWorkerModelSelection,
 } from './workspace-settings.ts'
 import { stringifySillyTavernPromptJson } from './sillytavern-identity-macro.ts'
+import { sessionEvents } from './session-events.ts'
 
 interface RoleplayStagedStateRequestBase {
   readonly format: 0
@@ -290,10 +291,10 @@ function settlementEvidence(
     stringifySillyTavernPromptJson(current, identity),
     '</current_state>',
     '<player_input>',
-    playerInputText(agent.session.events, planEvent),
+    playerInputText(sessionEvents(agent.session), planEvent),
     '</player_input>',
     '<roleplay_reply>',
-    visibleReplyText(agent.session.events, turn, step, planEvent.seq, surfaceThroughEventSeq),
+    visibleReplyText(sessionEvents(agent.session), turn, step, planEvent.seq, surfaceThroughEventSeq),
     '</roleplay_reply>',
   ].join('\n')
 }
@@ -557,7 +558,7 @@ async function dispatchStateSettlement(
     })
     return { outcome: 'success', requestEvent, resultEvent, text, operations }
   } catch (error: unknown) {
-    let resultEvent = input.agent.session.events.find(
+    let resultEvent = sessionEvents(input.agent.session).find(
       (event): event is SessionEvent<'agent-rp/staged-state-result'> =>
         event.type === 'agent-rp/staged-state-result' && event.data.requestSeq === requestEvent.seq,
     )
@@ -610,9 +611,9 @@ export async function runRoleplayStagedStateSettlement(input: {
   if (target === undefined) return { outcome: 'skipped' }
   const state = input.plan.plan.stateReads.find(read => read.id === target.stateId)
   if (state?.value === undefined) return { outcome: 'skipped' }
-  const planEvent = matchingPlanEvent(input.agent.session.events, input.turn, input.plan)
-  const through = stepEnd(input.agent.session.events, input.turn, input.plan.step)
-  if (terminalForCoverage(input.agent.session.events, input.turn, through.seq)) return { outcome: 'skipped' }
+  const planEvent = matchingPlanEvent(sessionEvents(input.agent.session), input.turn, input.plan)
+  const through = stepEnd(sessionEvents(input.agent.session), input.turn, input.plan.step)
+  if (terminalForCoverage(sessionEvents(input.agent.session), input.turn, through.seq)) return { outcome: 'skipped' }
   const evidence = settlementEvidence(
     input.agent,
     input.turn,

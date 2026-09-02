@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { ToolCallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import {
@@ -11,6 +11,7 @@ import {
   readActiveSessionCharacter,
   type CharacterImportMeta,
 } from '../src/import/session-character.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const raw = {
   spec: 'chara_card_v2',
@@ -152,7 +153,7 @@ test('replays an imported character and greeting from native tool metadata', () 
   const session = Session.create(SessionId('character-import'))
   appendImport(session, 'import-1', 1)
 
-  const active = readActiveSessionCharacter(session.events)!
+  const active = readActiveSessionCharacter(sessionEvents(session))!
   assert.equal(active.result.selectedGreeting, '今天来得很早。')
   assert.equal(cardFromImportMeta(active.meta).name, '白露')
   assert.deepEqual(cardFromImportMeta(active.meta).raw, raw)
@@ -187,7 +188,7 @@ test('retains the imported user identity needed to resolve greeting macros', () 
 test('rejects import metadata that no longer cites its source image', () => {
   const session = Session.create(SessionId('character-import-tamper'))
   appendImport(session, 'import-1')
-  const seed = structuredClone(session.events) as unknown as Array<(typeof session.events)[number]>
+  const seed = structuredClone(sessionEvents(session)) as SessionEvent[]
   const result = seed.find(event => event.type === 'tool/result')!
   if (result.type !== 'tool/result' || typeof result.data.meta !== 'object' || result.data.meta === null || Array.isArray(result.data.meta)) {
     assert.fail('fixture did not produce import metadata')
@@ -196,21 +197,21 @@ test('rejects import metadata that no longer cites its source image', () => {
   const summary = meta.result as Record<string, JsonValue>
   summary.sourceAttachmentId = 'sha256:other'
 
-  assert.throws(() => readActiveSessionCharacter(Session.create(SessionId('tampered'), seed).events), /source attachment is absent/u)
+  assert.throws(() => readActiveSessionCharacter(sessionEvents(Session.create(SessionId('tampered'), seed))), /source attachment is absent/u)
 })
 
 test('replays a card whose image was hidden from a text-only model request', () => {
   const session = Session.create(SessionId('character-import-hidden-image'))
   appendHiddenImageImport(session, 'import-hidden')
 
-  assert.equal(readActiveSessionCharacter(session.events)?.result.sourceAttachmentId, 'sha256:hidden-fixture')
+  assert.equal(readActiveSessionCharacter(sessionEvents(session))?.result.sourceAttachmentId, 'sha256:hidden-fixture')
 })
 
 test('replays a standalone JSON card with its lossless raw data', () => {
   const session = Session.create(SessionId('character-import-json'))
   appendJsonImport(session, 'import-json')
 
-  const active = readActiveSessionCharacter(session.events)!
+  const active = readActiveSessionCharacter(sessionEvents(session))!
   assert.equal(active.result.transport, 'json')
   assert.equal(active.result.metadataKeyword, undefined)
   assert.deepEqual(cardFromImportMeta(active.meta).raw, raw)
@@ -219,19 +220,19 @@ test('replays a standalone JSON card with its lossless raw data', () => {
 test('rejects JSON replay after its durable source is renamed away from JSON', () => {
   const session = Session.create(SessionId('character-import-json-tamper'))
   appendJsonImport(session, 'import-json')
-  const seed = structuredClone(session.events) as unknown as Array<(typeof session.events)[number]>
+  const seed = structuredClone(sessionEvents(session)) as SessionEvent[]
   const source = seed.find(event => event.type === 'user/message')!
   if (source.type !== 'user/message') assert.fail('fixture did not produce a source message')
   const sourceMeta = source.data.source as unknown as { attachments: Array<{ name: string }> }
   sourceMeta.attachments[0]!.name = '白露.txt'
 
-  assert.throws(() => readActiveSessionCharacter(Session.create(SessionId('tampered-json'), seed).events), /source attachment is absent/u)
+  assert.throws(() => readActiveSessionCharacter(sessionEvents(Session.create(SessionId('tampered-json'), seed))), /source attachment is absent/u)
 })
 
 test('rejects a JSON result bound to a PNG source', () => {
   const session = Session.create(SessionId('character-import-transport-mismatch'))
   appendHiddenImageImport(session, 'import-hidden')
-  const seed = structuredClone(session.events) as unknown as Array<(typeof session.events)[number]>
+  const seed = structuredClone(sessionEvents(session)) as SessionEvent[]
   const result = seed.find(event => event.type === 'tool/result')!
   if (result.type !== 'tool/result' || typeof result.data.meta !== 'object' || result.data.meta === null || Array.isArray(result.data.meta)) {
     assert.fail('fixture did not produce import metadata')
@@ -241,5 +242,5 @@ test('rejects a JSON result bound to a PNG source', () => {
   summary.transport = 'json'
   delete summary.metadataKeyword
 
-  assert.throws(() => readActiveSessionCharacter(Session.create(SessionId('mismatched'), seed).events), /JSON transport does not match/u)
+  assert.throws(() => readActiveSessionCharacter(sessionEvents(Session.create(SessionId('mismatched'), seed))), /JSON transport does not match/u)
 })

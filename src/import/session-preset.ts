@@ -1,6 +1,6 @@
 /** Durable SillyTavern preset replay from native tool events. */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { FileAttachmentRef } from './session-character.ts'
 import type { ImportedSillyTavernPreset } from './sillytavern-preset.ts'
@@ -174,7 +174,7 @@ export function createPresetSessionSeed(
   const { preset: _value, ...result } = prepared
   return [...structuredClone(events), {
     type: 'agent-rp/sillytavern-preset-seed',
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: Date.now(),
     ignorable: true,
     data: {

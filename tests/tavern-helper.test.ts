@@ -3,7 +3,7 @@ import test from 'node:test'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { AGENT_RP_CAPABILITIES } from '../src/extension-capability.ts'
 import {
@@ -44,11 +44,13 @@ import { readTavernMessageAnnotations } from '../src/tavern-message-annotation.t
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
 import { inspectLorebook } from '../src/import/lorebook.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function captureAgentRpEvents(session: Session): SessionEvent[] {
   const events: SessionEvent[] = []
-  const appendIgnorable = session.appendIgnorable.bind(session) as (...args: unknown[]) => SessionEvent
-  Object.defineProperty(session, 'appendIgnorable', {
+  const writer = session as Session & { appendIgnorable(...args: unknown[]): SessionEvent }
+  const appendIgnorable = writer.appendIgnorable.bind(writer)
+  Object.defineProperty(writer, 'appendIgnorable', {
     configurable: true,
     value(...args: unknown[]) {
       const event = appendIgnorable(...args)
@@ -94,8 +96,8 @@ test('projects model reasoning without exposing it as visible transcript text', 
       ],
     }),
   }, { surfaceOp: 'append' })
-  let state = agentRpProjectionDefinition.init(session.header)
-  for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
+  let state = agentRpProjectionDefinition.init(session.header, session.inheritedEventCount)
+  for (const event of sessionEvents(session)) state = agentRpProjectionDefinition.apply(state, event)
 
   assert.deepEqual(state.surface, [{
     seq: 0,
@@ -490,7 +492,10 @@ test('summarizes successful, failed, and pending auxiliary generations without c
   const summary = summarizeTavernAuxiliaryGenerations(events)
   assert.deepEqual(summary, { requests: 3, succeeded: 1, failed: 1, pending: 1, malformed: 0 })
   assert.doesNotMatch(JSON.stringify(summary), /private|prompt|result/u)
-  let state = agentRpProjectionDefinition.init(Session.create(SessionId('auxiliary-projection')).header)
+  let state = agentRpProjectionDefinition.init(
+    Session.create(SessionId('auxiliary-projection')).header,
+    SessionLogOffset(0),
+  )
   for (const event of events) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(state).auxiliaryGenerations, summary)
 })
@@ -617,11 +622,11 @@ test('keeps inactive causal command attachments replayable without selecting the
     commandId, name: 'rp-tavern-state', args: '{}', source: { kind: 'user' },
   })
   session.append('command/done', { commandId, kind: 'success', text: inactiveText })
-  assert.equal(readTavernHelperStateSnapshot(session.events), undefined)
-  assert.deepEqual(readTavernHelperStateSnapshotAt(session.events, 1), { eventSeq: 1, state })
+  assert.equal(readTavernHelperStateSnapshot(sessionEvents(session)), undefined)
+  assert.deepEqual(readTavernHelperStateSnapshotAt(sessionEvents(session), 1), { eventSeq: 1, state })
 
-  let projected = agentRpProjectionDefinition.init(session.header)
-  for (const event of session.events) projected = agentRpProjectionDefinition.apply(projected, event)
+  let projected = agentRpProjectionDefinition.init(session.header, session.inheritedEventCount)
+  for (const event of sessionEvents(session)) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.equal(projected.tavern, undefined)
 })
 
@@ -655,13 +660,13 @@ test('persists a causal script mutation through command/done on the published Ho
   const result = executeTavernHelperMutation({ agent: { session } as Agent, rawInput })
   assert.equal(typeof result.sourceEventSeq, 'number')
   assert.equal(result.text, undefined)
-  assert.equal(session.events[result.sourceEventSeq!]?.type, 'agent-rp/tavern-state-attachment')
+  assert.equal(sessionEvents(session)[result.sourceEventSeq!]?.type, 'agent-rp/tavern-state-attachment')
   session.append('command/done', { commandId, ...result })
 
-  assert.equal(session.events.some(event => event.type === 'agent-rp/tavern-state-attachment'), true)
-  assert.deepEqual(readTavernHelperStateSnapshot(session.events)?.state.scopes.chat, { mood: 'calm' })
-  const reopened = Session.create(SessionId('published-tavern-command-replay'), session.events)
-  assert.deepEqual(readTavernHelperStateSnapshot(reopened.events), readTavernHelperStateSnapshot(session.events))
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/tavern-state-attachment'), true)
+  assert.deepEqual(readTavernHelperStateSnapshot(sessionEvents(session))?.state.scopes.chat, { mood: 'calm' })
+  const reopened = Session.create(SessionId('published-tavern-command-replay'), sessionEvents(session))
+  assert.deepEqual(readTavernHelperStateSnapshot(sessionEvents(reopened)), readTavernHelperStateSnapshot(sessionEvents(session)))
 })
 
 test('keeps script-owned message annotations across reloads and reply-version selection', () => {
@@ -721,13 +726,13 @@ test('keeps script-owned message annotations across reloads and reply-version se
   })
   assert.equal(typeof persisted.sourceEventSeq, 'number')
   assert.equal(persisted.text, undefined)
-  assert.equal(session.events[persisted.sourceEventSeq!]?.type, 'agent-rp/tavern-message-annotation')
+  assert.equal(sessionEvents(session)[persisted.sourceEventSeq!]?.type, 'agent-rp/tavern-message-annotation')
   session.append('command/done', { commandId: annotationCommand, ...persisted })
-  assert.deepEqual(Object.values(readTavernMessageAnnotations(session.events)).map(record => record.value), [annotation])
+  assert.deepEqual(Object.values(readTavernMessageAnnotations(sessionEvents(session))).map(record => record.value), [annotation])
 
   const project = (source: Session) => {
-    let state = agentRpProjectionDefinition.init(source.header)
-    for (const event of source.events) state = agentRpProjectionDefinition.apply(state, event)
+    let state = agentRpProjectionDefinition.init(source.header, source.inheritedEventCount)
+    for (const event of sessionEvents(source)) state = agentRpProjectionDefinition.apply(state, event)
     return agentRpProjectionDefinition.wire.view(state)
   }
   const owner = tavernScriptIdentity('character', 'database')
@@ -792,7 +797,7 @@ test('keeps script-owned message annotations across reloads and reply-version se
       surfaceSeq: selectedOriginal.seq,
     }),
   })
-  const reopened = Session.create(SessionId('tavern-message-annotation-reopened'), session.events)
+  const reopened = Session.create(SessionId('tavern-message-annotation-reopened'), sessionEvents(session))
   assert.deepEqual(project(reopened).tavern?.messages.at(-1)?.annotations?.[owner], annotation)
 })
 

@@ -9,6 +9,6 @@ if (typeof session.appendIgnorable !== 'function') {
 const written = session.appendIgnorable(eventType, { format: 0 })
 if (written.ignorable !== true) throw new Error('appendIgnorable() did not mark the stored envelope')
 if (KNOWN_SESSION_EVENT_TYPES.has(eventType)) throw new Error('Agent RP probe unexpectedly belongs to the Host vocabulary')
-Session.create(session.id, structuredClone(session.events))
+Session.create(session.id, structuredClone(session.snapshotEvents()))
 
 process.stdout.write('ready')

@@ -14,6 +14,7 @@ import {
   worldInfoTokenBudget,
   type SessionLorebookSource,
 } from '../src/world-info-configuration-core.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function source(): SessionLorebookSource {
   const worldInfo = parseWorldInfoJson(JSON.stringify({ name: '海城', entries: {
@@ -53,7 +54,7 @@ test('persists a complete editable World Info overlay without mutating imported 
     commandId: CommandId('world-info-1'), kind: 'success', text: encodeWorldInfoConfiguration(removed),
   })
 
-  const restored = readWorldInfoConfiguration(session.events)
+  const restored = readWorldInfoConfiguration(sessionEvents(session))
   const configured = configuredLorebook(book, restored)
   assert.equal(configured.lorebook.entries[0]?.name, '旧钟楼')
   assert.equal(configured.lorebook.entries[0]?.content, '钟楼只在雨夜停摆。')
@@ -118,7 +119,7 @@ test('normalizes empty overrides already persisted by an earlier build', () => {
     }),
   })
 
-  assert.deepEqual(readWorldInfoConfiguration(session.events), { format: 0, revision: 4, overrides: [] })
+  assert.deepEqual(readWorldInfoConfiguration(sessionEvents(session)), { format: 0, revision: 4, overrides: [] })
 })
 
 test('persists a bounded Session-wide token budget without resetting entry overlays', () => {

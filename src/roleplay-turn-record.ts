@@ -22,6 +22,7 @@ import {
   type RoleplayTurnSettlement,
 } from './roleplay-turn-settlement.ts'
 import { readToolArtifactPresentationMeta } from './roleplay-artifact.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Durable pre-dispatch reference associated with its exact Session event when available. */
 export interface RoleplayTurnPlanEvidence {
@@ -285,17 +286,18 @@ function selectedTurn(turns: ReadonlySet<number> | undefined, turn: number): boo
 }
 
 function readSelectedRoleplayTurnRecords(
-  session: Pick<Session, 'id' | 'events'>,
+  session: Pick<Session, 'id' | 'snapshotEvents'>,
   selectedTurns?: ReadonlySet<number>,
 ): readonly RoleplayTurnRecord[] {
   const sessionId = String(session.id)
-  const eventsBySeq = eventMap(session.events)
+  const events = sessionEvents(session)
+  const eventsBySeq = eventMap(events)
   const starts = new Map<number, SessionEvent<'turn/start'>[]>()
   const ends = new Map<number, SessionEvent<'turn/end'>[]>()
   const plans = new Map<number, TurnPlanEvent[]>()
   const settlements = new Map<number, TurnSettlementEvent[]>()
   const presentations: TurnPresentationEvent[] = []
-  for (const event of session.events) {
+  for (const event of events) {
     if (event.type === 'turn/start' && selectedTurn(selectedTurns, event.data.turn)) {
       appendGrouped(starts, event.data.turn, event)
     } else if (event.type === 'turn/end' && selectedTurn(selectedTurns, event.data.turn)) {
@@ -359,8 +361,8 @@ function readSelectedRoleplayTurnRecords(
       eventsBySeq,
     })
     const actEvents = start === undefined || end === undefined
-      ? session.events
-      : session.events.slice(start.seq, end.seq + 1)
+      ? events
+      : events.slice(start.seq, end.seq + 1)
     const act = settlement === undefined ? undefined : compileRoleplayActReceipt(
       actEvents,
       turn,
@@ -441,14 +443,14 @@ function readSelectedRoleplayTurnRecords(
 
 /** Derive every Roleplay turn from the canonical Session log and validate their causal joins. */
 export function readRoleplayTurnRecords(
-  session: Pick<Session, 'id' | 'events'>,
+  session: Pick<Session, 'id' | 'snapshotEvents'>,
 ): readonly RoleplayTurnRecord[] {
   return readSelectedRoleplayTurnRecords(session)
 }
 
 /** Derive one requested Roleplay turn without validating unrelated historical turns. */
 export function readRoleplayTurnRecord(
-  session: Pick<Session, 'id' | 'events'>,
+  session: Pick<Session, 'id' | 'snapshotEvents'>,
   turn: number,
 ): RoleplayTurnRecord | undefined {
   if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('Roleplay turn must be a positive integer')
@@ -457,7 +459,7 @@ export function readRoleplayTurnRecord(
 
 /** Latest turn carrying any durable Roleplay phase evidence. */
 export function readLatestRoleplayTurnRecord(
-  session: Pick<Session, 'id' | 'events'>,
+  session: Pick<Session, 'id' | 'snapshotEvents'>,
 ): RoleplayTurnRecord | undefined {
   return readRoleplayTurnRecords(session).at(-1)
 }

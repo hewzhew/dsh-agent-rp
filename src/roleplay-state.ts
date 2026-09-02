@@ -6,6 +6,7 @@ import {
 } from '@deepseek-ai/dsh-session'
 import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Native lifecycle module that owns all source-neutral Roleplay state namespaces. */
 export const ROLEPLAY_STATE_MODULE_ID = 'roleplay:state'
@@ -255,7 +256,7 @@ export function appendRoleplayState(
   const id = identifier(input.id, 'state id', STATE_ID_PATTERN)
   const expectedRevision = revision(input.expectedRevision, true)
   const writerModuleId = identifier(input.writerModuleId, 'state writer module id', MODULE_ID_PATTERN)
-  const current = readRoleplayStates(session.events).find(state => state.id === id)
+  const current = readRoleplayStates(sessionEvents(session)).find(state => state.id === id)
   const currentRevision = current?.revision ?? 0
   if (expectedRevision !== currentRevision) {
     throw new Error(
@@ -284,7 +285,7 @@ export function prepareUserRoleplayState(
   request: RoleplayStateCommandRequest,
   sourceEventSeq: number,
 ): RoleplayStateRecord {
-  const source = session.events[sourceEventSeq]
+  const source = sessionEvents(session)[sourceEventSeq]
   if (source?.type !== 'command/run' || source.data.name !== 'rp-state' || typeof source.data.args !== 'string') {
     throw new Error('状态操作命令不是当前 Session 事件')
   }
@@ -293,7 +294,7 @@ export function prepareUserRoleplayState(
     || JSON.stringify(sourceRequest.value) !== JSON.stringify(request.value)) {
     throw new Error('状态操作请求与当前 Session 命令不一致')
   }
-  const current = readRoleplayStates(session.events).find(state => state.id === request.id)
+  const current = readRoleplayStates(sessionEvents(session)).find(state => state.id === request.id)
   const currentRevision = current?.revision ?? 0
   if (request.expectedRevision !== currentRevision) {
     throw new Error(

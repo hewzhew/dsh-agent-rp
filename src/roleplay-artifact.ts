@@ -17,6 +17,7 @@ import {
   type ResolvedToolGuidanceConfig,
 } from './roleplay-tool-guidance.ts'
 import { roleplayToolCallFollowsVisibleReply } from './roleplay-tool-continuation.ts'
+import { sessionEvents } from './session-events.ts'
 
 export const ROLEPLAY_ARTIFACT_STAGE_TOOL = 'stage_roleplay_artifact'
 export const ROLEPLAY_ARTIFACT_PUBLISH_TOOL = 'publish_roleplay_image'
@@ -211,7 +212,7 @@ function currentToolCall(
   callId: string,
   toolName: string,
 ): Extract<SessionEvent, { readonly type: 'tool/call' }> {
-  const event = session.events.findLast(candidate => candidate.type === 'tool/call'
+  const event = sessionEvents(session).findLast(candidate => candidate.type === 'tool/call'
     && String(candidate.data.callId) === callId)
   if (event?.type !== 'tool/call' || event.data.name !== toolName) {
     throw new Error(`${toolName} has no matching durable tool call`)
@@ -230,15 +231,15 @@ function referencedArtifact(
   call: Extract<SessionEvent, { readonly type: 'tool/call' }>,
   artifactId: string,
 ): RoleplayArtifactStageRecord {
-  for (let index = session.events.length - 1; index >= 0; index -= 1) {
-    const event = session.events[index]
+  for (let index = sessionEvents(session).length - 1; index >= 0; index -= 1) {
+    const event = sessionEvents(session)[index]
     if (event === undefined || event.seq >= call.seq || event.type !== 'tool/result'
       || event.data.turn !== call.data.turn || resultFailed(event)) continue
     const meta = readToolArtifactPresentationMeta(event.data.meta)
     const artifact = meta?.artifacts.find(candidate => String(candidate.attachment.attachmentId) === artifactId)
     if (artifact === undefined) continue
     const callId = resultCallId(event)
-    const toolName = callId === undefined ? undefined : sourceToolName(session.events, callId, event.seq)
+    const toolName = callId === undefined ? undefined : sourceToolName(sessionEvents(session), callId, event.seq)
     if (callId === undefined || toolName === undefined) continue
     return {
       format: ROLEPLAY_ARTIFACT_STAGE_FORMAT,
@@ -343,9 +344,9 @@ function latestPublishableArtifacts(
   session: Session,
   call: Extract<SessionEvent, { readonly type: 'tool/call' }>,
 ): { readonly artifacts: readonly RoleplayToolImageArtifact[]; readonly sourceResultSeq: number } | undefined {
-  const alreadyStaged = stagedSourceSeqs(session.events, call.data.turn)
-  for (let index = session.events.length - 1; index >= 0; index -= 1) {
-    const event = session.events[index]
+  const alreadyStaged = stagedSourceSeqs(sessionEvents(session), call.data.turn)
+  for (let index = sessionEvents(session).length - 1; index >= 0; index -= 1) {
+    const event = sessionEvents(session)[index]
     if (event === undefined || event.seq >= call.seq || event.type !== 'tool/result'
       || event.data.turn !== call.data.turn || resultFailed(event) || alreadyStaged.has(event.seq)) continue
     const artifacts = readRoleplayToolResultArtifacts({
@@ -654,7 +655,7 @@ export function installRoleplayArtifactCapability(
       const artifactId = boundedArtifactId(args.artifactId)
       const caption = boundedCaption(args.caption)
       const call = currentStageCall(exec.agent.session, String(exec.callId))
-      if (readStagedRoleplayArtifacts(exec.agent.session.events, call.data.turn, call.seq).length
+      if (readStagedRoleplayArtifacts(sessionEvents(exec.agent.session), call.data.turn, call.seq).length
         >= policy.behavior.image.maxPublicationsPerTurn) {
         throw new Error('this prepared turn already published its allowed roleplay image')
       }
@@ -710,7 +711,7 @@ export function installRoleplayArtifactCapability(
         throw new Error('publish_roleplay_image must be a top-level tool call so its stage decision is replayable')
       }
       const call = currentToolCall(exec.agent.session, String(exec.callId), ROLEPLAY_ARTIFACT_PUBLISH_TOOL)
-      if (readStagedRoleplayArtifacts(exec.agent.session.events, call.data.turn, call.seq).length
+      if (readStagedRoleplayArtifacts(sessionEvents(exec.agent.session), call.data.turn, call.seq).length
         >= policy.behavior.image.maxPublicationsPerTurn) {
         throw new Error('this prepared turn already published its allowed roleplay image')
       }

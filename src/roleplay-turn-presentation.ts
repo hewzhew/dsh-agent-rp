@@ -16,6 +16,7 @@ import type {
   RoleplayPresentModuleOutcome,
   RoleplayTurnPresentation,
 } from './roleplay-turn-presentation-types.ts'
+import { sessionEvents } from './session-events.ts'
 
 declare module '@deepseek-ai/dsh-session' {
   interface SessionEventMap {
@@ -63,7 +64,7 @@ function settlementEventAt(
 
 function latestVisibleAssistantSeq(session: Session): number | undefined {
   for (const seq of [...session.surface.nodes].reverse()) {
-    const event = eventAt(session.events, seq)
+    const event = eventAt(sessionEvents(session), seq)
     if (event?.type !== 'assistant/message') continue
     const text = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
     if (text.trim() !== '') return seq
@@ -163,7 +164,7 @@ export function compileInitialRoleplayTurnPresentation(input: {
   const { session, settlementEvent } = input
   const settlement = settlementEvent.data
   if (settlement.sessionId !== String(session.id)) throw new Error('Roleplay settlement belongs to another Session')
-  const reply = settlement.reply === undefined ? undefined : assistantAt(session.events, settlement.reply.eventSeq)
+  const reply = settlement.reply === undefined ? undefined : assistantAt(sessionEvents(session), settlement.reply.eventSeq)
   if (reply !== undefined && String(reply.data.message.id) !== settlement.reply?.messageId) {
     throw new Error('Roleplay settlement reply identity changed')
   }
@@ -254,11 +255,11 @@ export function compileRoleplayReplyVersionPresentation(input: {
   readonly contributions?: readonly RoleplayPresentationContribution[]
   readonly artifacts?: readonly RoleplayPresentedArtifact[]
 }): RoleplayTurnPresentation | undefined {
-  const baseline = readLatestRoleplayPresentationForReply(input.session.events, input.anchorSeq)
+  const baseline = readLatestRoleplayPresentationForReply(sessionEvents(input.session), input.anchorSeq)
   if (baseline === undefined) return undefined
-  settlementEventAt(input.session.events, baseline.settlementSeq)
-  const source = assistantAt(input.session.events, input.selectedVersionSeq)
-  const surface = assistantAt(input.session.events, input.surfaceSeq)
+  settlementEventAt(sessionEvents(input.session), baseline.settlementSeq)
+  const source = assistantAt(sessionEvents(input.session), input.selectedVersionSeq)
+  const surface = assistantAt(sessionEvents(input.session), input.surfaceSeq)
   const presented = applyContributions(
     updatedModules(baseline.present.modules, {
       moduleId: 'roleplay:reply-versions', outcome: 'applied', changes: 1,
@@ -300,10 +301,10 @@ export function compileRoleplayModulePresentationUpdate(input: {
   readonly replySeq: number
   readonly contributions: readonly RoleplayPresentationContribution[]
 }): RoleplayTurnPresentation | undefined {
-  assistantAt(input.session.events, input.replySeq)
-  const baseline = readLatestRoleplayPresentationForReply(input.session.events, input.replySeq)
+  assistantAt(sessionEvents(input.session), input.replySeq)
+  const baseline = readLatestRoleplayPresentationForReply(sessionEvents(input.session), input.replySeq)
   if (baseline?.selectedReply === undefined) return undefined
-  settlementEventAt(input.session.events, baseline.settlementSeq)
+  settlementEventAt(sessionEvents(input.session), baseline.settlementSeq)
   const presented = applyContributions(baseline.present.modules, baseline.state, input.contributions)
   return {
     ...baseline,
@@ -323,7 +324,7 @@ export function appendRoleplayTurnPresentation(
   presentation: RoleplayTurnPresentation,
 ): SessionEvent<'agent-rp/turn-presentation'> {
   if (presentation.sessionId !== String(session.id)) throw new Error('Roleplay presentation belongs to another Session')
-  const existing = session.events.find(event => event.type === 'agent-rp/turn-presentation'
+  const existing = sessionEvents(session).find(event => event.type === 'agent-rp/turn-presentation'
     && event.data.trigger.kind === presentation.trigger.kind
     && event.data.trigger.eventSeq === presentation.trigger.eventSeq)
   if (existing?.type === 'agent-rp/turn-presentation') return existing

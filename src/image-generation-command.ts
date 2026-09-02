@@ -13,6 +13,7 @@ import {
   type ImageGenerationRequest,
 } from './image-generation-protocol.ts'
 import { WorkspaceSettingsStore } from './workspace-settings-store.ts'
+import { sessionEvents } from './session-events.ts'
 
 const activeJobs = new Map<string, AbortController>()
 
@@ -81,7 +82,7 @@ export async function executeImageGenerationCommand(
   },
 ): Promise<{ readonly kind: 'success'; readonly text: string }> {
   const request = parseImageGenerationRequest(invocation.rawInput)
-  const source = invocation.agent.session.events.at(-1)
+  const source = sessionEvents(invocation.agent.session).at(-1)
   if (source?.type !== 'command/run' || source.data.name !== 'rp-draw'
     || String(source.data.commandId) !== String(invocation.commandId)) {
     throw new Error('图片生成命令不是当前 Session 事件')

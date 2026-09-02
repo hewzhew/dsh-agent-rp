@@ -51,6 +51,7 @@ import {
   resolveStoryPlayWorldContext,
   StoryWorkspaceStore,
 } from '../src/story-workspace.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function editable(snapshot: StoryWorkspaceSnapshot): StoryWorkspaceSaveRequest {
   return {
@@ -427,7 +428,7 @@ test('commits an intentionally omitted scene without leaving world events or pri
   assert.deepEqual(storyPendingWorldEvents(saved), [])
   assert.doesNotMatch(resolveStoryTurnRequest(saved, ''), /尚未写入正文/u)
   assert.match(compileStoryCharacterContext(saved, actorId, { playerInput: '继续。' }, worlds).privateKnowledge, /继续当前计数/u)
-  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), false)
 })
 
@@ -1098,7 +1099,7 @@ test('keeps executable world state out of whole-workspace edits', async (context
   assert.equal(prepared.seed[0]?.ignorable, true)
   const launched = Session.create(SessionId('play-world-launch'), prepared.seed)
   assert.deepEqual(launched.deriveMessages(), [])
-  assert.equal(launched.events.findLast(event => event.type === 'turn/end')?.data.turn, 1)
+  assert.equal(sessionEvents(launched).findLast(event => event.type === 'turn/end')?.data.turn, 1)
   const renamed = store.save({ ...editable(installed), name: '新名称' })
   assert.deepEqual(renamed.world, installed.world)
   const boundResult = store.bindCharacterActor(renamed.id, {
@@ -1310,7 +1311,7 @@ test('advances executable worlds from the unified direction input unless the pla
     signal: new AbortController().signal,
   })
 
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
   assert.equal(rolls, 0)
@@ -1347,7 +1348,7 @@ test('advances executable worlds from the unified direction input unless the pla
   })
   const rollsAfterDirectedInput = rolls
   assert.equal(rollsAfterDirectedInput > 0, true)
-  assert.equal(directedSession.events.some(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(directedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'world-action'), true)
   assert.equal((directedResult.worldEventSequences?.length ?? 0) > 0, true)
   assert.equal(store.get(installed.id).revision > installed.revision, true)
@@ -1426,7 +1427,7 @@ test('lets the current private character Worker complete one world turn exactly 
   assert.equal(state.currentPlayerId, reimuId)
   assert.equal(state.pieces.some(piece => piece.ownerId === reimuId && piece.status === 'track'), true)
   assert.deepEqual(advanced.worldActionReceipts?.map(receipt => receipt.sequence), [0, 1])
-  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data.stage]
     : []), ['world-action', 'world-action'])
 
@@ -1438,7 +1439,7 @@ test('lets the current private character Worker complete one world turn exactly 
     step: 1,
     outcome: 'aborted',
   })
-  assert.equal(session.events.findLast(event => event.type === 'agent-rp/story-turn-stopped')?.data.outcome, 'aborted')
+  assert.equal(sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-stopped')?.data.outcome, 'aborted')
 
   const replayed = await advanceStoryWorldByCharacter(input)
   assert.equal(replayed.revision, advanced.revision)
@@ -1565,7 +1566,7 @@ test('writes a manually completed world result before another character acts', a
     signal: new AbortController().signal,
   })
 
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
@@ -1588,7 +1589,7 @@ test('writes a manually completed world result before another character acts', a
     assert.match(dispatch, /此前棋局第 10 回合已经结束/u)
     assert.doesNotMatch(dispatch, /此前棋局第 7 回合已经结束/u)
   }
-  const brief = session.events.findLast(event => event.type === 'agent-rp/story-turn-brief')
+  const brief = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
   assert.equal(brief?.data.publicDialogues, undefined)
   assert.match(characterBodies.join('\n'), /共同经历了此前棋局第 10 回合/u)
   assert.doesNotMatch(characterBodies.join('\n'), /共同经历了此前棋局第 1 回合/u)
@@ -1771,7 +1772,7 @@ test('keeps the exact world outcome while preserving only private-section charac
     signal: new AbortController().signal,
   })
 
-  const researchDispatch = JSON.stringify(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const researchDispatch = JSON.stringify(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.dispatch] : []).at(0))
   assert.match(researchDispatch, /story:current-world-state/u)
   assert.match(researchDispatch, /当前第 2 回合，轮到 雾雨魔理沙/u)
@@ -1781,13 +1782,13 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(researchDispatch, /实际行动人物：博丽灵梦/u)
   assert.match(researchDispatch, /下一行动者与玩家输入点名的刚完成行动者不同不是冲突/u)
   assert.match(researchDispatch, /历史中的较早状态不能覆盖当前状态/u)
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data] : [])
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
   assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
-  const characterRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
   const marisaRequest = characterRequests.find(request => request.subjectId === marisaId)
@@ -1809,7 +1810,7 @@ test('keeps the exact world outcome while preserving only private-section charac
     insights: [{ kind: 'decision', text: '遇到不利结果时，仍会接受结算并继续这局。' }],
   }])
   assert.doesNotMatch(result.finalDraft, /前几手全是小点|飞机全压在基地|错误记录|魔理沙视角|下一回合掷骰/u)
-  assert.deepEqual(session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'section' ? [event.data.subjectId] : []), [proseId])
   session.append('assistant/message', {
     turn: 2,
@@ -1828,7 +1829,7 @@ test('keeps the exact world outcome while preserving only private-section charac
     turn: 2,
     signal: new AbortController().signal,
   })
-  const continuityRequest = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const continuityRequest = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity' ? [event.data] : []).at(-1)
   assert.equal(continuityRequest?.dispatch.reasoningEffort, 'low')
   assert.deepEqual(materialized?.changes.characters, [])
@@ -1853,7 +1854,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.match(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /遇到不利结果时/u)
   assert.doesNotMatch(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /前几手全是小点|飞机全压在基地/u)
   assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /遇到不利结果时/u)
-  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), true)
 })
 
@@ -2051,7 +2052,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     dialogue: '“你自己把两句话接在一起，还问我是哪句？”',
     move: 'answer',
   }])
-  const stageRequests = session.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
@@ -2101,7 +2102,7 @@ test('assembles a grounded world result and approved dialogue without unowned mo
   assert.doesNotMatch(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /博丽灵梦说/u)
   assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /博丽灵梦说/u)
   assert.match(saved.events.at(-1)?.summary ?? '', /博丽灵梦说：“你自己把两句话接在一起，还问我是哪句？”/u)
-  assert.equal(session.events.some(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity'), false)
 
   const originalDialogueSourceId = createStorySourceId()
@@ -2147,10 +2148,10 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     })],
     signal: new AbortController().signal,
   })
-  const sourcedStageRequests = sourcedSession.events.flatMap(event => event.type === 'agent-rp/story-stage-request'
+  const sourcedStageRequests = sessionEvents(sourcedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [event.data]
     : [])
-  const sourcedBrief = sourcedSession.events.findLast(event => event.type === 'agent-rp/story-turn-brief')?.data
+  const sourcedBrief = sessionEvents(sourcedSession).findLast(event => event.type === 'agent-rp/story-turn-brief')?.data
   const sourcedVoiceBody = JSON.stringify(sourcedStageRequests.find(request => request.stage === 'voice'
     && request.subjectId?.startsWith(`draft:${reimuId}:`) === true)?.dispatch.messages)
   assert.match(sourcedVoiceBody, /local:source-[0-9a-f-]+:\d+/u)
@@ -2231,6 +2232,6 @@ test('assembles a grounded world result and approved dialogue without unowned mo
     signal: new AbortController().signal,
   })
   assert.equal(constrainedResult.publicDialogues?.length ?? 0, 0)
-  assert.equal(constrainedSession.events.some(event => event.type === 'agent-rp/story-stage-request'
+  assert.equal(sessionEvents(constrainedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'voice'), false)
 })

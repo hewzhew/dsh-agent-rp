@@ -114,7 +114,7 @@ export function apply(ctx: ClientContext): void {
 
 ## 当前分发边界
 
-Agent RP prerelease 已发布这两个版本化导出。本迁移分支固定 DSH `0.1.2-alpha.2`；该版本已经发布 npm 包，并恢复了 `ignorable` 事件的存储、读取和传输，但仍没有向仓库外插件公开安全写入方法。源码协作需克隆同一 tag、应用仓库内的最小 Host 补丁、建立本地源码链接，并运行 `pnpm run check:dsh-alpha-source` 验证 `appendIgnorable()` 的写入和重放能力。普通安装链只有在对应 patched Host 完成独立安装验收后才能更新。
+Agent RP prerelease 已发布这两个版本化导出。当前源码迁移固定 DSH `0.1.2-alpha.5`；该版本恢复了 `ignorable` 事件的存储、读取和传输，但仍没有向仓库外插件公开安全写入方法。源码协作需克隆同一 tag、应用仓库内的最小 Host 补丁、建立本地源码链接，并运行 `pnpm run check:dsh-alpha-source` 验证 `appendIgnorable()` 的写入和重放能力。普通安装链只有在对应 patched Host 完成独立安装验收后才能更新。
 
 仓库内的 `host-patches/dsh-alpha-ignorable-session-events.json` 固定官方基线、下游补丁摘要和预期源码树；同目录 patch 是可重放的完整提交。`node scripts/manage-dsh-alpha-host-patch.mjs --apply --dsh-root <DSH 源码目录>` 只接受干净且精确位于该官方 tag 的工作树，应用后与 `pnpm run check:dsh-alpha-source` 使用同一份机器校验。更新 DSH alpha 基线时必须重新生成 patch、摘要和预期源码树，不能只改 workspace 链接。
 

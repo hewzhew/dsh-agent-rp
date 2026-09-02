@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandId } from '@deepseek-ai/dsh-commands'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { readActiveSessionPreset } from '../src/import/session-preset.ts'
 import { parseSillyTavernPresetJson } from '../src/import/sillytavern-preset.ts'
 import { configurePreset } from '../src/preset-configuration-core.ts'
@@ -14,6 +14,7 @@ import { executePresetLibraryCommand } from '../src/preset-library-command.ts'
 import { parsePresetLibraryResult } from '../src/preset-library-protocol.ts'
 import { agentRpProjectionDefinition } from '../src/projection.ts'
 import { presetLibraryOptionLabel, type PresetLibrarySummary } from '../src/preset-library-http-protocol.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function preset(name = '通用预设') {
   return parseSillyTavernPresetJson(JSON.stringify({
@@ -45,8 +46,8 @@ function invoke(agent: Agent, library: PresetLibrary, request: object): void {
 }
 
 function projected(agent: Agent) {
-  let state = agentRpProjectionDefinition.init(agent.session.header)
-  for (const event of agent.session.events) state = agentRpProjectionDefinition.apply(state, event)
+  let state = agentRpProjectionDefinition.init(agent.session.header, agent.session.inheritedEventCount)
+  for (const event of sessionEvents(agent.session)) state = agentRpProjectionDefinition.apply(state, event)
   return agentRpProjectionDefinition.wire.view(state)
 }
 
@@ -154,7 +155,7 @@ test('selects, saves, lists, and deletes library presets without mutating an act
   const agent = { session: Session.create(SessionId('library-session')) } as Agent
 
   invoke(agent, library, { operation: 'select', id: imported.id })
-  const active = readActiveSessionPreset(agent.session.events)
+  const active = readActiveSessionPreset(sessionEvents(agent.session))
   assert.equal(active?.libraryId, imported.id)
   assert.equal(active?.preset.name, '通用预设')
   assert.equal(projected(agent).preset?.libraryId, imported.id)
@@ -166,15 +167,15 @@ test('selects, saves, lists, and deletes library presets without mutating an act
   invoke(agent, library, { operation: 'rename', id: imported.id, name: '通用预设（自定义）' })
   assert.equal(library.get(imported.id).name, '通用预设（自定义）')
   assert.equal(projected(agent).presetLibrary.find(item => item.id === imported.id)?.name, '通用预设（自定义）')
-  assert.equal(readActiveSessionPreset(agent.session.events)?.result.name, '通用预设')
+  assert.equal(readActiveSessionPreset(sessionEvents(agent.session))?.result.name, '通用预设')
 
   invoke(agent, library, { operation: 'save', name: '我的副本' })
   assert.deepEqual(library.list().map(item => item.name).sort(), ['我的副本', '通用预设（自定义）'])
   const saved = library.list().find(item => item.name === '我的副本')!
   invoke(agent, library, { operation: 'delete', id: saved.id })
   assert.deepEqual(library.list().map(item => item.name), ['通用预设（自定义）'])
-  assert.equal(readActiveSessionPreset(agent.session.events)?.preset.name, '通用预设')
-  assert.equal(agent.session.events.at(-1)?.type, 'command/done')
+  assert.equal(readActiveSessionPreset(sessionEvents(agent.session))?.preset.name, '通用预设')
+  assert.equal(sessionEvents(agent.session).at(-1)?.type, 'command/done')
 })
 
 test('adopts an older session preset into the library without replacing its edited state', (context) => {
@@ -183,7 +184,7 @@ test('adopts an older session preset into the library without replacing its edit
   const library = new PresetLibrary({ root })
   const imported = preset()
   const oldAgent = { session: Session.create(SessionId('pre-library'), [{
-    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: Date.now(),
+    type: 'agent-rp/sillytavern-preset-seed', seq: SessionSeq(0), time: Date.now(),
     data: {
       format: 0,
       source: { attachmentConsumer: 'dsh-agent-rp', attachments: [{
@@ -203,7 +204,7 @@ test('adopts an older session preset into the library without replacing its edit
   })
   oldAgent.session.append('command/done', { commandId: configureId, kind: 'success' })
   invoke(oldAgent, library, { operation: 'list' })
-  const adopted = readActiveSessionPreset(oldAgent.session.events)!
+  const adopted = readActiveSessionPreset(sessionEvents(oldAgent.session))!
   assert.equal(adopted.preset.order.find(item => item.identifier === 'style')?.enabled, true)
   assert.ok(adopted.libraryId)
   assert.equal(library.list().length, 1)
@@ -220,7 +221,7 @@ test('keeps a selected session snapshot after its reusable library copy is delet
   invoke(agent, library, { operation: 'select', id: imported.id })
   invoke(agent, library, { operation: 'delete', id: imported.id })
   assert.equal(library.list().length, 0)
-  assert.equal(readActiveSessionPreset(agent.session.events)?.preset.name, '通用预设')
+  assert.equal(readActiveSessionPreset(sessionEvents(agent.session))?.preset.name, '通用预设')
   assert.equal(projected(agent).preset?.name, '通用预设')
   assert.equal(projected(agent).presetLibrary.length, 0)
 })
@@ -234,7 +235,7 @@ test('ignores unrelated command text and rejects malformed marked results', () =
 test('projects the Host-recorded request instead of reconstructing an inspection guess', () => {
   const imported = preset()
   const agent = { session: Session.create(SessionId('request-inspection'), [{
-    type: 'agent-rp/sillytavern-preset-seed', seq: 0, time: 1,
+    type: 'agent-rp/sillytavern-preset-seed', seq: SessionSeq(0), time: 1,
     data: {
       format: 0,
       source: { attachmentConsumer: 'dsh-agent-rp', attachments: [{

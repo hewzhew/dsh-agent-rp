@@ -11410,9 +11410,10 @@ function roleplayComposerDockComponent(
   startFreshStorySession: (sourceSessionId: SessionId, workspaceId: string) => Promise<void>,
 ): (props: ComposerDockProps) => JSX.Element | null {
   return function RoleplayComposerDock({
-    input, inputActions, renderSlot, sessionId, useChat, useProjection, useSessions, useSession,
+    inputActions, renderSlot, sessionId, useChat, useInput, useProjection, useSessions, useSession,
   }: ComposerDockProps) {
   const summary = useSessions(state => state.byId[sessionId])
+  const input = useInput(state => state)
   const projected = useProjection('agentRp')
   const projection = roleplaySummary(summary, projected)
   const chat = useChat(state => state)

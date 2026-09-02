@@ -53,6 +53,7 @@ import {
 import { readRoleplayTurnMode, type RoleplayTurnMode } from './roleplay-turn-mode.ts'
 import { readNativePromptPolicy, type NativePromptPolicySnapshot } from './native-prompt-policy.ts'
 import { readSessionRegexPacks, type SessionRegexPackSnapshot } from './session-regex-pack.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** One source plus the Session overlay that will be evaluated for this turn. */
 export interface ConfiguredRoleplayLorebook {
@@ -110,7 +111,7 @@ export function resolveSessionRoleplayRuntime(input: {
   readonly templateEngineAvailable?: boolean
   readonly extensions?: RoleplayRuntimeExtensionRegistry
 }): ResolvedSessionRoleplayRuntime {
-  const events = input.session.events
+  const events = sessionEvents(input.session)
   const activeCharacter = readActiveSessionCharacter(events)
   const importedCard = activeCharacter === undefined ? undefined : cardFromImportMeta(activeCharacter.meta)
   const importedChat = readSillyTavernChatIdentity(events)

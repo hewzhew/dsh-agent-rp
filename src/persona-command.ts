@@ -2,6 +2,7 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { decodeCharacterLibraryLaunch, readActiveSessionCharacter } from './import/session-character.ts'
 import { readSillyTavernChatIdentity } from './import/sillytavern-chat-seed.ts'
 import {
@@ -9,8 +10,9 @@ import {
   parsePersonaCommandRequest,
 } from './persona-command-protocol.ts'
 import { readSessionPersona } from './session-persona.ts'
+import { sessionEvents } from './session-events.ts'
 
-function launchPersonaName(events: Agent['session']['events']): string | undefined {
+function launchPersonaName(events: readonly SessionEvent[]): string | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event?.type !== 'command/done' || event.data.kind !== 'success') continue
@@ -24,7 +26,7 @@ function launchPersonaName(events: Agent['session']['events']): string | undefin
 }
 
 function fallbackUserName(agent: Agent): string | undefined {
-  const events = agent.session.events
+  const events = sessionEvents(agent.session)
   const originalPersonaName = launchPersonaName(events)
   const characterName = readActiveSessionCharacter(events)?.result.userName
   const chatName = readSillyTavernChatIdentity(events)?.userName
@@ -40,7 +42,7 @@ export function executePersonaCommand(invocation: {
   readonly rawInput: string
 }): { readonly kind: 'success'; readonly text: string } {
   const request = parsePersonaCommandRequest(invocation.rawInput)
-  const source = invocation.agent.session.events.at(-1)
+  const source = sessionEvents(invocation.agent.session).at(-1)
   if (source?.type !== 'command/run' || source.data.name !== 'rp-persona'
     || String(source.data.commandId) !== String(invocation.commandId)) {
     throw new Error('Persona 命令不是当前 Session 事件')

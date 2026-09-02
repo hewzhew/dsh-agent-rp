@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { CommandId } from '@deepseek-ai/dsh-commands'
+import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -196,6 +196,7 @@ import {
   StExtensionGenerationCoordinator,
 } from './st-extension-generation.ts'
 import { installStExtensionGenerationHttp } from './st-extension-generation-http.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Cordis plugin identity. */
 export const name = 'dsh-agent-rp'
@@ -419,19 +420,7 @@ export type {
 export const inject = ['attachments', 'commands', 'credentials', 'llm', 'sessions', 'systemPrompt', 'tools']
 
 interface HumanCommandGateway {
-  register(definition: {
-    readonly name: string
-    readonly description: string
-    readonly input: { readonly hint: string }
-    readonly recordInput?: boolean
-    readonly handler: (invocation: {
-      readonly commandId: CommandId
-      readonly agent: Agent
-      readonly rawInput: string
-      readonly signal: AbortSignal
-    }) => { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number }
-      | Promise<{ readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number }>
-  }): () => void
+  register(definition: CommandDefinition): () => void
 }
 
 interface FileAttachmentReader {
@@ -539,8 +528,8 @@ function isCharacterCardAttachment(value: unknown): value is CharacterCardAttach
 }
 
 function latestConsumedAttachments(agent: Agent): { eventSeq: number; attachments: FileAttachmentRef[] } {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index]
+  for (let index = sessionEvents(agent.session).length - 1; index >= 0; index -= 1) {
+    const event = sessionEvents(agent.session)[index]
     if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
     const source = event.data.source as unknown as { attachmentConsumer?: unknown; attachments?: unknown }
     const attachments = source.attachmentConsumer === 'dsh-agent-rp' && Array.isArray(source.attachments)
@@ -553,8 +542,8 @@ function latestConsumedAttachments(agent: Agent): { eventSeq: number; attachment
 }
 
 function latestUserAttachments(agent: Agent): { eventSeq: number; attachments: CharacterCardAttachmentRef[] } {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index]
+  for (let index = sessionEvents(agent.session).length - 1; index >= 0; index -= 1) {
+    const event = sessionEvents(agent.session)[index]
     if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
     const direct = event.data.content.flatMap(block => block.type === 'image' ? [block.attachment] : [])
     const source = event.data.source as unknown as {
@@ -685,7 +674,7 @@ export function installAgentRp(
       phase: 'settle',
       async run(input) {
         if (input.plan.plan.act.stateActions.length === 0) return { outcome: 'skipped' }
-        const hasInlineStateAction = input.agent.session.events.some((event) => {
+        const hasInlineStateAction = sessionEvents(input.agent.session).some((event) => {
           if (event.type !== 'tool/result' || event.data.turn !== input.turn || event.data.error !== undefined) return false
           const block = event.data.message.content[0]
           const intent = readRoleplayStateActionIntent(event.data.meta)
@@ -722,13 +711,13 @@ export function installAgentRp(
   installRoleplayActorRevisionCapability(ctx, actorRevisions, {
     resolveActor(agent) {
       if (agentsByScope.get(agent) !== agent) return undefined
-      const active = readActiveSessionCharacter(agent.session.events)
+      const active = readActiveSessionCharacter(sessionEvents(agent.session))
       if (active !== undefined) {
         return active.result.libraryId === undefined
           ? undefined
           : { kind: 'actor', id: characterLibraryRoleplayResourceId(active.result.libraryId) }
       }
-      const selected = readRoleplayExperienceSelection(agent.session.events)?.actor
+      const selected = readRoleplayExperienceSelection(sessionEvents(agent.session))?.actor
       return selected === undefined ? undefined : { kind: 'actor', id: selected.id }
     },
   })
@@ -752,7 +741,7 @@ export function installAgentRp(
       || result.isError || turnCoordinator.currentActLane(agent) !== 'narrative') return
     const plan = turnCoordinator.current(agent)
     if (plan?.tools.capability.artifactPresentation !== true) return
-    const followup = detectRoleplayArtifactFollowup(agent.session.events, String(exec.callId), result)
+    const followup = detectRoleplayArtifactFollowup(sessionEvents(agent.session), String(exec.callId), result)
     if (followup !== undefined) {
       turnCoordinator.enterArtifactHandoff(agent, followup.turn)
       roleplayImageGenerationCapability.prepare(agent, undefined)
@@ -868,7 +857,7 @@ export function installAgentRp(
     if (turnCoordinator.currentActLane(agent) === 'artifact-handoff') {
       return ROLEPLAY_ARTIFACT_HANDOFF_PROMPT
     }
-    const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
+    const workspaceId = readSessionStoryWorkspaceId(sessionEvents(agent.session))
     if (workspaceId !== undefined) {
       let workspaceName = '故事工作室'
       let characterNames = ''
@@ -994,7 +983,7 @@ export function installAgentRp(
       highRiskToolRestrictions.set(agent, agent.ctx.tools.restrict({ deny: highRiskTools }))
     }
     const resolveCharacter = () => {
-      const active = readActiveSessionCharacter(agent.session.events)
+      const active = readActiveSessionCharacter(sessionEvents(agent.session))
       if (active === undefined) return undefined
       let originalFilename: string | undefined
       if (active.result.libraryId !== undefined) {
@@ -1097,7 +1086,7 @@ export function installAgentRp(
     }
     if (step === 1) {
       storyBriefByAgent.delete(agent)
-      const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
+      const workspaceId = readSessionStoryWorkspaceId(sessionEvents(agent.session))
       if (workspaceId !== undefined) {
         try {
           const brief = await runStoryTurnPipeline({
@@ -1171,7 +1160,7 @@ export function installAgentRp(
     const activePlan = agentsByScope.get(agent) === agent
       ? turnCoordinator.bindStep(agent, turn, step, plan => bindRoleplayExternalContext({
         plan,
-        events: agent.session.events,
+        events: sessionEvents(agent.session),
         visibleMessages: agent.session.deriveMessages(),
         turn,
         step,
@@ -1214,7 +1203,7 @@ export function installAgentRp(
       ctx.logger.warn(`agent-rp: post-narrative Worker pipeline skipped: ${error instanceof Error ? error.message : String(error)}`)
     }
     try {
-      const workspaceId = readSessionStoryWorkspaceId(agent.session.events)
+      const workspaceId = readSessionStoryWorkspaceId(sessionEvents(agent.session))
       if (workspaceId !== undefined) {
         await materializeStoryTurn({ ctx, agent, store: storyWorkspaces, workspaceId, turn, signal })
       }
@@ -1303,7 +1292,7 @@ export function installAgentRp(
       if (exec.agent === undefined) throw new Error('remember requires an Agent Session')
       if (exec.parent !== undefined) throw new Error('remember must be called directly by the character Agent')
       const record = prepareAgentRpMemory(exec.agent.session, String(exec.callId), args)
-      if (roleplayToolCallFollowsVisibleReply(exec.agent.session.events, String(exec.callId))) {
+      if (roleplayToolCallFollowsVisibleReply(sessionEvents(exec.agent.session), String(exec.callId))) {
         exec.concludeTurn()
       }
       return Promise.resolve(record)
@@ -1419,7 +1408,7 @@ export function installAgentRp(
           direct.eventSeq,
           stored.ref,
           args.greetingIndex ?? 0,
-          readSillyTavernChatIdentity(exec.agent.session.events)?.userName,
+          readSillyTavernChatIdentity(sessionEvents(exec.agent.session))?.userName,
           libraryEntry.id,
         )
       }
@@ -1437,7 +1426,7 @@ export function installAgentRp(
         transport: 'png',
         metadataKeyword: payload.keyword,
       }, direct.eventSeq, stored.ref, args.greetingIndex ?? 0,
-      readSillyTavernChatIdentity(exec.agent.session.events)?.userName, libraryEntry.id)
+      readSillyTavernChatIdentity(sessionEvents(exec.agent.session))?.userName, libraryEntry.id)
     },
     presentCall: () => ({ card: 'generic', title: '导入角色卡', kind: 'read' }),
     presentResult: (_args, result) => ({

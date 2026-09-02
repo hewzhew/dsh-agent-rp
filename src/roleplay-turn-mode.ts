@@ -2,6 +2,7 @@
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Compatibility dialogue preserves author-defined output formats; Agent turns use runtime actions. */
 export type RoleplayTurnMode = 'conversation' | 'agent'
@@ -100,7 +101,7 @@ export function readRoleplayTurnMode(events: readonly SessionEvent[]): RoleplayT
 
 /** Initialize a Session once without rewriting an explicit player choice. */
 export function ensureDefaultRoleplayTurnMode(session: Session, value: RoleplayTurnMode): void {
-  if (session.events.some(event => event.type === 'agent-rp/turn-mode')) return
+  if (sessionEvents(session).some(event => event.type === 'agent-rp/turn-mode')) return
   appendAgentRpSessionEvent(session, 'agent-rp/turn-mode', { format: 0, mode: value, source: 'default' })
 }
 
@@ -110,7 +111,7 @@ export function appendUserRoleplayTurnMode(
   request: RoleplayTurnModeCommandRequest,
   sourceEventSeq: number,
 ): void {
-  const source = session.events[sourceEventSeq]
+  const source = sessionEvents(session)[sourceEventSeq]
   if (source?.type !== 'command/run' || source.data.name !== 'rp-turn-mode'
     || source.data.source.kind !== 'user' || typeof source.data.args !== 'string'
     || parseRoleplayTurnModeCommandRequest(source.data.args).mode !== request.mode) {

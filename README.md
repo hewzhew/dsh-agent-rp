@@ -83,7 +83,7 @@ Debian/Ubuntu 若缺少原生构建工具，可先安装 `build-essential` 与 `
 
 贡献者需要修改源码时，才应克隆仓库并在仓库根目录运行 `pnpm install`、`pnpm run build`，再让 Agent Host 的 `dsh plugin --profile web add .` 指向本地目录。
 
-`codex/dsh-alpha-migration` 使用 DSH `0.1.2-alpha.2` 源码和仓库内的最小 Host 补丁。先准备精确位于上游 tag 且已应用该补丁的 DSH checkout，再运行 `node scripts/dsh-alpha-dev.mjs setup --dsh-root ../deepseek-harness`；这个零依赖入口从 `packages/` 和 `vendor/` 自动发现完整的 DSH 源码依赖闭包，并在临时 lockfile 作用域安装本地链接，不读取或改写本仓库的 `pnpm-workspace.yaml` 与 `pnpm-lock.yaml`。普通 `pnpm` 命令可能按锁文件恢复注册表依赖；`pnpm run check:dsh-alpha-source` 会重新链接源码并连续完成构建、类型检查和 Session 能力检查。`node scripts/dsh-alpha-dev.mjs preview --dsh-root ../deepseek-harness --port 3181 --no-open` 会继续完整构建 Agent RP 的 Host、Client、扩展声明和修复命令，在 `.runtime/dsh-alpha-home` 创建隔离 profile 并以前台进程启动预览。也可用 `DSH_ALPHA_ROOT` 和 `DSH_ALPHA_HOME` 指定这两个目录。
+当前源码迁移固定 DSH `0.1.2-alpha.5` 和仓库内的最小 Host 补丁。先准备精确位于上游 tag 且已应用该补丁的 DSH checkout，再运行 `node scripts/dsh-alpha-dev.mjs setup --dsh-root ../dsh-alpha5-host`；这个零依赖入口从 `packages/` 和 `vendor/` 自动发现完整的 DSH 源码依赖闭包，并在临时 lockfile 作用域安装本地链接，不读取或改写本仓库的 `pnpm-workspace.yaml` 与 `pnpm-lock.yaml`。普通 `pnpm` 命令可能按锁文件恢复注册表依赖；`pnpm run check:dsh-alpha-source` 会重新链接源码并连续完成构建、类型检查和 Session 能力检查。`node scripts/dsh-alpha-dev.mjs preview --dsh-root ../dsh-alpha5-host --port 3182 --no-open` 会继续完整构建 Agent RP 的 Host、Client、扩展声明和修复命令，在 `.runtime/dsh-alpha-home` 创建隔离 profile 并以前台进程启动预览。也可用 `DSH_ALPHA_ROOT` 和 `DSH_ALPHA_HOME` 指定这两个目录。
 
 早期安装器写入的版本不会自动迁移。若启动错误中出现 `.dsh\plugins\dsh-agent-rp`，请先把该目录移出 `plugins` 目录作备份，确认 DSH 能启动后，再按上面的 profile 命令安装。不要删除整个 `.dsh`，会话数据与旧插件目录不是一回事。
 

@@ -1,7 +1,7 @@
 /** Model-free standalone World Info activation before an Agent is constructed. */
 
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { CharacterWorldBinding } from '../character-world-binding-store.ts'
 import type { SessionPersonaSnapshot } from '../persona-library-protocol.ts'
 import type { WorldInfoLibrary, WorldInfoLibraryAsset } from '../world-info-library.ts'
@@ -10,10 +10,11 @@ import {
   type WorldInfoImportMeta,
   type WorldInfoLibrarySeedRecord,
 } from './session-world-info.ts'
+import { sessionEvents } from '../session-events.ts'
 
 function worldInfoLibrarySeedEvent(
   asset: WorldInfoLibraryAsset,
-  seq: number,
+  seq: SessionSeq,
   time: number,
   placement: WorldInfoLibrarySeedRecord['placement'],
   purpose: WorldInfoLibrarySeedRecord['purpose'],
@@ -55,10 +56,10 @@ export function appendWorldInfoLibrarySessionSeed(
 ): readonly SessionEvent[] {
   const next = [
     ...structuredClone(events),
-    worldInfoLibrarySeedEvent(asset, events.length, Date.now(), semantics.placement, semantics.purpose),
+    worldInfoLibrarySeedEvent(asset, SessionSeq(events.length), Date.now(), semantics.placement, semantics.purpose),
   ]
   const validated = Session.create(SessionId('agent-rp-world-info-append-validation'), next)
-  return Object.freeze(validated.events.slice(0, next.length))
+  return Object.freeze(sessionEvents(validated).slice(0, next.length))
 }
 
 /** Return bound World Info ids in their stable actor-world order. */
@@ -91,11 +92,11 @@ export function createWorldInfoLibrarySessionSeed(
   persona?: SessionPersonaSnapshot,
 ): readonly SessionEvent[] {
   const time = Date.now()
-  const events: SessionEvent[] = [worldInfoLibrarySeedEvent(asset, 0, time, 'experience', 'scenario')]
+  const events: SessionEvent[] = [worldInfoLibrarySeedEvent(asset, SessionSeq(0), time, 'experience', 'scenario')]
   if (persona !== undefined) {
     events.push({
       type: 'agent-rp/persona-seed',
-      seq: events.length,
+      seq: SessionSeq(events.length),
       time,
       ignorable: true,
       data: { format: 0, persona },
@@ -107,16 +108,16 @@ export function createWorldInfoLibrarySessionSeed(
   // opening a model step, or issuing a model request.
   events.push({
     type: 'turn/start',
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: time + 1,
     data: { turn: 1 },
   })
   events.push({
     type: 'turn/end',
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: time + 1,
     data: { turn: 1, reason: { kind: 'completed' } },
   })
   const validated = Session.create(SessionId('agent-rp-world-info-import-validation'), events)
-  return Object.freeze(validated.events.slice(0, events.length))
+  return Object.freeze(sessionEvents(validated).slice(0, events.length))
 }

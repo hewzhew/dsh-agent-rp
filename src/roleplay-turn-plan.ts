@@ -74,6 +74,7 @@ import {
   type ResolvedToolGuidanceConfig,
   type RoleplayToolPolicyPlan,
 } from './roleplay-tool-guidance.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Exact replay key for the Session surface and newly claimed messages used by preparation. */
 export interface RoleplayTurnInputKey {
@@ -462,7 +463,7 @@ export function prepareRoleplayTurn(input: PrepareRoleplayTurnInput): RoleplayTu
     characterName,
     userName: userName ?? '用户',
     ...(characterWorldbook === undefined ? {} : { characterWorldInfoBookName: characterWorldbook }),
-    replayTime: sessionBoundarySeq === 0 ? 0 : input.session.events[sessionBoundarySeq - 1]?.time ?? 0,
+    replayTime: sessionBoundarySeq === 0 ? 0 : sessionEvents(input.session)[sessionBoundarySeq - 1]?.time ?? 0,
     entropy: macroContext.entropy,
     messages: [...roleplayVisibleDialogue(input.session, pendingMessages), ...injectedScanText],
     transcript,
@@ -658,7 +659,7 @@ export function prepareRoleplayTurn(input: PrepareRoleplayTurnInput): RoleplayTu
       afterHistory: [...prompt.afterHistory, { role: 'system', content: stateContext }],
     }
   }
-  const memoryHistory = readAgentRpMemoryHistory(input.session.events)
+  const memoryHistory = readAgentRpMemoryHistory(sessionEvents(input.session))
   const memory: RoleplayMemoryPlan = {
     ...snapshot.memory,
     reads: memoryHistory.active.map(record => ({

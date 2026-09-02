@@ -1,15 +1,131 @@
-From 436f111b10aa22de868fb54d4b3bb6b51e2ce9c0 Mon Sep 17 00:00:00 2001
+From 8e9df846b29097eb45c1d89a14af863615b4c989 Mon Sep 17 00:00:00 2001
 From: hewzhew <hewzhew@bupt.edu.cn>
 Date: Sun, 23 Aug 2026 03:42:06 +0800
 Subject: [PATCH] feat(session): let plugins append ignorable events
 
 ---
- packages/core/session/src/index.ts          | 35 ++++++++++++++
- packages/core/session/tests/session.spec.ts | 53 +++++++++++++++++++++
- 2 files changed, 88 insertions(+)
+ ...gnorable-external-session-events.i18n.yaml |  4 +-
+ ...etain-ignorable-external-session-events.md |  8 ++-
+ ...in-ignorable-external-session-events.zh.md |  8 ++-
+ packages/core/session/README.i18n.yaml        |  4 +-
+ packages/core/session/README.md               |  2 +
+ packages/core/session/README.zh.md            |  2 +
+ packages/core/session/src/index.ts            | 35 ++++++++++++
+ packages/core/session/tests/session.spec.ts   | 53 +++++++++++++++++++
+ 8 files changed, 108 insertions(+), 8 deletions(-)
 
+diff --git a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.i18n.yaml b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.i18n.yaml
+index 8c92e95dac..d250d0e4e9 100644
+--- a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.i18n.yaml
++++ b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md
+-2026-08-30-retain-ignorable-external-session-events.md: c796a8dab1a9d127473a341fc98bc9934429fbdf
+-2026-08-30-retain-ignorable-external-session-events.zh.md: 0c635b1082a31a0a35d01669ff9f933a1f218bee
++2026-08-30-retain-ignorable-external-session-events.md: 7fb525d0b6a346fceaf27adb44e443b622207092
++2026-08-30-retain-ignorable-external-session-events.zh.md: b831ae55a1eb53173c5096dd1f369ff19139f68f
+diff --git a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md
+index c796a8dab1..7fb525d0b6 100644
+--- a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md
++++ b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md
+@@ -8,12 +8,14 @@ English | [中文](2026-08-30-retain-ignorable-external-session-events.zh.md)
+ 
+ The session event envelope carries `ignorable?: true` so a reader can accept an unrecognized informational event without treating every vocabulary addition as a new session format. [PR #3087](https://github.com/deepseek-harness/deepseek-harness/pull/3087) removed the field after finding no first-party producer and made every unknown event required-on-read.
+ 
+-That producer inventory did not cover a third-party plugin that currently depends on the field. Without `ignorable`, a first-party reader rejects a stored session containing the plugin's informational event because the event is outside the repository-generated `KNOWN_SESSION_EVENT_TYPES`. The plugin has no replacement registration or versioning mechanism, so deleting the field before a replacement exists breaks a current external consumer.
++That producer inventory did not cover a third-party plugin that depends on the field. Without `ignorable`, a first-party reader rejects a stored session containing the plugin's informational event because the event is outside the repository-generated `KNOWN_SESSION_EVENT_TYPES`. The public session API also needs a narrow operation that writes the marker without allowing plugins to mutate the log or patch the Host.
+ 
+ ## Decision
+ 
+ The canonical `SessionEvent` envelope retains `ignorable?: true`, and every representation preserves it: seed validation, JSONL, API transport, generated catalogs, and test fixtures. `PersistenceCoordinator` continues to refuse an unknown event unless its stored envelope explicitly carries `ignorable: true`; absent remains required-on-read.
+ 
++`Session.appendIgnorable(type, data)` is the supported producer for an out-of-repository plugin's declaration-merged informational event. It accepts only non-surface event types absent from the current build's `KNOWN_SESSION_EVENT_TYPES`, performs the same detached JSON snapshot, commit, and `session/event` publication as `append()`, and writes `ignorable: true` into the committed envelope. Known first-party types and surface events fail this operation and remain required to use `append()`.
++
+ The field is removable only after a replacement supports the current third-party plugin across event production, persistence, reload, and transport, with an explicit cutover for sessions already containing the marker. The [session log versioning decision](2026-08-10-session-log-version-mechanism.md) continues to own the default-required safety rule and format-version policy.
+ 
+ ## Alternatives considered
+@@ -26,6 +28,8 @@ The field is removable only after a replacement supports the current third-party
+ 
+ **Register mounted plugin event names as known.** Not adopted as the removal mechanism because event-name registration alone does not classify whether absence is safe, and acceptance would depend on the reader's current composition rather than the stored record.
+ 
++**Add an `ignorable` option to `append()`.** Rejected because the general event operation would let a first-party producer accidentally make reconstruction-critical state optional. A separate operation keeps the exceptional promise explicit and can reject every generated first-party type.
++
+ ## Consequences
+ 
+-Third-party informational events can remain reloadable when their stored records carry the explicit marker, while unknown required events still fail loudly. The field remains part of the public event envelope, JSONL representation, transport types, generated references, and their tests until a replacement satisfies the cutover condition.
++Third-party informational events can be written through a public API and remain reloadable when their stored records carry the explicit marker, while unknown required events still fail loudly. Plugins do not need access to private session storage or a patched append implementation. The field remains part of the public event envelope, JSONL representation, transport types, generated references, and their tests until a replacement satisfies the cutover condition.
+diff --git a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.zh.md b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.zh.md
+index 0c635b1082..b831ae55a1 100644
+--- a/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.zh.md
++++ b/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.zh.md
+@@ -8,12 +8,14 @@ Status: implemented
+ 
+ 会话事件信封包含 `ignorable?: true`，读取器因此可以接受不认识的信息性事件，而不必把每次词汇增加都视为新的会话格式。[PR #3087](https://github.com/deepseek-harness/deepseek-harness/pull/3087) 在没有发现第一方生产方后删除了该字段，并把每个未知事件都改为读取必需项。
+ 
+-该生产方清单没有覆盖当前依赖此字段的一个第三方插件。没有 `ignorable` 时，第一方读取器会拒绝包含该插件信息性事件的已存会话，因为该事件不在仓库生成的 `KNOWN_SESSION_EVENT_TYPES` 中。插件没有可替代的注册或版本机制，因此在替代机制存在前删除该字段会破坏当前外部消费方。
++该生产方清单没有覆盖依赖此字段的一个第三方插件。没有 `ignorable` 时，第一方读取器会拒绝包含该插件信息性事件的已存会话，因为该事件不在仓库生成的 `KNOWN_SESSION_EVENT_TYPES` 中。公开会话 API 还需要一个窄操作来写入该标记，同时避免插件修改日志或 patch Host。
+ 
+ ## 决定
+ 
+ 标准 `SessionEvent` 信封保留 `ignorable?: true`，每种表示都保留它：seed 校验、JSONL、API 传输、生成目录与测试 fixture。`PersistenceCoordinator` 继续拒绝未知事件，除非已存信封显式带有 `ignorable: true`；字段不存在时仍表示读取必需。
+ 
++`Session.appendIgnorable(type, data)` 是仓库外插件产生声明合并信息性事件的受支持操作。它只接受不在当前构建 `KNOWN_SESSION_EVENT_TYPES` 中的非 surface 事件类型，执行与 `append()` 相同的分离式 JSON 快照、提交和 `session/event` 发布，并在已提交信封中写入 `ignorable: true`。已知第一方类型与 surface 事件会被该操作拒绝，且仍须使用 `append()`。
++
+ 只有替代机制在事件生产、持久化、重新加载与传输中都支持当前第三方插件，并为已包含该标记的会话提供显式切换方案后，才能删除此字段。[Session log 版本决策](2026-08-10-session-log-version-mechanism.zh.md)继续定义默认读取必需的安全规则与格式版本策略。
+ 
+ ## 曾考虑的替代方案
+@@ -26,6 +28,8 @@ Status: implemented
+ 
+ **把已挂载插件的事件名称注册为已知。** 不作为删除机制采用，因为只注册事件名称无法判定缺失该事件是否安全，而且接受结果会依赖读取器的当前组合，而不是已存记录。
+ 
++**给 `append()` 增加 `ignorable` 选项。** 不予采用，因为通用事件操作会使第一方生产方可能意外地把重建所需状态标记为可选。独立操作让这项例外承诺保持显式，并能拒绝每个生成的第一方类型。
++
+ ## 影响
+ 
+-第三方信息性事件的已存记录带有显式标记时可以继续重新加载，未知必需事件则仍会明确失败。在替代机制满足切换条件前，该字段继续属于公开事件信封、JSONL 表示、传输类型、生成引用及其测试。
++第三方信息性事件可以通过公开 API 写入，且已存记录带有显式标记时可以继续重新加载；未知必需事件仍会明确失败。插件无需访问私有会话存储或 patch 追加实现。在替代机制满足切换条件前，该字段继续属于公开事件信封、JSONL 表示、传输类型、生成引用及其测试。
+diff --git a/packages/core/session/README.i18n.yaml b/packages/core/session/README.i18n.yaml
+index 71c2828f9c..ca81dad0e4 100644
+--- a/packages/core/session/README.i18n.yaml
++++ b/packages/core/session/README.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write packages/core/session/README.md
+-README.md: f5cf910854203021a619cc786dfd13705927ffc1
+-README.zh.md: 385d7fd63a6e4dec9c23c9d38a352942d7dbc7f9
++README.md: e3688c87ca66a379efb3431c780ab7cab2c2e894
++README.zh.md: ddba9d4a268e7afb63a139aa8a8a8460aeb253b6
+diff --git a/packages/core/session/README.md b/packages/core/session/README.md
+index f5cf910854..e3688c87ca 100644
+--- a/packages/core/session/README.md
++++ b/packages/core/session/README.md
+@@ -49,6 +49,8 @@ session.deriveMessages()         // the derived model history
+ 
+ Surface events (`user/message`, `assistant/message`, `tool/result`) must declare how they join the ordered surface; raw chunks, boundaries, and other log-only events never produce a message.
+ 
++An out-of-repository plugin may declaration-merge an informational, log-only event type and commit it with `session.appendIgnorable(type, data)`. The method accepts only event types absent from this build's generated known-event list, applies the same detached JSON snapshot and publication checks as `append()`, and stores `ignorable: true` so a harness without the plugin can reload the record without interpreting it. Known first-party events and every surface event must use `append()` ([decision](../../../.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md)).
++
+ ### Read the log
+ 
+ `session.seq` reads the current log length without materializing an array, and `session.eventAt(seq)` reads one accepted, deeply frozen event by sequence number. `session.snapshotEvents(fromSeq?, toSeqExclusive?)` materializes a frozen, stable snapshot of a half-open range; a complete current snapshot is cached until the next append. Callers that only need a length or one event use `seq` or `eventAt()`.
+diff --git a/packages/core/session/README.zh.md b/packages/core/session/README.zh.md
+index 385d7fd63a..ddba9d4a26 100644
+--- a/packages/core/session/README.zh.md
++++ b/packages/core/session/README.zh.md
+@@ -49,6 +49,8 @@ session.deriveMessages()         // the derived model history
+ 
+ 表层事件（`user/message`、`assistant/message`、`tool/result`）必须声明如何进入有序 surface；原始分片、边界与其他仅日志事件从不产生消息。
+ 
++仓库外插件可以通过声明合并定义信息性的仅日志事件类型，再用 `session.appendIgnorable(type, data)` 提交。该方法只接受不在当前构建所生成已知事件列表中的类型，执行与 `append()` 相同的分离式 JSON 快照和发布检查，并存储 `ignorable: true`，使未加载该插件的 harness 可以重新加载记录而不解释它。已知第一方事件与所有 surface 事件必须使用 `append()`（[决策](../../../.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.zh.md)）。
++
+ ### 读取日志
+ 
+ `session.seq` 无需物化数组即可读取当前日志长度，`session.eventAt(seq)` 按序列号读取单个已接受且深度冻结的事件。`session.snapshotEvents(fromSeq?, toSeqExclusive?)` 会物化半开区间的冻结稳定快照；当前完整快照会缓存到下一次追加。只需要长度或单个事件的调用方使用 `seq` 或 `eventAt()`。
 diff --git a/packages/core/session/src/index.ts b/packages/core/session/src/index.ts
-index afa2ff3604..395473162f 100644
+index c55cc5fb6a..c3fa0bb1e1 100644
 --- a/packages/core/session/src/index.ts
 +++ b/packages/core/session/src/index.ts
 @@ -19,6 +19,7 @@ import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestC
@@ -20,7 +136,7 @@ index afa2ff3604..395473162f 100644
  
  export * from './types.ts'
  export { SessionPreparation } from './preparation.ts'
-@@ -605,6 +606,39 @@ export class Session {
+@@ -671,6 +672,39 @@ export class Session {
      ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
    ): SessionEvent<T> {
      const surfaceOpts: SurfaceIntent | undefined = opts[0]
@@ -60,7 +176,7 @@ index afa2ff3604..395473162f 100644
      const surfaceMetadata = {
        ...surfaceOpts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: surfaceOpts.sourceEventSeqs },
        ...surfaceOpts?.surfaceOp === undefined ? {} : { surfaceOp: surfaceOpts.surfaceOp },
-@@ -628,6 +662,7 @@ export class Session {
+@@ -694,6 +728,7 @@ export class Session {
        time: Date.now(),
        data: dataSnapshot,
        ...(surfaceMetadataSnapshot as { surfaceOp?: unknown; sourceEventSeqs?: unknown }),
@@ -69,10 +185,10 @@ index afa2ff3604..395473162f 100644
      this.surfaceManager.validateNext(event as SessionEvent)
  
 diff --git a/packages/core/session/tests/session.spec.ts b/packages/core/session/tests/session.spec.ts
-index 49c4e3f662..785e4ca330 100644
+index 790af32632..a80fba4a25 100644
 --- a/packages/core/session/tests/session.spec.ts
 +++ b/packages/core/session/tests/session.spec.ts
-@@ -11,6 +11,12 @@ import SessionStore, {
+@@ -13,6 +13,12 @@ import SessionStore, {
  } from '@deepseek-ai/dsh-session'
  import type { CreateSessionOptions, SessionEventType, SessionHeader, SessionSurface } from '@deepseek-ai/dsh-session'
  
@@ -85,7 +201,7 @@ index 49c4e3f662..785e4ca330 100644
  describe('Session', () => {
    it('exposes one stable readonly surface view', () => {
      const session = Session.create(SessionId('surface-view'))
-@@ -776,6 +782,26 @@ describe('Session', () => {
+@@ -778,6 +784,26 @@ describe('Session', () => {
      expect((event.data.content[0] as { text: string }).text).toBe('original')
    })
  
@@ -101,18 +217,18 @@ index 49c4e3f662..785e4ca330 100644
 +      ignorable: true,
 +    })
 +    expect(Object.isFrozen(event)).toBe(true)
-+    expect(Session.create(SessionId('external-plugin-replay'), structuredClone(session.events)).events[0])
++    expect(Session.create(SessionId('external-plugin-replay'), structuredClone(session.snapshotEvents())).snapshotEvents()[0])
 +      .toMatchObject({ type: 'external-plugin/audit', ignorable: true })
 +
 +    expect(() => session.appendIgnorable('todo/write' as never, { todos: [] } as never))
 +      .toThrow('known session event "todo/write" must use append()')
-+    expect(session.events).toHaveLength(1)
++    expect(session.snapshotEvents()).toHaveLength(1)
 +  })
 +
    it('reads a nested append-data getter once and stores its first JSON value', () => {
      const session = Session.create(SessionId('append-nested-drift'))
      let reads = 0
-@@ -1092,6 +1118,33 @@ describe('Session', () => {
+@@ -1130,6 +1156,33 @@ describe('Session', () => {
  
  
  describe('SessionStore', () => {
@@ -136,10 +252,10 @@ index 49c4e3f662..785e4ca330 100644
 +    })
 +
 +    const reopened = ctx.sessions.create(SessionId('external-plugin-reopened'), {
-+      seed: structuredClone(session.events),
++      seed: structuredClone(session.snapshotEvents()),
 +    })
-+    expect(reopened.events[0]).toEqual(written)
-+    expect(reopened.events[1]).toMatchObject({ type: 'session/end-seed', seq: 1, data: {} })
++    expect(reopened.snapshotEvents()[0]).toEqual(written)
++    expect(reopened.snapshotEvents()[1]).toMatchObject({ type: 'session/end-seed', seq: 1, data: {} })
 +    expect(reopened.surface.nodes).toEqual([])
 +  })
 +

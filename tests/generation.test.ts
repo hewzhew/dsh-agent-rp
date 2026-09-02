@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SurfaceOp } from '@deepseek-ai/dsh-session'
 import {
   decodeGenerationState,
   encodeGenerationState,
@@ -23,8 +23,9 @@ import { encodeWorldInfoConfiguration, readWorldInfoConfiguration } from '../src
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
 import { createCharacterCardSessionSeed } from '../src/import/character-card-seed.ts'
 import { appendMvuState, readCurrentSessionMvuState } from '../src/mvu.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
-function appendAssistant(session: Session, turn: number, text: string, surfaceOp: 'append' | { op: 'replace'; start: number; end: number } = 'append') {
+function appendAssistant(session: Session, turn: number, text: string, surfaceOp: SurfaceOp = 'append') {
   const sourceEventSeqs = surfaceOp === 'append' ? [] : [...session.surface.nodes]
   return session.append('assistant/message', {
     turn,
@@ -86,7 +87,7 @@ test('folds latest selectable reply group snapshots across replacement events', 
   session.append('user/message', createUserMessage({ content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
   const original = appendAssistant(session, 1, '第一版')
   const generated = appendAssistant(session, 2, '第二版')
-  const replacement = appendAssistant(session, 2, '第二版', { op: 'replace', start: 0, end: generated.seq })
+  const replacement = appendAssistant(session, 2, '第二版', { op: 'replace', start: SessionSeq(0), end: generated.seq })
   const groupId = '00000000-0000-4000-8000-000000000001'
   const firstState = {
     format: 0,
@@ -114,7 +115,7 @@ test('folds latest selectable reply group snapshots across replacement events', 
   } as const
   session.append('command/done', { commandId: CommandId('generation-2'), kind: 'success', text: encodeGenerationState(selectedState) })
 
-  const [group] = readGenerationGroups(session.events)
+  const [group] = readGenerationGroups(sessionEvents(session))
   assert.equal(group?.selectedVersionSeq, original.seq)
   assert.equal(group?.surfaceSeq, restored.seq)
   assert.deepEqual(session.deriveMessages().map(message => message.content[0]?.type === 'text' ? message.content[0].text : ''), ['第一版'])
@@ -142,7 +143,7 @@ test('rejects reply versions that reference a non-state event', () => {
     }),
   })
 
-  assert.throws(() => readGenerationGroups(session.events), /脚本状态不存在/u)
+  assert.throws(() => readGenerationGroups(sessionEvents(session)), /脚本状态不存在/u)
 })
 
 test('regenerates without exposing the rejected reply to the replacement request', async () => {
@@ -281,8 +282,8 @@ test('regenerates from pre-reply script state and restores each swipe state', as
     inbox: { hasPending: false },
     followup(message: ReturnType<typeof createUserMessage>) {
       session.append('user/message', message, { surfaceOp: 'append' })
-      requestState = readTavernHelperState(session.events)
-      requestWorldInfoRevision = readWorldInfoConfiguration(session.events).revision
+      requestState = readTavernHelperState(sessionEvents(session))
+      requestWorldInfoRevision = readWorldInfoConfiguration(sessionEvents(session)).revision
       requestMvu = readCurrentSessionMvuState(card, session)
       appendAssistant(session, 2,
         '干净的新版本<UpdateVariable><JSONPatch>[{"op":"delta","path":"/角色/等级","value":2}]</JSONPatch></UpdateVariable>')
@@ -313,7 +314,7 @@ test('regenerates from pre-reply script state and restores each swipe state', as
   assert.deepEqual(regeneratedState?.versions.map(version => version.artifactReplySeqs), [
     [original.seq], [replacementReplySeq],
   ])
-  assert.deepEqual(readTavernHelperState(session.events)?.scopes.message, { stat_data: { marker: 'before-reply' } })
+  assert.deepEqual(readTavernHelperState(sessionEvents(session))?.scopes.message, { stat_data: { marker: 'before-reply' } })
 
   const accepted = scriptState('replacement-reply', 'replacement-context')
   appendTavernHelperState(session, accepted)
@@ -325,7 +326,7 @@ test('regenerates from pre-reply script state and restores each swipe state', as
   session.append('command/done', {
     commandId: CommandId('generation-script-state-original'), kind: 'success', text: originalSelected.text,
   })
-  assert.deepEqual(readTavernHelperState(session.events)?.scopes.message, { stat_data: { marker: 'rejected-reply' } })
+  assert.deepEqual(readTavernHelperState(sessionEvents(session))?.scopes.message, { stat_data: { marker: 'rejected-reply' } })
   assert.deepEqual(readCurrentSessionMvuState(card, session), {
     statData: { 角色: { 等级: 9 } }, updateCount: 2,
   })
@@ -338,15 +339,15 @@ test('regenerates from pre-reply script state and restores each swipe state', as
   session.append('command/done', {
     commandId: CommandId('generation-script-state-replacement'), kind: 'success', text: replacementSelected.text,
   })
-  assert.deepEqual(readTavernHelperState(session.events)?.scopes.message, { stat_data: { marker: 'replacement-reply' } })
+  assert.deepEqual(readTavernHelperState(sessionEvents(session))?.scopes.message, { stat_data: { marker: 'replacement-reply' } })
   assert.deepEqual(readCurrentSessionMvuState(card, session), {
     statData: { 角色: { 等级: 4 } }, updateCount: 2,
   })
   assert.equal(decodeGenerationState(replacementSelected.text)?.selectedVersionSeq,
     decodeGenerationState(regenerated.text)?.versions[1]?.seq)
-  const reopened = Session.create(session.id, session.events)
-  assert.deepEqual(readTavernHelperState(reopened.events)?.scopes.message, { stat_data: { marker: 'replacement-reply' } })
-  assert.equal(readGenerationGroups(reopened.events)[0]?.selectedVersionSeq,
+  const reopened = Session.create(session.id, sessionEvents(session))
+  assert.deepEqual(readTavernHelperState(sessionEvents(reopened))?.scopes.message, { stat_data: { marker: 'replacement-reply' } })
+  assert.equal(readGenerationGroups(sessionEvents(reopened))[0]?.selectedVersionSeq,
     decodeGenerationState(regenerated.text)?.versions[1]?.seq)
 })
 
@@ -378,7 +379,7 @@ test('restores the selected reply when isolated regeneration produces no replace
 
   assert.deepEqual(session.deriveMessages().map(message => message.content.flatMap(block =>
     block.type === 'text' ? [block.text] : []).join('\n')), ['继续。', '保留这一版。'])
-  assert.deepEqual(readTavernHelperState(session.events)?.scopes.message, { stat_data: { marker: 'retained-reply' } })
+  assert.deepEqual(readTavernHelperState(sessionEvents(session))?.scopes.message, { stat_data: { marker: 'retained-reply' } })
 })
 
 test('continues from the selected MVU checkpoint without applying its old patch twice', async () => {

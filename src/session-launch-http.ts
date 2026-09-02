@@ -35,6 +35,7 @@ import {
 import { AGENT_RP_PRESET_ID } from './preset.ts'
 import { createStoryWorkspaceSessionSeed } from './session-story-workspace.ts'
 import type { StoryWorkspaceStore } from './story-workspace.ts'
+import { sessionEvents } from './session-events.ts'
 
 const MAX_REQUEST_BYTES = 32 * 1024
 
@@ -141,9 +142,9 @@ export async function launchAgentRpSession(
   if (request.kind === 'character' && request.memory === 'copy-active') {
     if (!agentHasAgentRpRuntime(agentPresets, source)) throw new Error('只能从角色会话继承记忆')
     if (source.status !== 'idle' || source.inbox.hasPending) throw new Error('请等待当前回复完成后再继承记忆')
-    const sourceCharacter = readActiveSessionCharacter(source.session.events)
+    const sourceCharacter = readActiveSessionCharacter(sessionEvents(source.session))
     if (sourceCharacter?.result.libraryId !== request.characterId) throw new Error('只能把记忆带给同一个角色')
-    const memory = readAgentRpMemoryHistory(source.session.events).active
+    const memory = readAgentRpMemoryHistory(sessionEvents(source.session)).active
     prepared = {
       ...prepared,
       seed: appendAgentRpMemorySeed(prepared.seed, memory, String(source.id)),

@@ -27,6 +27,7 @@ import type {
   RoleplayPromptTransformPlan,
   RoleplayTurnPromptPlan,
 } from '../src/roleplay-turn-plan.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const script = (placement: number, findRegex: string, replaceString: string): ImportedRegexScript => ({
   scriptName: `${placement}:${findRegex}`,
@@ -242,13 +243,13 @@ test('logs prompt-only replacements while the visible projection keeps append-or
   const second = applyPromptRegexSurface(session, transformPlan(active.frontend.regexScripts))
   assert.equal(second?.replacementCount, 0)
   assert.deepEqual(textHistory(session), ['masked one', 'prior answer', 'masked two'])
-  assert.equal(session.events.some(event => String(event.type) === 'agent-rp/prompt-regex-trace'), false)
+  assert.equal(sessionEvents(session).some(event => String(event.type) === 'agent-rp/prompt-regex-trace'), false)
 
-  const reopened = Session.create(SessionId('prompt-regex-reopened'), session.events)
+  const reopened = Session.create(SessionId('prompt-regex-reopened'), sessionEvents(session))
   assert.deepEqual(textHistory(reopened), ['masked one', 'prior answer', 'masked two'])
 
-  let state = agentRpProjectionDefinition.init(reopened.header)
-  for (const event of reopened.events) state = agentRpProjectionDefinition.apply(state, event)
+  let state = agentRpProjectionDefinition.init(reopened.header, reopened.inheritedEventCount)
+  for (const event of sessionEvents(reopened)) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(state.surface.map(message => message.text), ['secret one', 'old answer', 'secret two'])
   const projection = agentRpProjectionDefinition.wire.view(state)
   assert.deepEqual(projection.promptRegex, second)
@@ -284,10 +285,10 @@ test('records a no-op trace without rewriting a tool-call assistant in the follo
   const pair = toolPair(messages, callId)
   assert.equal(pair.resultIndex, pair.assistantIndex + 1)
   assert.equal(String(messages[pair.assistantIndex]?.id), assistantId)
-  assert.equal(session.events.some(event => event.type === 'assistant/message'
+  assert.equal(sessionEvents(session).some(event => event.type === 'assistant/message'
     && event.data.step === 2), false)
-  let state = agentRpProjectionDefinition.init(session.header)
-  for (const event of session.events) state = agentRpProjectionDefinition.apply(state, event)
+  let state = agentRpProjectionDefinition.init(session.header, session.inheritedEventCount)
+  for (const event of sessionEvents(session)) state = agentRpProjectionDefinition.apply(state, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(state).promptRegex, trace)
 })
 

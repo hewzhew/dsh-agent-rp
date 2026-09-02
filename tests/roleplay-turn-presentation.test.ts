@@ -38,6 +38,7 @@ import {
   readTavernHelperState,
 } from '../src/tavern-helper.ts'
 import { validateTavernMutationCause } from '../src/tavern-helper-command.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const modules = [
   { id: 'roleplay:reply-versions', source: 'native', phases: ['present'] },
@@ -145,7 +146,7 @@ function settle(session: Session, turnPlan: RoleplayTurnPlan, turn: number, defe
     turn,
     result: 'completed',
     plans: [{ step: 1, plan: turnPlan }],
-    events: session.events,
+    events: sessionEvents(session),
     after: runtime(turnPlan.stateReads),
     ...(deferred ? {
       contributions: [{ moduleId: 'adapter:tavern-helper', outcome: 'deferred' as const }],
@@ -183,11 +184,11 @@ test('presents the settled reply with pending browser state and survives replay'
     { moduleId: 'roleplay:reply-versions', outcome: 'applied', changes: 1 },
     { moduleId: 'adapter:tavern-helper', outcome: 'pending', changes: 0 },
   ])
-  const reopened = Session.create(session.id, session.events)
-  assert.deepEqual(readRoleplayTurnPresentations(reopened.events), [presentation])
-  assert.deepEqual(readCurrentRoleplayTurnPresentation(reopened.events), presentation)
-  let projected = agentRpProjectionDefinition.init(reopened.header)
-  for (const event of reopened.events) projected = agentRpProjectionDefinition.apply(projected, event)
+  const reopened = Session.create(session.id, sessionEvents(session))
+  assert.deepEqual(readRoleplayTurnPresentations(sessionEvents(reopened)), [presentation])
+  assert.deepEqual(readCurrentRoleplayTurnPresentation(sessionEvents(reopened)), presentation)
+  let projected = agentRpProjectionDefinition.init(reopened.header, reopened.inheritedEventCount)
+  for (const event of sessionEvents(reopened)) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.deepEqual(agentRpProjectionDefinition.wire.view(projected).presentation, presentation)
 })
 
@@ -338,7 +339,7 @@ test('records a blocked turn without inventing a selected reply', () => {
   const turnPlan = plan(session)
   const settlement = compileRoleplayTurnSettlement({
     sessionId: String(session.id), turn: 1, result: 'blocked',
-    plans: [{ step: 1, plan: turnPlan }], events: session.events, after: runtime(),
+    plans: [{ step: 1, plan: turnPlan }], events: sessionEvents(session), after: runtime(),
     contributions: [{ moduleId: 'adapter:tavern-helper', outcome: 'deferred' }],
   })
   const settlementEvent = appendRoleplayTurnSettlement(session, settlement)
@@ -373,7 +374,7 @@ test('attaches a late Tavern mutation to its causal reply after a later reply ex
   validateTavernMutationCause({ session } as never, mutation.cause)
   const mutated = applyTavernHelperMutation(initialTavern, mutation)
   const result = appendTavernHelperStateAttachment(session, mutated, cause, false)
-  const resultEvent = session.events[result.eventSeq]
+  const resultEvent = sessionEvents(session)[result.eventSeq]
   assert.equal(resultEvent?.type, 'agent-rp/tavern-state-attachment')
   if (resultEvent?.type !== 'agent-rp/tavern-state-attachment') throw new Error('missing attachment fixture')
   const attached = compileSessionRoleplayTurnPresentationUpdate(session, resultEvent)
@@ -387,9 +388,9 @@ test('attaches a late Tavern mutation to its causal reply after a later reply ex
     { id: 'state:mvu', status: 'attached', eventSeq: resultEvent.seq },
   ])
   assert.deepEqual(mutated.lastMutation?.cause, cause)
-  assert.equal(readTavernHelperState(session.events)?.revision, 0)
-  let projected = agentRpProjectionDefinition.init(session.header)
-  for (const event of session.events) projected = agentRpProjectionDefinition.apply(projected, event)
+  assert.equal(readTavernHelperState(sessionEvents(session))?.revision, 0)
+  let projected = agentRpProjectionDefinition.init(session.header, session.inheritedEventCount)
+  for (const event of sessionEvents(session)) projected = agentRpProjectionDefinition.apply(projected, event)
   assert.equal(agentRpProjectionDefinition.wire.view(projected).tavern?.revision, 0)
   assert.throws(() => validateTavernMutationCause({ session } as never, {
     ...cause, sessionId: 'another-session',
@@ -509,7 +510,7 @@ test('reply versions restore branch-local state and artifacts together after rep
     format: 0, scope: 'chat', variables: { marker: 'original-late' }, cause,
   })
   const attachment = appendTavernHelperStateAttachment(session, originalLate, cause, false)
-  const attachmentEvent = session.events[attachment.eventSeq]
+  const attachmentEvent = sessionEvents(session)[attachment.eventSeq]
   if (attachmentEvent?.type !== 'agent-rp/tavern-state-attachment') throw new Error('missing attachment fixture')
   const attachmentPresentation = compileSessionRoleplayTurnPresentationUpdate(session, attachmentEvent)
   if (attachmentPresentation === undefined) throw new Error('missing attachment presentation fixture')
@@ -529,7 +530,7 @@ test('reply versions restore branch-local state and artifacts together after rep
   const selected = decodeGenerationState(originalResult.text)
   assert.equal(selected?.selectedVersionSeq, original.seq)
   assert.equal(selected?.versions[0]?.tavernStateSeq, attachment.eventSeq)
-  assert.equal(readTavernHelperState(session.events)?.scopes.chat.marker, 'original-late')
+  assert.equal(readTavernHelperState(sessionEvents(session))?.scopes.chat.marker, 'original-late')
   assert.deepEqual(originalPresentation.present.artifacts?.map(artifact => artifact.artifactId), [
     String(originalArtifact.attachment.attachmentId),
   ])
@@ -545,14 +546,14 @@ test('reply versions restore branch-local state and artifacts together after rep
   const alternativePresentation = compileSessionRoleplayTurnPresentationUpdate(session, alternativeResultEvent)
   if (alternativePresentation === undefined) throw new Error('missing alternative branch presentation fixture')
   appendRoleplayTurnPresentation(session, alternativePresentation)
-  assert.equal(readTavernHelperState(session.events)?.scopes.chat.marker, 'alternative')
+  assert.equal(readTavernHelperState(sessionEvents(session))?.scopes.chat.marker, 'alternative')
   assert.deepEqual(alternativePresentation.present.artifacts?.map(artifact => artifact.artifactId), [
     String(alternativeArtifact.attachment.attachmentId),
   ])
 
-  const reopened = Session.create(session.id, session.events)
-  assert.equal(readTavernHelperState(reopened.events)?.scopes.chat.marker, 'alternative')
-  assert.deepEqual(readCurrentRoleplayTurnPresentation(reopened.events)?.present.artifacts
+  const reopened = Session.create(session.id, sessionEvents(session))
+  assert.equal(readTavernHelperState(sessionEvents(reopened))?.scopes.chat.marker, 'alternative')
+  assert.deepEqual(readCurrentRoleplayTurnPresentation(sessionEvents(reopened))?.present.artifacts
     ?.map(artifact => artifact.artifactId), [String(alternativeArtifact.attachment.attachmentId)])
 })
 
@@ -581,7 +582,7 @@ test('presents arbitrary runtime modules without a source-specific core branch',
   const reply = appendReply(session, 1, '午夜钟声响起。')
   const settlement = compileRoleplayTurnSettlement({
     sessionId: String(session.id), turn: 1, result: 'completed',
-    plans: [{ step: 1, plan: genericPlan }], events: session.events, after: genericRuntime,
+    plans: [{ step: 1, plan: genericPlan }], events: sessionEvents(session), after: genericRuntime,
   })
   const settlementEvent = appendRoleplayTurnSettlement(session, settlement)
   const initial = compileInitialRoleplayTurnPresentation({

@@ -55,6 +55,7 @@ export class Session {
     this.events = events
   }
   static create(id, events = []) { return new Session(id, events) }
+  snapshotEvents() { return this.events.slice() }
   appendIgnorable(type, data) {
     const event = { type, seq: this.events.length, time: 1, data, ignorable: true }
     this.events.push(event)

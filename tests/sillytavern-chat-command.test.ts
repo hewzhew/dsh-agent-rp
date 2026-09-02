@@ -9,6 +9,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { CharacterLibrary } from '../src/character-library.ts'
 import { executeSillyTavernChatCommand } from '../src/sillytavern-chat-command.ts'
 import { SillyTavernChatLibrary } from '../src/sillytavern-chat-library.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function setup(context: test.TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-chat-command-'))
@@ -32,5 +33,5 @@ test('rejects the obsolete live-Agent JSONL migration command', (context) => {
     agent,
     rawInput: JSON.stringify({ format: 0, importId: upload.id }),
   }), /旧聊天迁移入口已停用/u)
-  assert.equal(agent.session.events.some(event => event.type === 'turn/start'), false)
+  assert.equal(sessionEvents(agent.session).some(event => event.type === 'turn/start'), false)
 })

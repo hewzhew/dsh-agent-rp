@@ -87,7 +87,7 @@ function parseArguments(args) {
     }
     fail(`unknown argument ${JSON.stringify(arg)}`)
   }
-  const fallbackRoot = resolve(repositoryRoot, '../dsh-alpha2-agent-rp')
+  const fallbackRoot = resolve(repositoryRoot, '../dsh-alpha5-host')
   const requestedRoot = dshRoot ?? (existsSync(fallbackRoot) ? fallbackRoot : undefined)
   if (requestedRoot === undefined) {
     fail('set DSH_ALPHA_ROOT or pass --dsh-root with the compatible DSH alpha source checkout')

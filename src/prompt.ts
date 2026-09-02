@@ -13,6 +13,7 @@ import { PROMPT_REGEX_SOURCE_MARKER, readPromptRegexSourceMarker } from './front
 import { substituteSillyTavernIdentityMacros } from './sillytavern-identity-macro.ts'
 import { createNativeWorldEngine } from './world-engine.ts'
 import { hasTurnVariantRoleplaySyntax, ReplayableRoleplayMacros } from './roleplay-macro.ts'
+import { sessionEvents } from './session-events.ts'
 
 type DerivedSessionMessage = ReturnType<Session['deriveMessages']>[number]
 
@@ -275,7 +276,7 @@ function preRegexDialogue(session: Session): DerivedSessionMessage[] {
       (message.source as unknown as Record<string, unknown>)[PROMPT_REGEX_SOURCE_MARKER],
     )
     if (marker === undefined) return message
-    const event = session.events[marker.originalSeq]
+    const event = sessionEvents(session)[marker.originalSeq]
     const original = event?.type === 'user/message'
       ? event.data
       : event?.type === 'assistant/message'

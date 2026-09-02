@@ -3,7 +3,7 @@ import test from 'node:test'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { ToolCallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { validateJsonSchemaValue, valueSchemaSpecToJsonSchema } from '@deepseek-ai/dsh-tools'
 import { MEMORY_VALUE_SCHEMA } from '../src/index.ts'
 import {
@@ -16,6 +16,7 @@ import {
 } from '../src/memory.ts'
 import { executeAgentRpMemoryCommand } from '../src/memory-command.ts'
 import { renderMemoryContext } from '../src/prompt.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 test('opens model memory only for explicit persistent user intent', () => {
   const message = (text: string) => createUserMessage({
@@ -30,7 +31,7 @@ test('opens model memory only for explicit persistent user intent', () => {
   })), false)
 })
 
-function appendRememberCall(session: Session, callId: string, args: object): number {
+function appendRememberCall(session: Session, callId: string, args: object): SessionSeq {
   return session.append('tool/call', {
     turn: 1,
     step: 1,
@@ -44,7 +45,7 @@ function appendRememberResult(
   session: Session,
   callId: string,
   record: AgentRpMemoryRecord,
-  callSeq: number,
+  callSeq: SessionSeq,
 ): void {
   session.append('tool/result', {
     turn: 1,
@@ -92,14 +93,14 @@ test('persists one normalized memory and exposes it to the next prompt snapshot'
     sourceEventSeq,
   })
   assert.deepEqual(validateJsonSchemaValue(valueSchemaSpecToJsonSchema(MEMORY_VALUE_SCHEMA), record), [])
-  assert.deepEqual(readAgentRpMemoryHistory(session.events).active, [record])
-  assert.match(renderMemoryContext(session.events), /用户喝咖啡时不加糖/u)
-  assert.match(renderMemoryContext(session.events), new RegExp(`\\[memory-${sourceEventSeq} \\| preference \\|`, 'u'))
-  assert.match(renderMemoryContext(session.events), /持久记忆只读/u)
-  assert.doesNotMatch(renderMemoryContext(session.events), /remember|supersedes/u)
-  assert.match(renderMemoryContext(session.events, true), /调用 remember/u)
+  assert.deepEqual(readAgentRpMemoryHistory(sessionEvents(session)).active, [record])
+  assert.match(renderMemoryContext(sessionEvents(session)), /用户喝咖啡时不加糖/u)
+  assert.match(renderMemoryContext(sessionEvents(session)), new RegExp(`\\[memory-${sourceEventSeq} \\| preference \\|`, 'u'))
+  assert.match(renderMemoryContext(sessionEvents(session)), /持久记忆只读/u)
+  assert.doesNotMatch(renderMemoryContext(sessionEvents(session)), /remember|supersedes/u)
+  assert.match(renderMemoryContext(sessionEvents(session), true), /调用 remember/u)
   assert.match(renderMemoryContext([], true), /跨轮保留意图/u)
-  assert.doesNotMatch(renderMemoryContext(session.events), /来源事件/u)
+  assert.doesNotMatch(renderMemoryContext(sessionEvents(session)), /来源事件/u)
 })
 
 test('keeps correction history while only the replacement remains active', () => {
@@ -122,11 +123,11 @@ test('keeps correction history while only the replacement remains active', () =>
   const replacement = prepareAgentRpMemory(session, 'remember-2', replacementInput)
   appendRememberResult(session, 'remember-2', replacement, replacementCallSeq)
 
-  const history = readAgentRpMemoryHistory(session.events)
+  const history = readAgentRpMemoryHistory(sessionEvents(session))
   assert.deepEqual(history.all, [old, replacement])
   assert.deepEqual(history.active, [replacement])
-  assert.doesNotMatch(renderMemoryContext(session.events), /杭州/u)
-  assert.match(renderMemoryContext(session.events), /苏州/u)
+  assert.doesNotMatch(renderMemoryContext(sessionEvents(session)), /杭州/u)
+  assert.match(renderMemoryContext(sessionEvents(session)), /苏州/u)
 })
 
 test('rejects a duplicate active topic unless the existing record is superseded', () => {
@@ -163,21 +164,21 @@ test('lets the user correct and forget active memory without invoking the model'
   assert.deepEqual(parseAgentRpMemoryCommandRequest(JSON.stringify(correction)), correction)
   runMemoryCommand(agent, JSON.stringify(correction), 1, true)
 
-  const corrected = readAgentRpMemoryHistory(agent.session.events)
+  const corrected = readAgentRpMemoryHistory(sessionEvents(agent.session))
   assert.equal(corrected.all.length, 2)
   assert.deepEqual(corrected.active.map(record => record.text), ['用户希望红茶不要加柠檬'])
-  assert.doesNotMatch(renderMemoryContext(agent.session.events), /喜欢在红茶里加柠檬/u)
-  assert.match(renderMemoryContext(agent.session.events), /红茶不要加柠檬/u)
+  assert.doesNotMatch(renderMemoryContext(sessionEvents(agent.session)), /喜欢在红茶里加柠檬/u)
+  assert.match(renderMemoryContext(sessionEvents(agent.session)), /红茶不要加柠檬/u)
 
   runMemoryCommand(agent, JSON.stringify({
     format: 0,
     operation: 'forget',
     id: corrected.active[0]!.id,
   }), 2)
-  const forgotten = readAgentRpMemoryHistory(agent.session.events)
+  const forgotten = readAgentRpMemoryHistory(sessionEvents(agent.session))
   assert.equal(forgotten.all.length, 2)
   assert.deepEqual(forgotten.active, [])
-  assert.equal(renderMemoryContext(agent.session.events), '')
+  assert.equal(renderMemoryContext(sessionEvents(agent.session)), '')
 })
 
 test('lets the user add normalized memory without invoking the model', () => {
@@ -196,12 +197,12 @@ test('lets the user add normalized memory without invoking the model', () => {
   })
   runMemoryCommand(agent, JSON.stringify(request), 1)
 
-  const history = readAgentRpMemoryHistory(agent.session.events)
+  const history = readAgentRpMemoryHistory(sessionEvents(agent.session))
   assert.equal(history.all.length, 1)
   assert.deepEqual(history.active.map(record => ({ kind: record.kind, subject: record.subject, text: record.text })), [{
     kind: 'relationship', subject: '称呼', text: '角色称呼用户为小满',
   }])
-  assert.match(renderMemoryContext(agent.session.events), /角色称呼用户为小满/u)
+  assert.match(renderMemoryContext(sessionEvents(agent.session)), /角色称呼用户为小满/u)
   assert.throws(() => {
     runMemoryCommand(agent, JSON.stringify({ ...request, subject: '称呼', text: '重复内容' }), 2)
   }, /已经有一条有效记忆/u)
@@ -248,12 +249,12 @@ test('copies only active memory into a new Session where it remains editable', (
   appendRememberResult(source.session, 'remember-source-2', retained, retainedCallSeq)
   runMemoryCommand(source, JSON.stringify({ format: 0, operation: 'forget', id: forgotten.id }), 1)
 
-  const activeSource = readAgentRpMemoryHistory(source.session.events).active
+  const activeSource = readAgentRpMemoryHistory(sessionEvents(source.session)).active
   const target = { session: Session.create(
     SessionId('agent-rp-memory-target'),
     appendAgentRpMemorySeed([], activeSource, String(source.session.id)),
   ) } as Agent
-  const inherited = readAgentRpMemoryHistory(target.session.events)
+  const inherited = readAgentRpMemoryHistory(sessionEvents(target.session))
   assert.equal(inherited.all.length, 1)
   assert.deepEqual(inherited.active.map(record => ({ kind: record.kind, subject: record.subject, text: record.text })), [{
     kind: 'preference', subject: '红茶', text: '用户喝红茶不加柠檬',
@@ -268,14 +269,14 @@ test('copies only active memory into a new Session where it remains editable', (
     subject: '红茶',
     text: '用户只在冬天喝红茶',
   }), 2)
-  const corrected = readAgentRpMemoryHistory(target.session.events)
+  const corrected = readAgentRpMemoryHistory(sessionEvents(target.session))
   assert.deepEqual(corrected.active.map(record => record.text), ['用户只在冬天喝红茶'])
   runMemoryCommand(target, JSON.stringify({
     format: 0,
     operation: 'forget',
     id: corrected.active[0]?.id,
   }), 3)
-  assert.deepEqual(readAgentRpMemoryHistory(target.session.events).active, [])
+  assert.deepEqual(readAgentRpMemoryHistory(sessionEvents(target.session)).active, [])
 })
 
 test('rejects blank memory and invalid correction without appending state', () => {
@@ -303,7 +304,7 @@ test('rejects blank memory and invalid correction without appending state', () =
     text: '有效内容',
     supersedes: 'memory-999',
   }), /missing or inactive/u)
-  assert.equal(readAgentRpMemoryHistory(session.events).all.length, 0)
+  assert.equal(readAgentRpMemoryHistory(sessionEvents(session)).all.length, 0)
 })
 
 test('rejects a source that is not the direct remember tool call', () => {
@@ -339,5 +340,5 @@ test('rejects a durable record that diverges from its source call arguments', ()
     sourceEventSeq,
   }, sourceEventSeq)
 
-  assert.throws(() => readAgentRpMemoryHistory(session.events), /does not match its source call arguments/u)
+  assert.throws(() => readAgentRpMemoryHistory(sessionEvents(session)), /does not match its source call arguments/u)
 })

@@ -32,6 +32,7 @@ import type {
   RoleplayPromptTransformPlan,
   RoleplayTurnPromptPlan,
 } from './roleplay-turn-plan.ts'
+import { sessionEvents } from './session-events.ts'
 
 interface DialogueNode {
   readonly current: Extract<SessionEvent, { type: 'user/message' | 'assistant/message' }>
@@ -61,10 +62,10 @@ function dialogueEvent(event: SessionEvent | undefined): event is DialogueNode['
 
 function dialogueNodes(session: Session): DialogueNode[] {
   return session.surface.nodes.flatMap(seq => {
-    const current = session.events[seq]
+    const current = sessionEvents(session)[seq]
     if (!dialogueEvent(current)) return []
     const marker = sourceMarker(messageOf(current).source)
-    const candidate = marker === undefined ? current : session.events[marker.originalSeq]
+    const candidate = marker === undefined ? current : sessionEvents(session)[marker.originalSeq]
     const original = dialogueEvent(candidate) && candidate.type === current.type ? candidate : current
     return [{ current, original, role: current.type === 'user/message' ? 'user' as const : 'assistant' as const }]
   })
@@ -256,7 +257,7 @@ export function applyPromptRegexSurface(
   session: Session,
   plan: RoleplayPromptTransformPlan,
 ): PromptRegexTraceRecord | undefined {
-  const position = openStep(session.events)
+  const position = openStep(sessionEvents(session))
   if (position === undefined) return undefined
   const { card, scripts } = executionProgram(plan)
   const nodes = dialogueNodes(session)

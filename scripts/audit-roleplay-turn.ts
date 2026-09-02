@@ -75,6 +75,7 @@ import {
   initializeTavernHelperPresetState,
   initializeTavernHelperState,
 } from '../src/tavern-helper.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 type Counter = Readonly<Record<string, number>>
 
@@ -396,7 +397,7 @@ export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<
     source: { kind: 'user' },
     content: [{ type: 'text', text: '[agent-rp:model-free-audit-input]' }],
   })
-  const turn = nextTurn(session.events)
+  const turn = nextTurn(sessionEvents(session))
   session.append('turn/start', { turn })
   const before = resolveSessionRoleplayRuntime({
     session,
@@ -417,31 +418,31 @@ export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<
     deployment,
     templateEngineAvailable: true,
   })
-  const settlementEvent = session.events.find(event => event.type === 'agent-rp/turn-settlement'
+  const settlementEvent = sessionEvents(session).find(event => event.type === 'agent-rp/turn-settlement'
     && event.data.turn === turn)
   if (settlementEvent?.type !== 'agent-rp/turn-settlement') {
     throw new Error('Roleplay turn audit settlement recovery failed')
   }
   const settlement = settlementEvent.data
   const stagedState = collectRoleplayStagedStateSettlement({
-    events: session.events,
+    events: sessionEvents(session),
     sessionId: String(session.id),
     turn,
     plans: settlement.plans,
   })
-  const presentation = readCurrentRoleplayTurnPresentation(session.events)
+  const presentation = readCurrentRoleplayTurnPresentation(sessionEvents(session))
   if (presentation === undefined || presentation.settlementSeq !== settlementEvent.seq) {
     throw new Error('Roleplay turn audit presentation recovery failed')
   }
 
-  const reopened = Session.create(session.id, structuredClone(session.events))
-  const recoveredSettlement = readRoleplayTurnSettlements(reopened.events).find(value => value.turn === turn)
-  const recoveredPresentation = readRoleplayTurnPresentations(reopened.events).find(value =>
+  const reopened = Session.create(session.id, structuredClone(sessionEvents(session)))
+  const recoveredSettlement = readRoleplayTurnSettlements(sessionEvents(reopened)).find(value => value.turn === turn)
+  const recoveredPresentation = readRoleplayTurnPresentations(sessionEvents(reopened)).find(value =>
     value.settlementSeq === settlementEvent.seq)
   const settlementRecovered = recoveredSettlement !== undefined && equalJson(recoveredSettlement, settlement)
   const presentationRecovered = recoveredPresentation !== undefined
     && equalJson(recoveredPresentation, presentation)
-  const currentPresentation = readCurrentRoleplayTurnPresentation(reopened.events)
+  const currentPresentation = readCurrentRoleplayTurnPresentation(sessionEvents(reopened))
   const replayed = resolveSessionRoleplayRuntime({
     session: reopened,
     deployment,
@@ -449,7 +450,7 @@ export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<
     templateEngineAvailable: true,
   })
   const receipt = recoveredSettlement?.plans[0]?.receipt
-  const planRecord = reopened.events.find(event => event.type === 'agent-rp/turn-plan'
+  const planRecord = sessionEvents(reopened).find(event => event.type === 'agent-rp/turn-plan'
     && event.data.turn === turn && event.data.reference.step === 1)
   const preDispatchReceiptRecovered = planRecord?.type === 'agent-rp/turn-plan'
   const recallReceiptRecovered = receipt?.recall !== undefined && equalJson(receipt.recall, plan.recall)
@@ -508,9 +509,9 @@ export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<
     })
   const stateReferencesResolve = receipt !== undefined && receipt.stateReads.every(read =>
     replayed.snapshot.state.some(binding => binding.id === read.id)
-      && (read.eventSeq === undefined || reopened.events[read.eventSeq]?.seq === read.eventSeq))
+      && (read.eventSeq === undefined || sessionEvents(reopened)[read.eventSeq]?.seq === read.eventSeq))
   const memoryReferencesResolve = receipt !== undefined && receipt.memoryReads.every(read =>
-    reopened.events[read.sourceEventSeq]?.seq === read.sourceEventSeq)
+    sessionEvents(reopened)[read.sourceEventSeq]?.seq === read.sourceEventSeq)
   const currentReplyMatches = currentPresentation?.current === true
     && currentPresentation.selectedReply?.sourceSeq === reply.seq
     && currentPresentation.selectedReply?.messageId === String(reply.data.message.id)
@@ -602,7 +603,7 @@ export async function auditRoleplayTurn(input: RoleplayTurnAuditInput): Promise<
       moduleOutcomes: counter(presentation.present.modules.map(module => module.outcome)),
     },
     replay: {
-      events: reopened.events.length,
+      events: sessionEvents(reopened).length,
       settlementRecovered,
       presentationRecovered,
       preDispatchReceiptRecovered,

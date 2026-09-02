@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SurfaceOp } from '@deepseek-ai/dsh-session'
 import { encodeGenerationState } from '../src/generation.ts'
 import {
   MAX_SILLYTAVERN_CHAT_BYTES,
@@ -12,7 +12,7 @@ import {
 } from '../src/import/sillytavern-chat.ts'
 import { exportSillyTavernSessionChat } from '../src/sillytavern-chat-export.ts'
 
-function appendAssistant(session: Session, text: string, surfaceOp: 'append' | { op: 'replace'; start: number; end: number } = 'append') {
+function appendAssistant(session: Session, text: string, surfaceOp: SurfaceOp = 'append') {
   return session.append('assistant/message', {
     turn: 1,
     step: 1,

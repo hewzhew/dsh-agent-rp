@@ -2,6 +2,7 @@
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { readGenerationGroups } from './generation.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Identity and provenance included in one exported chat. */
 export interface SillyTavernSessionExportOptions {
@@ -46,18 +47,18 @@ export function exportSillyTavernSessionChat(
   session: Session,
   options: SillyTavernSessionExportOptions,
 ): SillyTavernSessionExport {
-  const generations = readGenerationGroups(session.events)
+  const generations = readGenerationGroups(sessionEvents(session))
   const rows: Record<string, unknown>[] = [{
     user_name: options.userName,
     character_name: options.characterName,
-    create_date: sendDate(session.events[0]?.time ?? Date.now()),
+    create_date: sendDate(sessionEvents(session)[0]?.time ?? Date.now()),
     chat_metadata: {
       exported_from: 'dsh-agent-rp',
       source_session_id: options.sessionId,
     },
   }]
   for (const seq of session.surface.nodes) {
-    const event = session.events[seq]
+    const event = sessionEvents(session)[seq]
     if (event === undefined) continue
     const message = text(event)
     if (message === undefined || message.trim() === '') continue

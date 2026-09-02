@@ -1,6 +1,6 @@
 /** Durable source-neutral resource choices for one Roleplay experience. */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   type RoleplayResourceKind,
   type RoleplayResourceSelection,
@@ -93,7 +93,7 @@ export function appendRoleplayExperienceSelection(
   const data = parseRoleplayExperienceSelection({ format: 0, ...value })
   return Object.freeze([...structuredClone(events), {
     type: 'agent-rp/experience-selection' as const,
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: Date.now(),
     ignorable: true,
     data,

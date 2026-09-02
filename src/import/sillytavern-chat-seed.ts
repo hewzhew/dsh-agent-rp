@@ -7,6 +7,7 @@ import {
 import {
   Session,
   SessionId,
+  SessionSeq,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -17,6 +18,7 @@ import {
   type SillyTavernChatCommandRecord,
 } from '../sillytavern-chat-protocol.ts'
 import type { ImportedSillyTavernChat, ImportedSillyTavernChatMessage } from './types.ts'
+import { sessionEvents } from '../session-events.ts'
 
 /** Durable import metadata that points back to the original JSONL attachment. */
 export interface SillyTavernChatImportRecord {
@@ -150,7 +152,7 @@ function appendMessageEvents(
   time: number,
 ): void {
   const push = (event: SessionSeedEvent): void => {
-    events.push({ ...event, seq: events.length } as SessionEvent)
+    events.push({ ...event, seq: SessionSeq(events.length) } as SessionEvent)
   }
   push({ type: 'turn/start', time, data: { turn } })
   push({ type: 'step/start', time, data: { turn, step: 1 } })
@@ -198,7 +200,7 @@ export function createSillyTavernChatSeed(
   if (!/\.jsonl$/iu.test(attachment.name)) throw new Error('SillyTavern chat source must be a .jsonl file')
   const events: SessionEvent[] = [{
     type: 'agent-rp/sillytavern-chat-import',
-    seq: 0,
+    seq: SessionSeq(0),
     time: Date.now(),
     ignorable: true,
     data: metadata(chat, attachment),
@@ -212,5 +214,5 @@ export function createSillyTavernChatSeed(
     appendMessageEvents(events, message, turn, eventTime(message, fallbackTime))
   }
   const validated = Session.create(SessionId('agent-rp-sillytavern-import-validation'), events)
-  return Object.freeze(validated.events.slice(0, events.length))
+  return Object.freeze(sessionEvents(validated).slice(0, events.length))
 }

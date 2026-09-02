@@ -3,6 +3,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { configurePreset, parsePresetConfigurationRequest } from './preset-configuration-core.ts'
 import { readActiveSessionPreset } from './import/session-preset.ts'
+import { sessionEvents } from './session-events.ts'
 
 export { canEditPresetPrompt, canTogglePresetPrompt, configurePreset, parsePresetConfigurationRequest } from './preset-configuration-core.ts'
 export type { PresetConfigurationRequest } from './preset-configuration-types.ts'
@@ -12,7 +13,7 @@ export function configurePresetFromCommand(invocation: {
   readonly agent: Agent
   readonly rawInput: string
 }): { readonly kind: 'success' } {
-  const events = invocation.agent.session.events
+  const events = sessionEvents(invocation.agent.session)
   const current = events.at(-1)
   if (current?.type !== 'command/run'
     || current.data.name !== 'rp-preset-configure'

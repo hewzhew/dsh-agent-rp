@@ -16,6 +16,7 @@ import { installAgentRp } from '../src/index.ts'
 import { parseSillyTavernPresetJson } from '../src/import/sillytavern-preset.ts'
 import { createPresetSessionSeed, readActiveSessionPreset } from '../src/import/session-preset.ts'
 import { installBundledAgentRpPreset } from '../src/preset.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const SOURCE = resolve('preset')
 
@@ -197,9 +198,9 @@ test('creates an imported preset Session seed before a model turn', () => {
     name: 'V18.json',
     mediaType: 'application/json',
   }
-  const imported = Session.create(SessionId('preset-imported'), createPresetSessionSeed(source.events, preset, attachment))
+  const imported = Session.create(SessionId('preset-imported'), createPresetSessionSeed(sessionEvents(source), preset, attachment))
 
-  assert.equal(readActiveSessionPreset(imported.events)?.preset.name, 'V18')
-  assert.equal(readActiveSessionPreset(imported.events)?.result.enabledCount, 1)
+  assert.equal(readActiveSessionPreset(sessionEvents(imported))?.preset.name, 'V18')
+  assert.equal(readActiveSessionPreset(sessionEvents(imported))?.result.enabledCount, 1)
   assert.equal(imported.deriveMessages().length, 0)
 })

@@ -1,6 +1,7 @@
 /** Built-in library adapters for the source-neutral Roleplay resource catalog. */
 
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { CharacterLibrary } from './character-library.ts'
 import { createCharacterCardSessionSeed } from './import/character-card-seed.ts'
 import { readActiveSessionCharacter, type FileAttachmentRef } from './import/session-character.ts'
@@ -247,7 +248,7 @@ export function roleplayLibraryResourceProviders(libraries: {
       return {
         events: [...structuredClone(input.events), {
           type: 'agent-rp/persona-seed' as const,
-          seq: input.events.length,
+          seq: SessionSeq(input.events.length),
           time: Date.now(),
           ignorable: true,
           data: {

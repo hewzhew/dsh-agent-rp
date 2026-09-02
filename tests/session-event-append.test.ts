@@ -8,6 +8,7 @@ import {
   supportsAgentRpSessionEvents,
 } from '../src/session-event-append.ts'
 import { LEGACY_AGENT_RP_EVENT_TYPES } from '../src/session-repair.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 test('keeps the complete Agent RP vocabulary on the replay-safe writer', () => {
   assert.equal(AGENT_RP_SESSION_EVENT_TYPES.length, 39)
@@ -32,7 +33,7 @@ test('writes ignorable Agent RP events that a Host without the plugin may replay
   assert.equal(written.type, 'agent-rp/state')
   assert.deepEqual(written.data, data)
   assert.equal(written.ignorable, true)
-  const replayed = Session.create(session.id, structuredClone(session.events))
-  assert.deepEqual(replayed.events.slice(0, session.events.length), session.events)
-  assert.equal(replayed.events.at(-1)?.type, 'session/end-seed')
+  const replayed = Session.create(session.id, structuredClone(sessionEvents(session)))
+  assert.deepEqual(sessionEvents(replayed).slice(0, sessionEvents(session).length), sessionEvents(session))
+  assert.equal(sessionEvents(replayed).at(-1)?.type, 'session/end-seed')
 })

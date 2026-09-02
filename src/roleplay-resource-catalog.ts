@@ -14,6 +14,7 @@ import {
   type RoleplayWorldCastSlotDetail,
   type RoleplayWorldResourceDetail,
 } from './roleplay-resource-catalog-protocol.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Host service used by trusted plugins to publish discoverable Roleplay resources. */
 export const ROLEPLAY_RESOURCE_CATALOG_KEY = 'agentRp.resources'
@@ -459,7 +460,7 @@ export class RoleplayResourceCatalog {
       throw new Error(`Roleplay resource provider ${JSON.stringify(located.providerId)} returned an invalid title`)
     }
     return Object.freeze({
-      events: Object.freeze(validated.events.slice(0, next.length)),
+      events: Object.freeze(sessionEvents(validated).slice(0, next.length)),
       ...(title === undefined ? {} : { title }),
     })
   }

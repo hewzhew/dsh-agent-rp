@@ -8,6 +8,7 @@ import { executeGenerationCommand, readGenerationGroups } from '../src/generatio
 import { createRoleplayNarrativeReviewWorker } from '../src/roleplay-narrative-review-worker.ts'
 import { RoleplayTurnWorkerRegistry, type RoleplayTurnWorkerInput } from '../src/roleplay-turn-worker.ts'
 import type { BoundRoleplayTurnPlan } from '../src/roleplay-turn-settlement.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 function input(session: Session, step = 1): RoleplayTurnWorkerInput {
   return {
@@ -40,7 +41,7 @@ test('runs review before settlement and isolates one Worker failure', async () =
     ['review', 'failed'],
     ['state', 'applied'],
   ])
-  assert.equal(session.events.every(event => event.type !== 'agent-rp/turn-worker-result'
+  assert.equal(sessionEvents(session).every(event => event.type !== 'agent-rp/turn-worker-result'
     || event.ignorable === true), true)
   assert.deepEqual(await registry.run(input(session)), [])
 })
@@ -89,12 +90,12 @@ test('reviews one reply through an isolated request and preserves the original a
   assert.doesNotMatch(messages, /世界书|预设模块/u)
   assert.deepEqual(session.deriveMessages().flatMap(message => message.content
     .flatMap(block => block.type === 'text' ? [block.text] : [])), ['她向前走去，然后推开门。'])
-  const group = readGenerationGroups(session.events)[0]
+  const group = readGenerationGroups(sessionEvents(session))[0]
   assert.deepEqual(group?.versions.map(version => version.text), [
     '她向前走。她向前走，然后推开门。',
     '她向前走去，然后推开门。',
   ])
-  const resultEvent = session.events.find(event => event.type === 'agent-rp/narrative-review-result'
+  const resultEvent = sessionEvents(session).find(event => event.type === 'agent-rp/narrative-review-result'
     && event.seq === outcome.resultEventSeq)
   assert.equal(resultEvent?.type, 'agent-rp/narrative-review-result')
   assert.equal(resultEvent?.type === 'agent-rp/narrative-review-result'

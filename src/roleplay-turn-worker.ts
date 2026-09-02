@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { BoundRoleplayTurnPlan } from './roleplay-turn-settlement.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Host service shared by Agent RP profiles and trusted Worker plugins. */
 export const ROLEPLAY_TURN_WORKERS_KEY = 'agentRp.turnWorkers'
@@ -62,7 +63,7 @@ export interface RoleplayTurnWorker {
 const phaseOrder: Readonly<Record<RoleplayTurnWorkerPhase, number>> = { review: 0, settle: 1 }
 
 function terminalExists(input: RoleplayTurnWorkerInput, workerId: string): boolean {
-  return input.agent.session.events.some(event => event.type === 'agent-rp/turn-worker-result'
+  return sessionEvents(input.agent.session).some(event => event.type === 'agent-rp/turn-worker-result'
     && event.data.turn === input.turn && event.data.step === input.plan.step
     && event.data.workerId === workerId)
 }

@@ -1,6 +1,6 @@
 /** Replayable prompt policies owned by Agent RP rather than an imported format. */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { RoleplayResourceProvider } from './roleplay-resource-catalog.ts'
 
 export const NATIVE_PROMPT_POLICY_PROVIDER_ID = 'agent-rp-native-prompt-policies'
@@ -164,7 +164,7 @@ export function nativePromptPolicyResourceProvider(): RoleplayResourceProvider {
       return {
         events: [...structuredClone(input.events), {
           type: 'agent-rp/native-prompt-policy-seed' as const,
-          seq: input.events.length,
+          seq: SessionSeq(input.events.length),
           time: Date.now(),
           ignorable: true,
           data: structuredClone(policy),

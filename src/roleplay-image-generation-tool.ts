@@ -18,6 +18,7 @@ import {
 } from './roleplay-artifact.ts'
 import type { RoleplayToolPolicyPlan } from './roleplay-tool-guidance.ts'
 import { WorkspaceSettingsStore } from './workspace-settings-store.ts'
+import { sessionEvents } from './session-events.ts'
 
 export const ROLEPLAY_IMAGE_GENERATION_TOOL = 'generate_roleplay_image'
 export const ROLEPLAY_IMAGE_GENERATION_FORMAT = 'agent-rp.generated-image'
@@ -89,7 +90,7 @@ export interface RoleplayImageGenerationToolController {
 }
 
 function currentToolTurn(agent: Agent, callId: string): number {
-  const call = agent.session.events.findLast(event => event.type === 'tool/call'
+  const call = sessionEvents(agent.session).findLast(event => event.type === 'tool/call'
     && String(event.data.callId) === callId)
   if (call?.type !== 'tool/call' || call.data.name !== ROLEPLAY_IMAGE_GENERATION_TOOL) {
     throw new Error('generate_roleplay_image has no matching durable tool call')

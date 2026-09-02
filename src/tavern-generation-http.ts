@@ -38,6 +38,7 @@ import {
   type TavernPrompt,
   type TavernPromptPreviewResponse,
 } from './tavern-generation-protocol.ts'
+import { sessionEvents } from './session-events.ts'
 
 const GENERATION_POLICY = AGENT_RP_CAPABILITIES['model.generate.auxiliary']
   .runtimePolicies['tavern-script-frame-v0']
@@ -555,7 +556,7 @@ async function generationInput(
   )
   const messages = injectSillyTavernInChatPrompts(
     input.messages,
-    tavernInjectedInChatPrompts(readTavernHelperState(agent.session.events)),
+    tavernInjectedInChatPrompts(readTavernHelperState(sessionEvents(agent.session))),
   )
   if (messages.length === 0) throw new Error('酒馆脚本没有提供可生成的提示词')
   return { ...input, messages }
@@ -574,7 +575,7 @@ async function generate(ctx: Context, agent: Agent, mode: 'preset' | 'raw', conf
     const provider = agent.options.provider
     const model = agent.options.model
     if (provider === undefined || model === undefined) throw new Error('当前角色会话还没有可用模型')
-    const presetGeneration = readActiveSessionPreset(agent.session.events)?.preset.generation
+    const presetGeneration = readActiveSessionPreset(sessionEvents(agent.session))?.preset.generation
     const temperature = config.temperature ?? presetGeneration?.temperature
     const maxTokens = config.maxTokens ?? presetGeneration?.maxTokens ?? agent.options.maxTokens
     dispatch = {

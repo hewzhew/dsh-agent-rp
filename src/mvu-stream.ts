@@ -27,6 +27,7 @@ import {
   normalizeMvuSupplement,
 } from './mvu.ts'
 import type { RoleplayTurnPlan } from './roleplay-turn-plan.ts'
+import { sessionEvents } from './session-events.ts'
 
 export interface PreparedMvuResponseRepair {
   readonly engine: 'mvu-v0'
@@ -247,7 +248,7 @@ export function installMvuStreamCompletion(
           }
         }
       } catch (error: unknown) {
-        if (!agent.session.events.some(event => event.type === 'agent-rp/act-model-result'
+        if (!sessionEvents(agent.session).some(event => event.type === 'agent-rp/act-model-result'
           && event.data.requestSeq === requestEvent.seq)) {
           appendRoleplayActModelResult(agent.session, {
             format: 0,

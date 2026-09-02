@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CommandId } from '@deepseek-ai/dsh-commands'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   canTogglePresetPrompt,
   configurePreset,
@@ -240,7 +240,7 @@ test('replays the latest session configuration and rejects stale editor revision
   const seed = createPresetSessionSeed([], preset, source)
   const configured: SessionEvent<'command/run'> = {
     type: 'command/run',
-    seq: 1,
+    seq: SessionSeq(1),
     time: Date.now(),
     data: {
       commandId: CommandId('preset-test'),
@@ -381,7 +381,7 @@ test('edits preset regex switches and depths independently from prompt modules',
     regexScripts: [added], regex: [{ index: 0, disabled: false, minDepth: 0, maxDepth: 4 }],
   })
   const configured: SessionEvent<'command/run'> = {
-    type: 'command/run', seq: seed.length, time: Date.now(),
+    type: 'command/run', seq: SessionSeq(seed.length), time: Date.now(),
     data: { commandId: CommandId('regex-replace'), name: 'rp-preset-configure', args, source: { kind: 'user' } },
   }
   const reopened = readActiveSessionPreset([...seed, configured])

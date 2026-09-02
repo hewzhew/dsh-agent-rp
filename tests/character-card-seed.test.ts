@@ -8,6 +8,7 @@ import { createCharacterCardSessionSeed } from '../src/import/character-card-see
 import { readActiveSessionCharacter } from '../src/import/session-character.ts'
 import { substituteCardMacros } from '../src/prompt.ts'
 import { readSessionPersona } from '../src/session-persona.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const attachment = {
   kind: 'file' as const,
@@ -23,7 +24,7 @@ test('seeds a native roleplay Session directly from one Character Card JSON', ()
   const seed = createCharacterCardSessionSeed(card, attachment, 0, greeting)
   const session = Session.create(SessionId('direct-card-import'), seed)
 
-  assert.equal(readActiveSessionCharacter(session.events)?.result.name, '白露')
+  assert.equal(readActiveSessionCharacter(sessionEvents(session))?.result.name, '白露')
   assert.deepEqual(session.deriveMessages().map(message => ({
     role: message.role,
     text: message.content[0]?.type === 'text' ? message.content[0].text : undefined,

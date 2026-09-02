@@ -28,6 +28,7 @@ import { SillyTavernChatLibrary } from '../src/sillytavern-chat-library.ts'
 import { readSessionPersona } from '../src/session-persona.ts'
 import { WorldInfoLibrary } from '../src/world-info-library.ts'
 import { launchAgentRpSession } from '../src/session-launch-http.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const FIXTURE_WORKSPACE_PATH = process.platform === 'win32' ? 'C:\\fixture-workspace' : '/fixture-workspace'
 
@@ -76,7 +77,7 @@ async function launchExperienceWithWorkspaces(
   })
   const sourceId = SessionId('world-info-source')
   const sourceSession = Session.create(sourceId, [], {
-    version: 0, id: sourceId, createdAt: 0, cwd: sourceCwd,
+    version: 0, id: sourceId, createdAt: 0, cwd: sourceCwd, isSeeded: false,
   })
   const sourceAgent = { id: sourceId, session: sourceSession, status: 'idle', inbox: { hasPending: false } }
   let createdSession: Session | undefined
@@ -98,6 +99,7 @@ async function launchExperienceWithWorkspaces(
         version: 0,
         id: options.sessionId,
         createdAt: 0,
+        isSeeded: false,
         ...options.meta,
       })
       return {
@@ -197,11 +199,12 @@ test('prepares a library character before the Agent is constructed', (context) =
     format: 0, sourceSessionId: 'source', kind: 'character', characterId: character.id, greetingIndex: 0,
   })
   const session = Session.create(SessionId('launched-character'), prepared.seed)
-  assert.equal(session.events.findLast(event => event.type === 'turn/start')?.data.turn, 1)
-  assert.equal(readActiveSessionCharacter(session.events)?.result.libraryId, character.id)
-  assert.equal(session.events[0]?.type, 'agent-rp/character-card-seed')
-  if (session.events[0]?.type !== 'agent-rp/character-card-seed') assert.fail('missing character seed')
-  assert.deepEqual(session.events[0].data.source, { characterLibraryId: character.id })
+  assert.equal(sessionEvents(session).findLast(event => event.type === 'turn/start')?.data.turn, 1)
+  assert.equal(readActiveSessionCharacter(sessionEvents(session))?.result.libraryId, character.id)
+  const characterSeed = sessionEvents(session)[0]
+  assert.equal(characterSeed?.type, 'agent-rp/character-card-seed')
+  if (characterSeed?.type !== 'agent-rp/character-card-seed') assert.fail('missing character seed')
+  assert.deepEqual(characterSeed.data.source, { characterLibraryId: character.id })
 })
 
 test('seeds a selected library preset into a new character Session', (context) => {
@@ -224,7 +227,7 @@ test('seeds a selected library preset into a new character Session', (context) =
     presetId: preset.id,
   })
   const session = Session.create(SessionId('launched-with-preset'), prepared.seed)
-  const active = readActiveSessionPreset(session.events)
+  const active = readActiveSessionPreset(sessionEvents(session))
   assert.equal(active?.result.name, '会话预设')
   assert.equal(active?.libraryId, preset.id)
 })
@@ -259,10 +262,10 @@ test('composes ordered standalone World Info with a library character', context 
     worldInfoIds: [city.id, style.id],
   })
   const first = Session.create(SessionId('composed-character'), prepared.seed)
-  const replay = Session.create(SessionId('replayed-composed-character'), [...first.events])
+  const replay = Session.create(SessionId('replayed-composed-character'), [...sessionEvents(first)])
 
-  assert.equal(readActiveSessionCharacter(replay.events)?.result.libraryId, character.id)
-  assert.deepEqual(readActiveSessionWorldInfos(replay.events).map(value => ({
+  assert.equal(readActiveSessionCharacter(sessionEvents(replay))?.result.libraryId, character.id)
+  assert.deepEqual(readActiveSessionWorldInfos(sessionEvents(replay)).map(value => ({
     id: value.result.sourceAttachmentId,
     name: value.result.name,
   })), [
@@ -326,25 +329,25 @@ test('starts a replayable roleplay Session from standalone World Info without fa
     worldInfoIds: [supportingWorldInfo.id],
   })
   const first = Session.create(SessionId('launched-world-info'), prepared.seed)
-  const replay = Session.create(SessionId('replayed-world-info'), [...first.events])
+  const replay = Session.create(SessionId('replayed-world-info'), [...sessionEvents(first)])
 
   assert.equal(prepared.title, '海城')
-  assert.equal(first.events[0]?.type, 'agent-rp/world-info-library-seed')
+  assert.equal(sessionEvents(first)[0]?.type, 'agent-rp/world-info-library-seed')
   assert.deepEqual(
-    first.events.filter(event => event.type === 'turn/start' || event.type === 'turn/end')
+    sessionEvents(first).filter(event => event.type === 'turn/start' || event.type === 'turn/end')
       .map(event => event.type),
     ['turn/start', 'turn/end'],
   )
-  assert.equal(first.events.some(event => event.type === 'step/start' || event.type === 'step/end'), false)
-  assert.equal(first.events.some(event => event.type === 'user/message' || event.type === 'assistant/message'), false)
+  assert.equal(sessionEvents(first).some(event => event.type === 'step/start' || event.type === 'step/end'), false)
+  assert.equal(sessionEvents(first).some(event => event.type === 'user/message' || event.type === 'assistant/message'), false)
   assert.deepEqual(first.deriveMessages(), [])
-  assert.equal(readActiveSessionCharacter(replay.events), undefined)
-  assert.deepEqual(readActiveSessionWorldInfos(replay.events).map(value => value.result.name), ['海城', '剧情规则'])
-  assert.equal(readSessionPersona(replay.events)?.name, '旅人')
-  assert.equal(readActiveSessionPreset(replay.events)?.libraryId, preset.id)
+  assert.equal(readActiveSessionCharacter(sessionEvents(replay)), undefined)
+  assert.deepEqual(readActiveSessionWorldInfos(sessionEvents(replay)).map(value => value.result.name), ['海城', '剧情规则'])
+  assert.equal(readSessionPersona(sessionEvents(replay))?.name, '旅人')
+  assert.equal(readActiveSessionPreset(sessionEvents(replay))?.libraryId, preset.id)
 
   appendConversationTurn(replay, 2, '请告诉我这里是哪里。', '这里是海城。')
-  assert.equal(replay.events.findLast(event => event.type === 'turn/start')?.data.turn, 2)
+  assert.equal(sessionEvents(replay).findLast(event => event.type === 'turn/start')?.data.turn, 2)
 })
 
 test('publishes a source-neutral World Info experience into the source Workspace', async context => {
@@ -373,9 +376,10 @@ test('publishes a source-neutral World Info experience into the source Workspace
   })
   assert.equal(attachedSessionId, result.sessionId)
   assert.equal(renamedTitle, '海城')
-  assert.equal(createdSession?.events.some(event => event.type === 'turn/start'), true)
-  assert.deepEqual(createdSession?.deriveMessages(), [])
-  assert.equal(readRoleplayExperienceSelection(createdSession?.events ?? [])?.mode, 'scene')
+  if (createdSession === undefined) assert.fail('experience Session was not created')
+  assert.equal(sessionEvents(createdSession).some(event => event.type === 'turn/start'), true)
+  assert.deepEqual(createdSession.deriveMessages(), [])
+  assert.equal(readRoleplayExperienceSelection(sessionEvents(createdSession))?.mode, 'scene')
 })
 
 test('leaves the launched Session ungrouped when multiple Workspaces match the source cwd', async context => {
@@ -386,7 +390,8 @@ test('leaves the launched Session ungrouped when multiple Workspaces match the s
 
   assert.equal(attachedSessionId, undefined)
   assert.equal(result.workspaceWarning, '多个工作区与来源工作目录匹配，拒绝猜测，新角色会话保留在“未分组”')
-  assert.equal(createdSession?.events.some(event => event.type === 'turn/start'), true)
+  if (createdSession === undefined) assert.fail('experience Session was not created')
+  assert.equal(sessionEvents(createdSession).some(event => event.type === 'turn/start'), true)
 })
 
 test('prepares imported JSONL with consecutive turns before the Agent is constructed', (context) => {
@@ -399,10 +404,10 @@ test('prepares imported JSONL with consecutive turns before the Agent is constru
     format: 0, sourceSessionId: 'source', kind: 'chat', importId: upload.id,
   })
   const session = Session.create(SessionId('launched-chat'), prepared.seed)
-  const turns = session.events.filter(event => event.type === 'turn/start').map(event => event.data.turn)
+  const turns = sessionEvents(session).filter(event => event.type === 'turn/start').map(event => event.data.turn)
   assert.deepEqual(turns, Array.from({ length: turns.length }, (_value, index) => index + 1))
   assert.equal(turns.length > 0, true)
-  assert.equal(session.events.filter(event => event.type === 'turn/end').length, turns.length)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'turn/end').length, turns.length)
 })
 
 test('seeds a selected library preset after imported JSONL history', (context) => {
@@ -423,7 +428,7 @@ test('seeds a selected library preset after imported JSONL history', (context) =
     presetId: preset.id,
   })
   const session = Session.create(SessionId('migrated-with-preset'), prepared.seed)
-  const active = readActiveSessionPreset(session.events)
+  const active = readActiveSessionPreset(sessionEvents(session))
   assert.equal(active?.result.name, '迁移预设')
   assert.equal(active?.libraryId, preset.id)
 })
@@ -443,10 +448,10 @@ test('prepares Character Card and JSONL history as one replayable seed', (contex
     format: 0, sourceSessionId: 'source', kind: 'chat', importId: upload.id, characterId: character.id,
   })
   const first = Session.create(SessionId('migration-first'), prepared.seed)
-  const replay = Session.create(SessionId('migration-replay'), [...first.events])
-  const turns = replay.events.filter(event => event.type === 'turn/start').map(event => event.data.turn)
+  const replay = Session.create(SessionId('migration-replay'), [...sessionEvents(first)])
+  const turns = sessionEvents(replay).filter(event => event.type === 'turn/start').map(event => event.data.turn)
   assert.deepEqual(turns, Array.from({ length: turns.length }, (_value, index) => index + 1))
-  assert.equal(readActiveSessionCharacter(replay.events)?.result.libraryId, character.id)
+  assert.equal(readActiveSessionCharacter(sessionEvents(replay))?.result.libraryId, character.id)
 })
 
 test('rewrites a completed turn by branching immediately before its user message', (context) => {
@@ -470,7 +475,7 @@ test('rewrites a completed turn by branching immediately before its user message
     presetId: preset.id,
   })
   const source = Session.create(SessionId('rewrite-source'), prepared.seed)
-  const previousTurn = Math.max(...source.events.flatMap(event => event.type === 'turn/start' ? [event.data.turn] : [])) + 1
+  const previousTurn = Math.max(...sessionEvents(source).flatMap(event => event.type === 'turn/start' ? [event.data.turn] : [])) + 1
   appendConversationTurn(source, previousTurn, '先去港口。', '好，我们沿着潮声往前走。')
   appendConversationTurn(source, previousTurn + 1, '改去钟楼。', '那就转向钟楼。')
 
@@ -482,9 +487,9 @@ test('rewrites a completed turn by branching immediately before its user message
   assert.equal(transcript.includes('好，我们沿着潮声往前走。'), true)
   assert.equal(transcript.includes('改去钟楼。'), false)
   assert.equal(transcript.includes('那就转向钟楼。'), false)
-  assert.equal(readActiveSessionCharacter(replay.events)?.result.libraryId, character.id)
-  assert.equal(readActiveSessionCharacter(replay.events)?.result.userName, '旅人')
-  assert.equal(readActiveSessionPreset(replay.events)?.libraryId, preset.id)
+  assert.equal(readActiveSessionCharacter(sessionEvents(replay))?.result.libraryId, character.id)
+  assert.equal(readActiveSessionCharacter(sessionEvents(replay))?.result.userName, '旅人')
+  assert.equal(readActiveSessionPreset(sessionEvents(replay))?.libraryId, preset.id)
 })
 
 test('rejects an absent, unfinished, or assistant-only rewrite turn', () => {

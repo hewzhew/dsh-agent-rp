@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { CharacterLibrary } from '../src/character-library.ts'
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { parseCharacterCardJson } from '../src/import/character-card.ts'
@@ -90,8 +90,8 @@ test('dispatches materialization to the owner while enforcing append-only Sessio
     list: () => [{ id: 'actor:seed', kind: 'actor', name: '种子角色', availability: 'available' }],
     materialize: () => ({
       title: '种子角色',
-      events: [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }, {
-        type: 'turn/end', seq: 1, time: 1, data: { turn: 1, reason: { kind: 'completed' } },
+      events: [{ type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } }, {
+        type: 'turn/end', seq: SessionSeq(1), time: 1, data: { turn: 1, reason: { kind: 'completed' } },
       }],
     }),
   })

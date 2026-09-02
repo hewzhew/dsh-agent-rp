@@ -21,6 +21,7 @@ import {
 } from '../src/roleplay-resource-library-providers.ts'
 import { resolveSessionRoleplayRuntime } from '../src/session-roleplay-runtime.ts'
 import { WorldInfoLibrary } from '../src/world-info-library.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 export interface RoleplayExperienceAuditInput {
   readonly cardPath: string
@@ -112,12 +113,12 @@ export function auditRoleplayExperience(input: RoleplayExperienceAuditInput): Ro
       promptPolicy: { kind: 'prompt-policy', id: promptPolicyId },
     })
     const first = Session.create(SessionId('agent-rp-experience-audit-first'), prepared.seed)
-    const reopened = Session.create(SessionId('agent-rp-experience-audit-reopened'), structuredClone(first.events))
+    const reopened = Session.create(SessionId('agent-rp-experience-audit-reopened'), structuredClone(sessionEvents(first)))
     const runtime = resolveSessionRoleplayRuntime({
       session: reopened,
       deployment: resolveConfig({ characterName: 'Audit Actor' }),
     }).snapshot
-    const selection = readRoleplayExperienceSelection(reopened.events)
+    const selection = readRoleplayExperienceSelection(sessionEvents(reopened))
     const entries = catalog.list()
     const actorDetail = catalog.inspect('actor', actorId)
     const participantDetail = catalog.inspect('persona', participant.id)
@@ -145,9 +146,9 @@ export function auditRoleplayExperience(input: RoleplayExperienceAuditInput): Ro
         enabledPromptModules: promptPolicyDetail.enabledModuleCount,
       },
       session: {
-        events: reopened.events.length,
+        events: sessionEvents(reopened).length,
         selectionRecorded: selection !== undefined,
-        replayExact: JSON.stringify(first.events) === JSON.stringify(reopened.events),
+        replayExact: JSON.stringify(sessionEvents(first)) === JSON.stringify(sessionEvents(reopened)),
         actorReferenceExact: runtime.actor?.id === actorId && runtime.experience.id === actorId,
         participantReferenceExact: runtime.participant?.id === participant.id,
         worldReferenceExact: runtime.world.bindings.some(binding => binding.id === worldId),

@@ -1,20 +1,22 @@
 /** Model-free player editing of durable native Roleplay state. */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { CommandId } from '@deepseek-ai/dsh-commands'
+import type { CommandId, CommandResult } from '@deepseek-ai/dsh-commands'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import {
   appendUserRoleplayState,
   parseRoleplayStateCommandRequest,
 } from './roleplay-state.ts'
+import { sessionEvents } from './session-events.ts'
 
 /** Apply one private player state request without invoking the character model. */
 export function executeRoleplayStateCommand(invocation: {
   readonly commandId: CommandId
   readonly agent: Agent
   readonly rawInput: string
-}): { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number } {
+}): CommandResult {
   const request = parseRoleplayStateCommandRequest(invocation.rawInput)
-  const source = invocation.agent.session.events.findLast(event =>
+  const source = sessionEvents(invocation.agent.session).findLast(event =>
     event.type === 'command/run' && String(event.data.commandId) === String(invocation.commandId))
   if (source?.type !== 'command/run' || source.data.name !== 'rp-state'
     || source.data.source.kind !== 'user'
@@ -23,5 +25,5 @@ export function executeRoleplayStateCommand(invocation: {
     throw new Error('状态操作命令不是当前 Session 事件')
   }
   const written = appendUserRoleplayState(invocation.agent.session, request, source.seq)
-  return { kind: 'success', sourceEventSeq: written.eventSeq }
+  return { kind: 'success', sourceEventSeq: SessionSeq(written.eventSeq) }
 }

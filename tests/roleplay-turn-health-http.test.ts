@@ -19,7 +19,7 @@ type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
 function roleplayAgent(id: string): Agent {
   const sessionId = SessionId(id)
   const header: SessionHeader = {
-    version: 0, id: sessionId, createdAt: 1_800_000_000_000, agentPreset: 'agent-rp',
+    version: 0, id: sessionId, createdAt: 1_800_000_000_000, isSeeded: false, agentPreset: 'agent-rp',
   }
   return { session: Session.create(sessionId, [], header) } as Agent
 }

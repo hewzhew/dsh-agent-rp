@@ -13,6 +13,7 @@ import {
 } from '../src/agent-rp-command-protocol.ts'
 import type { AgentRpHttpServer } from '../src/host-http.ts'
 import { agentRpPresetGateway } from './agent-preset-fixture.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 type RegisteredRoute = Parameters<AgentRpHttpServer['register']>[0]
 
@@ -22,6 +23,7 @@ function roleplayAgent(id: string): Agent {
     version: 0,
     id: sessionId,
     createdAt: 1_800_000_000_000,
+    isSeeded: false,
     agentPreset: 'agent-rp',
   }
   return { session: Session.create(sessionId, [], header) } as Agent
@@ -142,7 +144,7 @@ test('routes published rc.2 commands through the four-argument executor and pres
   assert.deepEqual(result.json, { format: 0, matched: true, commandId })
   assert.deepEqual(receivedImages, [])
   assert.equal(receivedSignal?.aborted, false)
-  assert.deepEqual(agent.session.events
+  assert.deepEqual(sessionEvents(agent.session)
     .filter(event => event.type === 'command/run' || event.type === 'command/done')
     .map(event => event.type), ['command/run', 'command/done'])
 })

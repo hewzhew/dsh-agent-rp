@@ -14,6 +14,7 @@ import { resolveSessionPersonaIdentity } from './session-persona.ts'
 import { exportSillyTavernSessionChat } from './sillytavern-chat-export.ts'
 import { SILLYTAVERN_CHAT_EXPORT_PATH } from './sillytavern-chat-export-protocol.ts'
 import { agentHasAgentRpRuntime, type AgentPresetGateway } from './agent-capability-preset.ts'
+import { sessionEvents } from './session-events.ts'
 
 interface AgentRegistryGateway {
   get(sessionId: SessionId): Agent | undefined
@@ -53,7 +54,7 @@ export function installSillyTavernChatExportHttp(
         const presets = hostCtx.get('agentPresets') as AgentPresetGateway | undefined
         if (presets === undefined || !agentHasAgentRpRuntime(presets, agent)) throw new Error('角色会话当前不可用')
         if (agent.status !== 'idle' || agent.inbox.hasPending) throw new Error('请等待当前回复完成后再导出')
-        const events = agent.session.events
+        const events = sessionEvents(agent.session)
         const activeCharacter = readActiveSessionCharacter(events)
         const card = activeCharacter === undefined ? undefined : cardFromImportMeta(activeCharacter.meta)
         const importedIdentity = readSillyTavernChatIdentity(events)

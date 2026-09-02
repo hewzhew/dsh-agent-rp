@@ -15,6 +15,7 @@ import {
   appendSessionRoleplayTurnPlan,
   replaySessionRoleplayTurnPlan,
 } from '../src/session-roleplay-turn-plan.ts'
+import { sessionEvents } from '../src/session-events.ts'
 
 const deployment = resolveConfig({ characterName: '扩展测试角色' })
 
@@ -40,7 +41,7 @@ test('registers, orders, and revokes source-neutral runtime modules deterministi
     }),
   })
 
-  const resolved = registry.resolve(emptySession('extension-order').events)
+  const resolved = registry.resolve(sessionEvents(emptySession('extension-order')))
   assert.deepEqual(resolved.modules, [{
     id: 'extension:a-first', source: 'adapter', phases: ['present'], stateIds: ['state:a'],
   }, {
@@ -50,11 +51,11 @@ test('registers, orders, and revokes source-neutral runtime modules deterministi
   assert.deepEqual(resolved.state.map(value => value.id), ['state:a'])
 
   disposeFirst()
-  assert.deepEqual(registry.resolve(emptySession('extension-revoked').events).modules.map(value => value.id), [
+  assert.deepEqual(registry.resolve(sessionEvents(emptySession('extension-revoked'))).modules.map(value => value.id), [
     'extension:z-last',
   ])
   disposeLast()
-  assert.deepEqual(registry.resolve(emptySession('extension-empty').events), {
+  assert.deepEqual(registry.resolve(sessionEvents(emptySession('extension-empty'))), {
     modules: [], world: [], state: [], prepare: [], recall: [],
   })
 })
@@ -75,7 +76,7 @@ test('rejects duplicate registrations and stale disposers cannot revoke successo
     resolve: () => ({}),
   })
   first()
-  assert.deepEqual(registry.resolve(emptySession('extension-successor').events).modules[0]?.phases, ['act'])
+  assert.deepEqual(registry.resolve(sessionEvents(emptySession('extension-successor'))).modules[0]?.phases, ['act'])
   successor()
 })
 
@@ -85,7 +86,7 @@ test('requires explicit prepare and recall outcomes from participating extension
     module: { id: 'extension:missing-outcome', source: 'native', phases: ['prepare'] },
     resolve: () => ({}),
   })
-  assert.throws(() => registry.resolve(emptySession('extension-missing-outcome').events),
+  assert.throws(() => registry.resolve(sessionEvents(emptySession('extension-missing-outcome'))),
     /must report its prepare outcome/u)
 })
 
@@ -97,11 +98,11 @@ test('revokes a registered module with its owning Cordis scope', async () => {
     module: { id: 'extension:owned', source: 'native', phases: ['act'] },
     resolve: () => ({}),
   })
-  assert.deepEqual(registry.resolve(emptySession('extension-owned').events).modules.map(value => value.id), [
+  assert.deepEqual(registry.resolve(sessionEvents(emptySession('extension-owned'))).modules.map(value => value.id), [
     'extension:owned',
   ])
   await root.fiber.dispose()
-  assert.deepEqual(registry.resolve(emptySession('extension-disposed').events).modules, [])
+  assert.deepEqual(registry.resolve(sessionEvents(emptySession('extension-disposed'))).modules, [])
 })
 
 test('merges extension worlds and states while rejecting runtime namespace collisions', () => {

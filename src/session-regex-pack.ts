@@ -1,6 +1,6 @@
 /** Durable standalone regex-pack snapshots selected for one Roleplay Session. */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ImportedRegexScript } from './import/types.ts'
 import { parseRegexPackValue } from './regex-pack.ts'
 
@@ -45,7 +45,7 @@ export function appendSessionRegexPack(
   if (readSessionRegexPacks(events).some(pack => pack.id === snapshot.id)) throw new Error('正则包资源不能重复')
   return Object.freeze([...structuredClone(events), {
     type: 'agent-rp/regex-pack-seed' as const,
-    seq: events.length,
+    seq: SessionSeq(events.length),
     time: Date.now(),
     ignorable: true,
     data: snapshot,

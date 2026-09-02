@@ -1,6 +1,6 @@
 /** Model-free Character Card import into a native roleplay Session. */
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   prepareCharacterImportResult,
   type CharacterCardAttachmentRef,
@@ -10,6 +10,7 @@ import {
 import type { ImportedCharacterCard } from './types.ts'
 import type { SessionPersonaSnapshot } from '../persona-library-protocol.ts'
 import type {} from '../session-persona.ts'
+import { sessionEvents } from '../session-events.ts'
 
 /** Durable provenance for one Character Card used to seed a new Session. */
 export interface CharacterCardSeedRecord {
@@ -73,7 +74,7 @@ export function createCharacterCardSessionSeed(
   const fromLibrary = libraryId !== undefined && String(attachment.attachmentId) === `library:${libraryId}`
   const events: SessionEvent[] = [{
     type: 'agent-rp/character-card-seed',
-    seq: 0,
+    seq: SessionSeq(0),
     time,
     ignorable: true,
     data: {
@@ -87,7 +88,7 @@ export function createCharacterCardSessionSeed(
   if (persona !== undefined) {
     events.push({
       type: 'agent-rp/persona-seed',
-      seq: events.length,
+      seq: SessionSeq(events.length),
       time,
       ignorable: true,
       data: { format: 0, persona },
@@ -95,7 +96,7 @@ export function createCharacterCardSessionSeed(
   }
   if (renderedGreeting.trim() !== '') {
     const push = (event: SessionSeedEvent): void => {
-      events.push({ ...event, seq: events.length } as SessionEvent)
+      events.push({ ...event, seq: SessionSeq(events.length) } as SessionEvent)
     }
     push({ type: 'turn/start', time: time + 1, data: { turn: 1 } })
     push({ type: 'step/start', time: time + 1, data: { turn: 1, step: 1 } })
@@ -115,5 +116,5 @@ export function createCharacterCardSessionSeed(
     push({ type: 'step/end', time: time + 1, data: { turn: 1, step: 1 } })
     push({ type: 'turn/end', time: time + 1, data: { turn: 1, reason: { kind: 'completed' } } })
   }
-  return Object.freeze(Session.create(SessionId('agent-rp-character-card-import-validation'), events).events.slice(0, events.length))
+  return Object.freeze(sessionEvents(Session.create(SessionId('agent-rp-character-card-import-validation'), events)).slice(0, events.length))
 }

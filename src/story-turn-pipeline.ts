@@ -74,6 +74,7 @@ import {
   storyWebFetchGateway,
   storyWebSearchGateway,
 } from './story-web.ts'
+import { sessionEvents } from './session-events.ts'
 
 export { storyWebFetchAvailable, storyWebSearchAvailable } from './story-web.ts'
 
@@ -2339,9 +2340,9 @@ function materializedWebResearch(
   turn: number,
 ): StoryTurnMaterialization['webResearch'] {
   const included = new Set(resultEventSeqs)
-  const searchRequests = new Map(events.flatMap(event => event.type === 'agent-rp/story-web-search-request'
+  const searchRequests = new Map<number, SessionEvent<'agent-rp/story-web-search-request'>['data']>(events.flatMap(event => event.type === 'agent-rp/story-web-search-request'
     ? [[event.seq, event.data] as const] : []))
-  const fetchRequests = new Map(events.flatMap(event => event.type === 'agent-rp/story-web-fetch-request'
+  const fetchRequests = new Map<number, SessionEvent<'agent-rp/story-web-fetch-request'>['data']>(events.flatMap(event => event.type === 'agent-rp/story-web-fetch-request'
     ? [[event.seq, event.data] as const] : []))
   const fetchedSearchUrls = new Set<string>()
   const acceptedUrls = new Set<string>()
@@ -2919,7 +2920,7 @@ async function runStageAttempt(
     resultEventSeqs.push(resultEvent.seq)
     return { text, resultEventSeq: resultEvent.seq }
   } catch (error: unknown) {
-    const existing = input.agent.session.events.find(event => event.type === 'agent-rp/story-stage-result'
+    const existing = sessionEvents(input.agent.session).find(event => event.type === 'agent-rp/story-stage-result'
       && event.data.requestSeq === requestEvent.seq)
     const failure = storyStageThrownFailureKind(error, phase, input.signal)
     const detail = storyStageThrownFailureDetail(error, phase)
@@ -3585,7 +3586,7 @@ export async function stopStoryTurnPipeline(input: {
   readonly step: number
   readonly outcome: StoryTurnStoppedRecord['outcome']
 }): Promise<StoryTurnStoppedRecord | undefined> {
-  const start = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-start'> =>
+  const start = sessionEvents(input.agent.session).findLast((event): event is SessionEvent<'agent-rp/story-turn-start'> =>
     event.type === 'agent-rp/story-turn-start' && event.data.format === 0
       && event.data.sessionId === String(input.agent.session.id)
       && event.data.workspaceId === input.workspaceId
@@ -3611,9 +3612,9 @@ export async function recoverStoppedStoryTurns(input: {
   readonly agent: Agent
 }): Promise<readonly StoryTurnStoppedRecord[]> {
   const recovered: StoryTurnStoppedRecord[] = []
-  for (const start of input.agent.session.events) {
+  for (const start of sessionEvents(input.agent.session)) {
     if (start.type !== 'agent-rp/story-turn-start' || start.data.format !== 0) continue
-    const terminal = input.agent.session.events.find(event => event.seq > start.seq
+    const terminal = sessionEvents(input.agent.session).find(event => event.seq > start.seq
       && ((event.type === 'agent-rp/story-turn-brief' && event.data.format === 1)
         || (event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3)
         || (event.type === 'agent-rp/story-turn-stopped' && event.data.format === 0))
@@ -3621,7 +3622,7 @@ export async function recoverStoppedStoryTurns(input: {
       && event.data.workspaceId === start.data.workspaceId
       && event.data.turn === start.data.turn && event.data.step === start.data.step)
     if (terminal !== undefined) continue
-    const parentEnd = input.agent.session.events.find((event): event is SessionEvent<'turn/end'> => event.seq > start.seq
+    const parentEnd = sessionEvents(input.agent.session).find((event): event is SessionEvent<'turn/end'> => event.seq > start.seq
       && event.type === 'turn/end' && event.data.turn === start.data.turn)
     if (parentEnd === undefined) continue
     const record: StoryTurnStoppedRecord = {
@@ -3680,7 +3681,7 @@ function modelContext(finalDraft: string): string {
 
 /** Run or replay the complete story Worker pipeline for one accepted model step. */
 export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Promise<StoryTurnBriefRecord> {
-  let prior = existingBrief(input.agent.session.events, input)
+  let prior = existingBrief(sessionEvents(input.agent.session), input)
   if (prior !== undefined) return prior.data
   input.signal.throwIfAborted()
   const automaticAdvance = isAutomaticStoryAdvance(input.messages)
@@ -3689,7 +3690,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     throw new Error('故事流水线没有可用的玩家输入')
   }
   const reasoning = await resolveStoryStageReasoning(input)
-  if (existingStoryTurnStart(input.agent.session.events, input) === undefined) {
+  if (existingStoryTurnStart(sessionEvents(input.agent.session), input) === undefined) {
     appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-start', {
       format: 0,
       sessionId: String(input.agent.session.id),
@@ -3710,7 +3711,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     && !hasPendingCharacterWorldResult(input.workspace)) {
     const workspace = await advanceStoryWorld(input, reasoning, playerInput, resultEventSeqs)
     input = { ...input, workspace }
-    prior = existingBrief(input.agent.session.events, input)
+    prior = existingBrief(sessionEvents(input.agent.session), input)
     if (prior !== undefined) return prior.data
   }
   const worldEventSequences = worldEventSequencesForRun(input)
@@ -3727,7 +3728,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     input.workspace,
     worldActionCharacterIds,
   )
-  const recentExchange = recentPublicExchange(input.agent.session.events, input.turn, enabledCharacters)
+  const recentExchange = recentPublicExchange(sessionEvents(input.agent.session), input.turn, enabledCharacters)
   const characterReasoningMode: StoryStageReasoningMode = automaticAdvance
     && worldOutcome !== '' && recentExchange?.status !== 'open'
     ? 'routine'
@@ -4247,7 +4248,7 @@ function storyTurnPublicStageTrace(
   events: readonly SessionEvent[],
   resultEventSeqs: readonly number[],
 ): readonly StoryTurnPublicStageTrace[] {
-  const eventBySeq = new Map(events.map(event => [event.seq, event]))
+  const eventBySeq = new Map<number, SessionEvent>(events.map(event => [event.seq, event]))
   return [...new Set(resultEventSeqs)].flatMap(resultSeq => {
     const result = eventBySeq.get(resultSeq)
     if (result?.type !== 'agent-rp/story-stage-result') return []
@@ -4289,15 +4290,15 @@ export async function materializeStoryTurn(input: {
   readonly turn: number
   readonly signal: AbortSignal
 }): Promise<StoryTurnMaterializedRecord | undefined> {
-  const previous = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-materialized'> =>
+  const previous = sessionEvents(input.agent.session).findLast((event): event is SessionEvent<'agent-rp/story-turn-materialized'> =>
     event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3 && event.data.turn === input.turn
       && event.data.workspaceId === input.workspaceId)
   if (previous !== undefined) return previous.data
-  const briefEvent = input.agent.session.events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
+  const briefEvent = sessionEvents(input.agent.session).findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
     event.type === 'agent-rp/story-turn-brief' && event.data.format === 1 && event.data.turn === input.turn
       && event.data.workspaceId === input.workspaceId)
   if (briefEvent === undefined) return undefined
-  const visibleReply = visibleReplyText(input.agent.session.events, input.turn)
+  const visibleReply = visibleReplyText(sessionEvents(input.agent.session), input.turn)
   const intentionallyOmitted = briefEvent.data.finalDraft === ''
   if (visibleReply === '' && !intentionallyOmitted) return undefined
   const voiceCitations = uniqueCitationDrafts((briefEvent.data.publicDialogues ?? []).flatMap(dialogue =>
@@ -4443,7 +4444,7 @@ export async function materializeStoryTurn(input: {
       ...voiceCitations,
     ], 24),
     webResearch: materializedWebResearch(
-      input.agent.session.events,
+      sessionEvents(input.agent.session),
       briefEvent.data.resultEventSeqs,
       String(input.agent.session.id),
       input.turn,
@@ -4462,7 +4463,7 @@ export async function materializeStoryTurn(input: {
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
     ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     publicTrace: {
-      stages: storyTurnPublicStageTrace(input.agent.session.events, [
+      stages: storyTurnPublicStageTrace(sessionEvents(input.agent.session), [
         ...briefEvent.data.resultEventSeqs,
         ...(continuityResultEventSeq === undefined ? [] : [continuityResultEventSeq]),
       ]),
