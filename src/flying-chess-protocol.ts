@@ -50,6 +50,12 @@ export interface FlyingChessNarrativeCard {
     readonly kind: 'change' | 'pressure' | 'opportunity' | 'relationship'
     readonly text: string
     readonly responders: FlyingChessNarrativeResponders
+    /** Durable use semantics when this cue grants a character-owned choice. */
+    readonly opportunity?: {
+      readonly kind: 'speech'
+      readonly move: 'question'
+      readonly targets: 'opponents'
+    }
   }
   readonly repeat: boolean
 }
@@ -77,6 +83,17 @@ export interface FlyingChessPendingRoll {
   readonly legalPieceIds: readonly string[]
 }
 
+/** Module-owned lifecycle for one opportunity created by a narrative card. */
+export interface FlyingChessNarrativeOpportunity {
+  readonly id: string
+  readonly cardId: string
+  readonly sourceEventSequence: number
+  readonly ownerId: string
+  readonly responderIds: readonly string[]
+  readonly status: 'available' | 'retained' | 'used' | 'declined'
+  readonly responderId?: string
+}
+
 /** Complete public state for the compact 24-cell flying-chess module. */
 export interface FlyingChessWorldState {
   readonly kind: 'flying-chess'
@@ -84,6 +101,7 @@ export interface FlyingChessWorldState {
   readonly playerOrder: readonly string[]
   readonly currentPlayerId: string
   readonly pieces: readonly FlyingChessPiece[]
+  readonly opportunities: readonly FlyingChessNarrativeOpportunity[]
   readonly pendingRoll?: FlyingChessPendingRoll
   readonly winnerId?: string
 }

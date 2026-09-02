@@ -1236,6 +1236,355 @@ test('draws authored scene cards from landing, collision, and home-count events'
   assert.deepEqual(homeProjection.cues[0]?.characterIds, [reimuId, marisaId])
 })
 
+test('keeps narrative opportunities private and durable until their explicit disposition', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const playContext: PlayWorldContext = {
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: FLYING_CHESS_WORLD_CONFIGURATION,
+    sourceReferences: [],
+  }
+  const createLanding = () => {
+    const rolls = [6, 6, 1]
+    const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
+    let snapshot = module.create(playContext)
+    for (let index = 0; index < 3; index += 1) {
+      let turn = module.characterTurn(snapshot, playContext)!
+      snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+      turn = module.characterTurn(snapshot, playContext)!
+      snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+    }
+    return { module, snapshot }
+  }
+
+  const immediate = createLanding()
+  const opportunity = immediate.module.characterOpportunities!(immediate.snapshot, reimuId, playContext)[0]!
+  assert.equal(opportunity.status, 'available')
+  assert.deepEqual(opportunity.responderIds, [marisaId])
+  assert.deepEqual(immediate.module.characterOpportunities!(immediate.snapshot, marisaId, playContext), [])
+  const { opportunities: _legacyMissingOpportunities, ...legacyState } = immediate.snapshot.state as FlyingChessWorldState
+  const recovered = immediate.module.normalize({ ...immediate.snapshot, state: legacyState }, playContext)
+  assert.equal(immediate.module.characterOpportunities!(recovered, reimuId, playContext)[0]?.id, opportunity.id)
+  const usedImmediately = immediate.module.resolveCharacterOpportunity!(immediate.snapshot, {
+    opportunityId: opportunity.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+    publicEvidence: '“你来这里以前，最后看见了什么？”',
+  }, playContext)
+  assert.deepEqual(immediate.module.characterOpportunities!(usedImmediately, reimuId, playContext), [])
+  assert.equal((usedImmediately.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+
+  const deferred = createLanding()
+  const deferredOpportunity = deferred.module.characterOpportunities!(deferred.snapshot, reimuId, playContext)[0]!
+  const retained = deferred.module.resolveCharacterOpportunity!(deferred.snapshot, {
+    opportunityId: deferredOpportunity.id,
+    characterId: reimuId,
+    disposition: 'retain',
+  }, playContext)
+  assert.equal(deferred.module.characterOpportunities!(retained, reimuId, playContext)[0]?.status, 'retained')
+  assert.match(deferred.module.projectForCharacter(retained, reimuId, playContext).text, /已保留/u)
+  assert.doesNotMatch(deferred.module.projectForCharacter(retained, marisaId, playContext).text, /已保留/u)
+  assert.throws(() => deferred.module.resolveCharacterOpportunity!(retained, {
+    opportunityId: deferredOpportunity.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+  }, playContext), /缺少有效的公开提问/u)
+  const usedLater = deferred.module.resolveCharacterOpportunity!(retained, {
+    opportunityId: deferredOpportunity.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+    publicEvidence: '“那本书，你是从哪里拿来的？”',
+  }, playContext)
+  assert.equal((usedLater.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+
+  const abandoned = createLanding()
+  const abandonedOpportunity = abandoned.module.characterOpportunities!(abandoned.snapshot, reimuId, playContext)[0]!
+  const declined = abandoned.module.resolveCharacterOpportunity!(abandoned.snapshot, {
+    opportunityId: abandonedOpportunity.id,
+    characterId: reimuId,
+    disposition: 'decline',
+  }, playContext)
+  assert.equal((declined.state as FlyingChessWorldState).opportunities[0]?.status, 'declined')
+  assert.deepEqual(abandoned.module.characterOpportunities!(declined, reimuId, playContext), [])
+
+  const legacyContext: PlayWorldContext = {
+    ...playContext,
+    configuration: {
+      format: 0,
+      ruleset: 'classic-24',
+      narrativeCards: [{
+        id: 'question-slip-step-eight',
+        trigger: { kind: 'piece-landed', step: 8 },
+        event: {
+          title: '格子下的折签弹开',
+          summary: '一架木机停在航线第 8 步时，格子下压着的折签弹开，正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
+        },
+        cue: {
+          kind: 'relationship',
+          text: '刚移动棋子的人物获得一次明确的提问机会，可以立即使用、留到以后或放弃；只有问题真正说出后，另一位人物才获得回答前提。',
+          responders: 'actor',
+        },
+        repeat: false,
+      }],
+    },
+  }
+  const legacyRolls = [6, 6, 1]
+  const legacyModule = createFlyingChessWorldModule({ rollDie: () => legacyRolls.shift()! })
+  let legacySnapshot = legacyModule.create(legacyContext)
+  for (let index = 0; index < 3; index += 1) {
+    let turn = legacyModule.characterTurn(legacySnapshot, legacyContext)!
+    legacySnapshot = legacyModule.dispatch(legacySnapshot, turn.actions[0]!.action, legacyContext)
+    turn = legacyModule.characterTurn(legacySnapshot, legacyContext)!
+    legacySnapshot = legacyModule.dispatch(legacySnapshot, turn.actions[0]!.action, legacyContext)
+  }
+  const legacyEvent = legacySnapshot.events.find(item => item.type === 'scene.changed')!
+  assert.equal((legacyEvent.data as { readonly cueKind?: unknown }).cueKind, 'relationship')
+  assert.equal((legacyEvent.data as { readonly opportunityKind?: unknown }).opportunityKind, undefined)
+  assert.equal(legacyModule.characterOpportunities!(legacySnapshot, reimuId, legacyContext)[0]?.status, 'available')
+  assert.deepEqual(legacyModule.characterOpportunities!(legacySnapshot, marisaId, legacyContext), [])
+})
+
+test('does not consume a world opportunity when the public question is rejected', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-opportunity-rejected-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const rolls = [6, 6, 1]
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift()! }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '未公开的提问机会' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const reimu = character(reimuId, '博丽灵梦')
+  const configured = store.save({
+    ...editable(created),
+    characters: [{
+      ...reimu,
+      profile: { ...reimu.profile, exampleDialogue: '灵梦：“你来这里以前，最后看见了什么？”' },
+    }, character(marisaId, '雾雨魔理沙')],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  let workspace = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  for (let index = 0; index < 3; index += 1) {
+    let turn = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: turn.cycleId,
+      actionId: 'roll',
+    })
+    turn = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: turn.cycleId,
+      actionId: turn.actions[0]!.id,
+    })
+  }
+  const module = worlds.get(FLYING_CHESS_WORLD_MODULE_ID)
+  const worldContext = resolveStoryPlayWorldContext(workspace)
+  const opportunity = module.characterOpportunities!(workspace.world!, reimuId, worldContext)[0]!
+
+  const session = Session.create(SessionId('world-opportunity-rejected'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 8_192 } },
+  })
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
+          .map(match => match[1]!))]
+        let text: string
+        if (system.includes('指定人物认知')) {
+          text = body.includes('# 人物：博丽灵梦')
+            ? JSON.stringify({
+              observation: '折签给了自己一次提问机会。',
+              action: '',
+              speech: {
+                respondsTo: '折签允许她向另一位棋手提一个问题。',
+                move: 'question',
+                focus: '魔理沙来这里前最后看见的事。',
+                effect: '让魔理沙决定是否回答。',
+              },
+              opportunityDecisions: [{
+                opportunityId: opportunity.id,
+                disposition: 'use',
+                responderId: marisaId,
+              }],
+              insights: [],
+            })
+            : JSON.stringify({
+              observation: '看见折签弹开，但提问尚未发生。',
+              action: '',
+              speech: null,
+              opportunityDecisions: [],
+              insights: [],
+            })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            move: 'question',
+            seedLineIds: targetSeedIds.slice(0, 1),
+            mechanics: '直接发问，把是否作答留给对方。',
+            leftImplicit: '提问的原因。',
+            dialogue: '“你来这里以前，最后看见了什么？”',
+          }] })
+        } else if (system.includes('对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '' }] })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = '木机在第八步停住，格子下的折签随即弹开。'
+        } else if (system.includes('最终正文编辑 Worker')) {
+          text = JSON.stringify({ sections: [{
+            sectionId: proseId,
+            text: '木机在第八步停住，格子下的折签随即弹开。',
+          }] })
+        } else if (system.includes('剧情研究 Worker')) {
+          text = JSON.stringify({ findings: [], followUps: [] })
+        } else if (system.includes('剧情导演 Worker')) {
+          text = JSON.stringify({ sections: [{ sectionId: proseId, beats: [], speech: [{ characterId: reimuId }] }] })
+        } else if (system.includes('剧情连续性记录 Worker')) {
+          text = JSON.stringify({
+            history: { text: '折签在棋子停到第八步时弹开。', sourceSectionIds: [proseId] },
+            changes: { characters: [], facts: [], nodes: [], edges: [] },
+          })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 50)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent,
+    store,
+    workspace,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(result.publicDialogues, undefined)
+  assert.equal(result.worldOpportunityResolutions, undefined)
+  const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+  const reimuBody = JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages)
+  const marisaBody = JSON.stringify(characterRequests.find(request => request.subjectId === marisaId)?.dispatch.messages)
+  assert.equal(reimuBody.includes(opportunity.id), true)
+  assert.equal(marisaBody.includes('<world_opportunities>\\n（无）\\n</world_opportunities>'), true)
+  assert.doesNotMatch(marisaBody, /status=open/u)
+
+  session.append('assistant/message', {
+    turn: 2,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: result.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 2, step: 1 })
+  await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: workspace.id,
+    turn: 2,
+    signal: new AbortController().signal,
+  })
+  const retained = module.characterOpportunities!(store.get(workspace.id).world!, reimuId, worldContext)[0]
+  assert.equal(retained?.status, 'available')
+  const noChanges = { characters: [], facts: [], nodes: [], edges: [] }
+  const retainedWorkspace = store.materializeTurn(workspace.id, {
+    key: 'world-opportunity-retained-later',
+    turn: 3,
+    title: '保留折签',
+    summary: '',
+    evidence: '',
+    participantIds: [reimuId, marisaId],
+    worldOpportunityResolutions: [{
+      opportunityId: opportunity.id,
+      characterId: reimuId,
+      disposition: 'retain',
+    }],
+    changes: noChanges,
+    webResearch: [],
+  })
+  assert.equal(module.characterOpportunities!(retainedWorkspace.world!, reimuId, worldContext)[0]?.status, 'retained')
+  assert.throws(() => store.materializeTurn(workspace.id, {
+    key: 'world-opportunity-use-without-visible-question',
+    turn: 4,
+    title: '错误使用折签',
+    summary: '',
+    evidence: '灵梦没有开口。',
+    participantIds: [reimuId, marisaId],
+    worldOpportunityResolutions: [{
+      opportunityId: opportunity.id,
+      characterId: reimuId,
+      disposition: 'use',
+      responderId: marisaId,
+      publicEvidence: '“你来这里以前，最后看见了什么？”',
+    }],
+    changes: noChanges,
+    webResearch: [],
+  }), /公开使用证据不在可见正文/u)
+  const usedWorkspace = store.materializeTurn(workspace.id, {
+    key: 'world-opportunity-used-later',
+    turn: 4,
+    title: '使用折签',
+    summary: '灵梦向魔理沙提问。',
+    evidence: '灵梦问：“你来这里以前，最后看见了什么？”',
+    participantIds: [reimuId, marisaId],
+    worldOpportunityResolutions: [{
+      opportunityId: opportunity.id,
+      characterId: reimuId,
+      disposition: 'use',
+      responderId: marisaId,
+      publicEvidence: '“你来这里以前，最后看见了什么？”',
+    }],
+    changes: noChanges,
+    webResearch: [],
+  })
+  assert.equal((usedWorkspace.world!.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+})
+
 test('projects first launch, ordinary movement, collision, and finish at their narrative cadence', () => {
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()

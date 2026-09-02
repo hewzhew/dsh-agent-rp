@@ -5,6 +5,7 @@ import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   type FlyingChessNarrativeCard,
+  type FlyingChessNarrativeOpportunity,
   type FlyingChessNarrativeTrigger,
   type FlyingChessPiece,
   type FlyingChessWorldAction,
@@ -12,6 +13,8 @@ import {
 } from './flying-chess-protocol.ts'
 import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
 import type {
+  PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityResolution,
   PlayWorldEvent,
   PlayWorldNarrativeCue,
   PlayWorldNarrativeFact,
@@ -23,6 +26,12 @@ const EVENT_ID_PATTERN = /^world-event-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89a
 const PIECE_ID_PATTERN = /^piece-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const TRACK_LENGTH = 24
 const PIECES_PER_PLAYER = 4
+const LEGACY_QUESTION_SLIP = Object.freeze({
+  cardId: 'question-slip-step-eight',
+  eventTitle: '格子下的折签弹开',
+  eventSummary: '一架木机停在航线第 8 步时，格子下压着的折签弹开，正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
+  cueText: '刚移动棋子的人物获得一次明确的提问机会，可以立即使用、留到以后或放弃；只有问题真正说出后，另一位人物才获得回答前提。',
+})
 const FLYING_CHESS_NARRATIVE_INVARIANTS = Object.freeze([Object.freeze({
   id: 'single-board',
   text: '场景中只有一张棋盘。',
@@ -88,11 +97,15 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
   const label = `飞行棋叙事事件牌 ${String(index + 1)}`
   if (!isRecord(value) || !exactKeys(value, ['id', 'trigger', 'event', 'cue', 'repeat'])
     || !isRecord(value.event) || !exactKeys(value.event, ['title', 'summary'])
-    || !isRecord(value.cue) || !exactKeys(value.cue, ['kind', 'text', 'responders'])
+    || !isRecord(value.cue) || !exactKeys(value.cue, ['kind', 'text', 'responders', 'opportunity'])
     || value.cue.kind !== 'change' && value.cue.kind !== 'pressure'
       && value.cue.kind !== 'opportunity' && value.cue.kind !== 'relationship'
     || value.cue.responders !== 'actor' && value.cue.responders !== 'opponents'
-      && value.cue.responders !== 'all' || typeof value.repeat !== 'boolean') {
+      && value.cue.responders !== 'all' || typeof value.repeat !== 'boolean'
+    || value.cue.opportunity !== undefined && (!isRecord(value.cue.opportunity)
+      || !exactKeys(value.cue.opportunity, ['kind', 'move', 'targets'])
+      || value.cue.opportunity.kind !== 'speech' || value.cue.opportunity.move !== 'question'
+      || value.cue.opportunity.targets !== 'opponents')) {
     throw new Error(`${label}无效`)
   }
   const id = configurationText(value.id, `${label} id`, 120)
@@ -108,6 +121,9 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
       kind: value.cue.kind,
       text: configurationText(value.cue.text, `${label}现场条件`, 2_000),
       responders: value.cue.responders,
+      ...(value.cue.opportunity === undefined
+        ? {}
+        : { opportunity: { kind: 'speech', move: 'question', targets: 'opponents' } as const }),
     },
     repeat: value.repeat,
   }
@@ -153,10 +169,41 @@ function normalizePiece(value: unknown, players: ReadonlySet<string>): FlyingChe
   return value as unknown as FlyingChessPiece
 }
 
+function normalizeNarrativeOpportunity(
+  value: unknown,
+  players: ReadonlySet<string>,
+): FlyingChessNarrativeOpportunity {
+  if (!isRecord(value)
+    || !exactKeys(value, ['id', 'cardId', 'sourceEventSequence', 'ownerId', 'responderIds', 'status', 'responderId'])
+    || typeof value.id !== 'string' || !/^[A-Za-z0-9:._-]{1,240}$/u.test(value.id)
+    || typeof value.cardId !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/u.test(value.cardId)
+    || !Number.isSafeInteger(value.sourceEventSequence) || (value.sourceEventSequence as number) < 1
+    || typeof value.ownerId !== 'string' || !players.has(value.ownerId)
+    || !Array.isArray(value.responderIds) || value.responderIds.length === 0
+    || new Set(value.responderIds).size !== value.responderIds.length
+    || value.responderIds.some(id => typeof id !== 'string' || id === value.ownerId || !players.has(id))
+    || value.status !== 'available' && value.status !== 'retained'
+      && value.status !== 'used' && value.status !== 'declined'
+    || (value.status === 'used') !== (typeof value.responderId === 'string')
+    || value.responderId !== undefined && !(value.responderIds as readonly unknown[]).includes(value.responderId)) {
+    throw new Error('飞行棋叙事机会状态无效')
+  }
+  return {
+    id: value.id,
+    cardId: value.cardId,
+    sourceEventSequence: value.sourceEventSequence as number,
+    ownerId: value.ownerId,
+    responderIds: value.responderIds as readonly string[],
+    status: value.status,
+    ...(value.responderId === undefined ? {} : { responderId: value.responderId as string }),
+  }
+}
+
 function normalizeState(value: unknown, context: PlayWorldContext): FlyingChessWorldState {
-  if (!isRecord(value) || !exactKeys(value, ['kind', 'turn', 'playerOrder', 'currentPlayerId', 'pieces', 'pendingRoll', 'winnerId'])
+  if (!isRecord(value) || !exactKeys(value, ['kind', 'turn', 'playerOrder', 'currentPlayerId', 'pieces', 'opportunities', 'pendingRoll', 'winnerId'])
     || value.kind !== 'flying-chess' || !Number.isSafeInteger(value.turn) || (value.turn as number) < 1
-    || !Array.isArray(value.playerOrder) || !Array.isArray(value.pieces)) {
+    || !Array.isArray(value.playerOrder) || !Array.isArray(value.pieces)
+    || value.opportunities !== undefined && !Array.isArray(value.opportunities)) {
     throw new Error('飞行棋世界状态无效')
   }
   const expectedPlayers = requirePlayers(context)
@@ -176,6 +223,10 @@ function normalizeState(value: unknown, context: PlayWorldContext): FlyingChessW
     || new Set(pieces.map(piece => `${piece.ownerId}\u0000${String(piece.number)}`)).size !== pieces.length
     || expectedPlayers.some(player => pieces.filter(piece => piece.ownerId === player).length !== PIECES_PER_PLAYER)) {
     throw new Error('飞行棋棋子集合无效')
+  }
+  const opportunities = (value.opportunities ?? []).map(item => normalizeNarrativeOpportunity(item, playerSet))
+  if (opportunities.length > 64 || new Set(opportunities.map(item => item.id)).size !== opportunities.length) {
+    throw new Error('飞行棋叙事机会集合无效')
   }
   let pendingRoll: FlyingChessWorldState['pendingRoll']
   if (value.pendingRoll !== undefined) {
@@ -197,6 +248,7 @@ function normalizeState(value: unknown, context: PlayWorldContext): FlyingChessW
       playerOrder: value.playerOrder as readonly string[],
       currentPlayerId: value.currentPlayerId,
       pieces,
+      opportunities,
     }, pendingRoll.playerId, pendingRoll.value).map(piece => piece.id).sort()
     if (expected.length === 0 || pendingRoll.legalPieceIds.length !== expected.length
       || [...pendingRoll.legalPieceIds].sort().some((id, index) => id !== expected[index])) {
@@ -217,6 +269,7 @@ function normalizeState(value: unknown, context: PlayWorldContext): FlyingChessW
     playerOrder: value.playerOrder as readonly string[],
     currentPlayerId: value.currentPlayerId,
     pieces,
+    opportunities,
     ...(pendingRoll === undefined ? {} : { pendingRoll }),
     ...(winnerId === undefined ? {} : { winnerId }),
   }
@@ -265,6 +318,104 @@ function event(
 
 function eventData(event: PlayWorldEvent): Record<string, JsonValue> | undefined {
   return isRecord(event.data) ? event.data as Record<string, JsonValue> : undefined
+}
+
+function narrativeOpportunityUse(
+  item: PlayWorldEvent,
+  context: PlayWorldContext,
+): FlyingChessNarrativeCard['cue']['opportunity'] | undefined {
+  const data = eventData(item)
+  if (item.type !== 'scene.changed' || data?.kind !== 'narrative-card'
+    || typeof data.cardId !== 'string') return undefined
+  if (data.opportunityKind === 'speech' && data.opportunityMove === 'question'
+    && data.opportunityTargets === 'opponents') {
+    return { kind: 'speech', move: 'question', targets: 'opponents' }
+  }
+  const card = narrativeCards(context).find(candidate => candidate.id === data.cardId)
+  if (card?.cue.opportunity !== undefined) return card.cue.opportunity
+  const trigger = card?.trigger
+  if (data.cardId === LEGACY_QUESTION_SLIP.cardId
+    && exactKeys(data, ['kind', 'cardId', 'cueKind', 'cueText', 'causeSequence', 'characterIds'])
+    && data.cueKind === 'relationship' && data.cueText === LEGACY_QUESTION_SLIP.cueText
+    && item.title === LEGACY_QUESTION_SLIP.eventTitle && item.summary === LEGACY_QUESTION_SLIP.eventSummary
+    && trigger?.kind === 'piece-landed' && trigger.step === 8
+    && card?.event.title === LEGACY_QUESTION_SLIP.eventTitle
+    && card.event.summary === LEGACY_QUESTION_SLIP.eventSummary
+    && card.cue.kind === 'relationship' && card.cue.text === LEGACY_QUESTION_SLIP.cueText
+    && card.cue.responders === 'actor' && card.repeat === false) {
+    return { kind: 'speech', move: 'question', targets: 'opponents' }
+  }
+  return undefined
+}
+
+function opportunityId(eventId: string, ownerId: string): string {
+  return `opportunity:${eventId}:${ownerId}`
+}
+
+function recoverNarrativeOpportunities(
+  state: FlyingChessWorldState,
+  events: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+): FlyingChessWorldState {
+  const eventBySequence = new Map(events.map(item => [item.sequence, item]))
+  for (const opportunity of state.opportunities) {
+    const source = eventBySequence.get(opportunity.sourceEventSequence)
+    const data = source === undefined ? undefined : eventData(source)
+    if (source === undefined || data?.kind !== 'narrative-card' || data.cardId !== opportunity.cardId) {
+      throw new Error('飞行棋叙事机会引用了无效的世界事件')
+    }
+  }
+  const existing = new Set(state.opportunities.map(item => item.id))
+  const recovered = events.flatMap(item => {
+    if (narrativeOpportunityUse(item, context) === undefined) return []
+    const data = eventData(item)
+    if (typeof data?.cardId !== 'string' || !Array.isArray(data.characterIds)
+      || data.characterIds.some(id => typeof id !== 'string' || !state.playerOrder.includes(id))) return []
+    return (data.characterIds as readonly string[]).flatMap(ownerId => {
+      const id = opportunityId(item.id, ownerId)
+      if (existing.has(id)) return []
+      existing.add(id)
+      return [{
+        id,
+        cardId: data.cardId as string,
+        sourceEventSequence: item.sequence,
+        ownerId,
+        responderIds: state.playerOrder.filter(id => id !== ownerId),
+        status: 'available' as const,
+      }]
+    })
+  })
+  return recovered.length === 0
+    ? state
+    : { ...state, opportunities: [...state.opportunities, ...recovered] }
+}
+
+function characterOpportunities(
+  state: FlyingChessWorldState,
+  events: readonly PlayWorldEvent[],
+  characterId: string,
+  context: PlayWorldContext,
+): readonly PlayWorldCharacterOpportunity[] {
+  const eventBySequence = new Map(events.map(item => [item.sequence, item]))
+  return state.opportunities.flatMap(opportunity => {
+    if (opportunity.ownerId !== characterId
+      || opportunity.status !== 'available' && opportunity.status !== 'retained') return []
+    const source = eventBySequence.get(opportunity.sourceEventSequence)
+    const data = source === undefined ? undefined : eventData(source)
+    const use = source === undefined ? undefined : narrativeOpportunityUse(source, context)
+    if (typeof data?.cueText !== 'string' || use === undefined) {
+      throw new Error('飞行棋叙事机会缺少来源说明')
+    }
+    return [{
+      id: opportunity.id,
+      sourceEventSequences: [opportunity.sourceEventSequence],
+      characterId,
+      responderIds: opportunity.responderIds,
+      status: opportunity.status,
+      instruction: data.cueText,
+      use,
+    }]
+  })
 }
 
 function legalPieces(state: FlyingChessWorldState, playerId: string, value: number): readonly FlyingChessPiece[] {
@@ -463,6 +614,11 @@ function appendNarrativeCardEvents(
         cueText: card.cue.text,
         causeSequence,
         characterIds: [...characterIds],
+        ...(card.cue.opportunity === undefined ? {} : {
+          opportunityKind: card.cue.opportunity.kind,
+          opportunityMove: card.cue.opportunity.move,
+          opportunityTargets: card.cue.opportunity.targets,
+        }),
       }),
     ]
   }, events)
@@ -531,7 +687,12 @@ function projectNarrative(
   }
 }
 
-function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
+function renderState(
+  state: FlyingChessWorldState,
+  events: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+  characterId?: string,
+): string {
   const names = characterMap(context)
   const lines = state.playerOrder.map(playerId => {
     const pieces = state.pieces.filter(piece => piece.ownerId === playerId)
@@ -541,12 +702,17 @@ function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEve
     return `- ${names.get(playerId) ?? playerId}：基地 ${String(base)}，航线 ${track}，到达 ${String(home)}`
   })
   const recent = events.slice(-8).map(item => `- ${item.title}：${item.summary}`).join('\n')
+  const opportunities = characterId === undefined
+    ? []
+    : characterOpportunities(state, events, characterId, context).map(opportunity =>
+        `- [${opportunity.id}] ${opportunity.status === 'available' ? '尚未处置' : '已保留'}：${opportunity.instruction}`)
   return [
     '执行约束：棋局状态与世界事件只能由场地程序写入。只能描写下列已记录事件及人物反应；禁止自行掷骰、移动棋子、切换回合、决定胜负或声称任何未记录的棋局变化。',
     `当前第 ${String(state.turn)} 回合，轮到 ${names.get(state.currentPlayerId) ?? state.currentPlayerId}。`,
     state.pendingRoll === undefined ? '尚未掷骰。' : `已掷出 ${String(state.pendingRoll.value)}，等待选择合法棋子。`,
     ...lines,
     state.winnerId === undefined ? '' : `胜者：${names.get(state.winnerId) ?? state.winnerId}`,
+    opportunities.length === 0 ? '' : `你拥有的未决世界机会：\n${opportunities.join('\n')}`,
     recent === '' ? '' : `最近世界事件：\n${recent}`,
   ].filter(Boolean).join('\n')
 }
@@ -609,7 +775,14 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         moduleId: FLYING_CHESS_WORLD_MODULE_ID,
         moduleVersion: 0,
         title,
-        state: { kind: 'flying-chess', turn: 1, playerOrder: players, currentPlayerId: players[0]!, pieces } satisfies FlyingChessWorldState,
+        state: {
+          kind: 'flying-chess',
+          turn: 1,
+          playerOrder: players,
+          currentPlayerId: players[0]!,
+          pieces,
+          opportunities: [],
+        } satisfies FlyingChessWorldState,
         events,
       }
     },
@@ -622,8 +795,8 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         throw new Error('飞行棋世界快照无效')
       }
       const players = new Set(requirePlayers(context))
-      const state = normalizeState(value.state, context)
       const events = value.events.map((item, index) => normalizeEvent(item, index, players))
+      const state = recoverNarrativeOpportunities(normalizeState(value.state, context), events, context)
       return { format: 0, instanceId: value.instanceId, moduleId: FLYING_CHESS_WORLD_MODULE_ID, moduleVersion: 0, title: value.title, state, events }
     },
     dispatch(snapshot, action, context) {
@@ -795,7 +968,60 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
     projectForCharacter(snapshot, characterId, context) {
       const normalized = this.normalize(snapshot, context)
       if (!context.characters.some(character => character.id === characterId)) throw new Error('飞行棋投影指向未知人物')
-      return { title: normalized.title, text: renderState(normalized.state as FlyingChessWorldState, normalized.events, context) }
+      return {
+        title: normalized.title,
+        text: renderState(normalized.state as FlyingChessWorldState, normalized.events, context, characterId),
+      }
+    },
+    characterOpportunities(snapshot, characterId, context) {
+      const normalized = this.normalize(snapshot, context)
+      if (!context.characters.some(character => character.id === characterId)) throw new Error('飞行棋机会投影指向未知人物')
+      return characterOpportunities(
+        normalized.state as FlyingChessWorldState,
+        normalized.events,
+        characterId,
+        context,
+      )
+    },
+    resolveCharacterOpportunity(snapshot, resolution: PlayWorldCharacterOpportunityResolution, context) {
+      const normalized = this.normalize(snapshot, context)
+      const state = normalized.state as FlyingChessWorldState
+      const selected = state.opportunities.find(item => item.id === resolution.opportunityId)
+      if (selected === undefined || selected.ownerId !== resolution.characterId) {
+        throw new Error('飞行棋叙事机会不存在或不属于这位人物')
+      }
+      const unchanged = selected.status === 'retained' && resolution.disposition === 'retain'
+        || selected.status === 'used' && resolution.disposition === 'use'
+          && selected.responderId === resolution.responderId
+        || selected.status === 'declined' && resolution.disposition === 'decline'
+      if (unchanged) return normalized
+      if (selected.status === 'used' || selected.status === 'declined') {
+        throw new Error('飞行棋叙事机会已经终结')
+      }
+      if (resolution.disposition === 'retain') {
+        if (resolution.responderId !== undefined || resolution.publicEvidence !== undefined) {
+          throw new Error('保留飞行棋叙事机会时不能附带使用结果')
+        }
+      } else if (resolution.disposition === 'decline') {
+        if (resolution.responderId !== undefined || resolution.publicEvidence !== undefined) {
+          throw new Error('放弃飞行棋叙事机会时不能附带使用结果')
+        }
+      } else {
+        const source = normalized.events.find(item => item.sequence === selected.sourceEventSequence)
+        if (source === undefined || narrativeOpportunityUse(source, context)?.move !== 'question'
+          || resolution.responderId === undefined || !selected.responderIds.includes(resolution.responderId)
+          || typeof resolution.publicEvidence !== 'string' || resolution.publicEvidence.trim() === '') {
+          throw new Error('使用飞行棋叙事机会缺少有效的公开提问')
+        }
+      }
+      const opportunities = state.opportunities.map(item => item.id !== selected.id
+        ? item
+        : resolution.disposition === 'retain'
+          ? { ...item, status: 'retained' as const }
+          : resolution.disposition === 'decline'
+            ? { ...item, status: 'declined' as const }
+            : { ...item, status: 'used' as const, responderId: resolution.responderId })
+      return this.normalize({ ...normalized, state: { ...state, opportunities } }, context)
     },
     projectForDirector(snapshot, context) {
       const normalized = this.normalize(snapshot, context)

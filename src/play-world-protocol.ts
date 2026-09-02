@@ -157,6 +157,30 @@ export interface PlayWorldPromptProjection {
   readonly text: string
 }
 
+/** One durable, character-owned choice opened by an authoritative world event. */
+export interface PlayWorldCharacterOpportunity {
+  readonly id: string
+  readonly sourceEventSequences: readonly number[]
+  readonly characterId: string
+  readonly responderIds: readonly string[]
+  readonly status: 'available' | 'retained'
+  readonly instruction: string
+  readonly use: {
+    readonly kind: 'speech'
+    readonly move: 'question'
+  }
+}
+
+/** One character's explicit decision about a durable world opportunity. */
+export interface PlayWorldCharacterOpportunityResolution {
+  readonly opportunityId: string
+  readonly characterId: string
+  readonly disposition: 'retain' | 'use' | 'decline'
+  readonly responderId?: string
+  /** Exact public utterance required before a speech opportunity can become used. */
+  readonly publicEvidence?: string
+}
+
 /** How selected world events should occupy the next visible story passage. */
 export type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution'
 

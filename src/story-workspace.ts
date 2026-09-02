@@ -2270,6 +2270,34 @@ export class StoryWorkspaceStore {
     if (!/^[A-Za-z0-9:_-]{1,240}$/u.test(materialization.key)) throw new Error('故事事件 key 无效')
     const current = this.get(id)
     if (current.events.some(event => event.key === materialization.key)) return current
+    let world = current.world
+    const opportunityResolutions = materialization.worldOpportunityResolutions ?? []
+    if (opportunityResolutions.length > 32) throw new Error('世界机会处置过多')
+    if (opportunityResolutions.length > 0) {
+      if (world === undefined) throw new Error('世界机会处置缺少可执行世界')
+      const module = this.worlds.get(world.moduleId)
+      if (module.resolveCharacterOpportunity === undefined) throw new Error('当前游玩世界不支持人物机会处置')
+      const context = playWorldContext(
+        current.characters,
+        current.worldBinding ?? normalizeWorldBinding(undefined, world.moduleId),
+      )
+      const resolutionIds = new Set<string>()
+      for (const resolution of opportunityResolutions) {
+        if (resolutionIds.has(resolution.opportunityId)) throw new Error('同一世界机会被重复处置')
+        resolutionIds.add(resolution.opportunityId)
+        if (resolution.disposition === 'use'
+          && (resolution.publicEvidence === undefined || !materialization.evidence.includes(resolution.publicEvidence))) {
+          throw new Error('世界机会的公开使用证据不在可见正文中')
+        }
+        const before = world
+        world = module.resolveCharacterOpportunity(before, resolution, context)
+        if (world.moduleId !== before.moduleId || world.instanceId !== before.instanceId
+          || world.events.length !== before.events.length
+          || before.events.some((event, index) => world?.events[index]?.id !== event.id)) {
+          throw new Error('世界机会处置改变了世界所属、实例或既有事件')
+        }
+      }
+    }
     const characterIds = new Set(current.characters.map(character => character.id))
     for (const participantId of materialization.participantIds) {
       if (!characterIds.has(participantId)) throw new Error('故事事件包含未知参与人物')
@@ -2429,10 +2457,13 @@ export class StoryWorkspaceStore {
         target: { kind: 'event', eventId },
       })
     }
-    return this.save({
+    const snapshot = normalizeWorkspace({
+      ...current,
       format: 2,
       id: current.id,
-      revision: current.revision,
+      revision: current.revision + 1,
+      createdAt: current.createdAt,
+      updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       name: current.name,
       pipeline: current.pipeline,
       graph: {
@@ -2447,7 +2478,12 @@ export class StoryWorkspaceStore {
       sources: current.sources,
       citations,
       researchInbox,
-    })
+      ...(world === undefined ? {} : { world }),
+      ...(current.worldBinding === undefined ? {} : { worldBinding: current.worldBinding }),
+      ...(current.worldActionReceipts === undefined ? {} : { worldActionReceipts: current.worldActionReceipts }),
+    }, this.worlds)
+    this.writeSnapshot(snapshot)
+    return this.get(snapshot.id)
   }
 
   /** Remove one workspace and every local document it owns. */

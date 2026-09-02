@@ -16,6 +16,8 @@ import type {
 } from './story-workspace-protocol.ts'
 import { createFlyingChessWorldModule } from './flying-chess-world.ts'
 import type {
+  PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityResolution,
   PlayWorldModuleDescriptor,
   PlayWorldNarrativeProjection,
   PlayWorldPromptProjection,
@@ -118,6 +120,18 @@ export interface PlayWorldModule {
   projectSurface(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldSurfaceProjection
   /** Project only knowledge available to one character Worker. */
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
+  /** Return unresolved choices owned by one character without exposing another character's choices. */
+  characterOpportunities?(
+    snapshot: PlayWorldSnapshot,
+    characterId: string,
+    context: PlayWorldContext,
+  ): readonly PlayWorldCharacterOpportunity[]
+  /** Persist one explicit character choice after its required public evidence exists. */
+  resolveCharacterOpportunity?(
+    snapshot: PlayWorldSnapshot,
+    resolution: PlayWorldCharacterOpportunityResolution,
+    context: PlayWorldContext,
+  ): PlayWorldSnapshot
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project immutable facts, optional dramatic directions, non-rendered invariants, and presentation cadence. */
@@ -126,6 +140,49 @@ export interface PlayWorldModule {
     eventSequences: readonly number[],
     context: PlayWorldContext,
   ): PlayWorldNarrativeProjection
+}
+
+/** Validate character-owned world opportunities before they enter a Worker request. */
+export function projectPlayWorldCharacterOpportunities(
+  opportunities: readonly PlayWorldCharacterOpportunity[],
+  snapshot: PlayWorldSnapshot,
+  characterId: string,
+  context: PlayWorldContext,
+): readonly PlayWorldCharacterOpportunity[] {
+  if (!Array.isArray(opportunities) || opportunities.length > 32) {
+    throw new Error('游玩世界人物机会集合无效')
+  }
+  const worldEventSequences = new Set(snapshot.events.map(event => event.sequence))
+  const characterIds = new Set(context.characters.map(character => character.id))
+  if (!characterIds.has(characterId)) throw new Error('游玩世界人物机会指向未知人物')
+  const opportunityIds = new Set<string>()
+  return Object.freeze(opportunities.map((opportunity, index) => {
+    const id = requiredProjectionText(opportunity.id, `游玩世界人物机会 ${String(index + 1)} id`, 240)
+    if (opportunityIds.has(id)) throw new Error(`游玩世界人物机会 ${JSON.stringify(id)}重复`)
+    opportunityIds.add(id)
+    if (opportunity.characterId !== characterId
+      || opportunity.status !== 'available' && opportunity.status !== 'retained'
+      || !Array.isArray(opportunity.sourceEventSequences) || opportunity.sourceEventSequences.length === 0
+      || opportunity.sourceEventSequences.length > 64
+      || new Set(opportunity.sourceEventSequences).size !== opportunity.sourceEventSequences.length
+      || opportunity.sourceEventSequences.some((sequence: number) => !Number.isSafeInteger(sequence)
+        || !worldEventSequences.has(sequence))
+      || !Array.isArray(opportunity.responderIds) || opportunity.responderIds.length === 0
+      || new Set(opportunity.responderIds).size !== opportunity.responderIds.length
+      || opportunity.responderIds.some((id: string) => id === characterId || !characterIds.has(id))
+      || opportunity.use.kind !== 'speech' || opportunity.use.move !== 'question') {
+      throw new Error(`游玩世界人物机会 ${String(index + 1)}无效`)
+    }
+    return Object.freeze({
+      id,
+      sourceEventSequences: Object.freeze([...opportunity.sourceEventSequences]),
+      characterId,
+      responderIds: Object.freeze([...opportunity.responderIds]),
+      status: opportunity.status,
+      instruction: requiredProjectionText(opportunity.instruction, `游玩世界人物机会 ${String(index + 1)}说明`, 2_000),
+      use: Object.freeze({ kind: 'speech' as const, move: 'question' as const }),
+    })
+  }))
 }
 
 interface PlayWorldRegistration {

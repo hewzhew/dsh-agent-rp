@@ -23,8 +23,16 @@ import {
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { jsonrepair } from 'jsonrepair'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
-import { projectPlayWorldNarrative, type PlayWorldCharacterTurn } from './play-world.ts'
-import type { PlayWorldNarrativeProjection } from './play-world-protocol.ts'
+import {
+  projectPlayWorldCharacterOpportunities,
+  projectPlayWorldNarrative,
+  type PlayWorldCharacterTurn,
+} from './play-world.ts'
+import type {
+  PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityResolution,
+  PlayWorldNarrativeProjection,
+} from './play-world-protocol.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
@@ -170,6 +178,8 @@ export interface StoryTurnCharacterPrivateState {
 /** One exact approved utterance rendered into a public prose section. */
 export interface StoryTurnPublicDialogue {
   readonly characterId: string
+  /** Named addressee when a world opportunity required the utterance to target one character. */
+  readonly targetCharacterId?: string
   readonly dialogue: string
   /** Public speech act retained so the next turn can distinguish an open prompt from a completed remark. */
   readonly move?: StoryVoiceMove
@@ -213,6 +223,8 @@ export interface StoryTurnBriefRecord {
   readonly worldEventSequences?: readonly number[]
   /** Public rule evidence projected separately from the visible prose. */
   readonly publicWorldEvents?: readonly StoryTurnPublicWorldEvent[]
+  /** Explicit world-opportunity choices whose public preconditions survived final rendering. */
+  readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
   readonly directorBrief: string
   /** Exact local excerpts exposed to the director through the research stage. */
   readonly researchCitations?: readonly StoryCitationDraft[]
@@ -244,6 +256,7 @@ export interface StoryTurnMaterializedRecord {
   readonly continuityResultEventSeq?: number
   readonly eventSummary: string
   readonly changes: StoryChangeSet
+  readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
   readonly researchCitations?: readonly StoryCitationDraft[]
   readonly voiceCitations?: readonly StoryCitationDraft[]
   /** Public receipt rendered after the visible reply. */
@@ -392,7 +405,14 @@ interface StoryCharacterDecision {
   readonly observation: string
   readonly action: string
   readonly speech: StoryCharacterSpeechIntent | undefined
+  readonly opportunityDecisions: readonly StoryCharacterOpportunityDecision[]
   readonly insights: readonly StoryTurnPrivateInsight[]
+}
+
+interface StoryCharacterOpportunityDecision {
+  readonly opportunityId: string
+  readonly disposition: 'retain' | 'use' | 'decline'
+  readonly responderId?: string
 }
 
 interface StoryTurnCastDecision {
@@ -414,6 +434,7 @@ interface StoryCharacterDecisionRecord {
 
 interface StoryRecentPublicExchangeLine {
   readonly characterId: string
+  readonly targetCharacterId?: string
   readonly characterName: string
   readonly dialogue: string
   readonly move?: StoryVoiceMove
@@ -495,8 +516,21 @@ const STORY_CHARACTER_DECISION_SCHEMA: NonNullable<SubagentStartRequest['outputS
         additionalProperties: false,
       },
     },
+    opportunityDecisions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          opportunityId: { type: 'string' },
+          disposition: { type: 'string', enum: ['retain', 'use', 'decline'] },
+          responderId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+        },
+        required: ['opportunityId', 'disposition', 'responderId'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['observation', 'action', 'speech', 'insights'],
+  required: ['observation', 'action', 'speech', 'opportunityDecisions', 'insights'],
   additionalProperties: false,
 }
 
@@ -645,6 +679,7 @@ function recentPublicExchange(
     const characterName = characterNameById.get(dialogue.characterId)
     return characterName === undefined ? [] : [{
       characterId: dialogue.characterId,
+      ...(dialogue.targetCharacterId === undefined ? {} : { targetCharacterId: dialogue.targetCharacterId }),
       characterName,
       dialogue: dialogue.dialogue,
       ...(dialogue.move === undefined ? {} : { move: dialogue.move }),
@@ -666,6 +701,7 @@ function renderRecentPublicExchange(exchange: StoryRecentPublicExchange | undefi
     ...exchange.lines.map(line => [
       line.characterId,
       line.characterName,
+      `targetCharacterId=${line.targetCharacterId ?? '-'}`,
       `move=${line.move ?? 'unknown'}`,
       line.dialogue,
     ].join('\t')),
@@ -891,9 +927,41 @@ function renderResearchBrief(
   ].join('\n\n')
 }
 
+function parseCharacterOpportunityDecisions(value: unknown): readonly StoryCharacterOpportunityDecision[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 32) throw new Error('人物决策.opportunityDecisions 无效')
+  const decisions = value.map((item, index): StoryCharacterOpportunityDecision => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`人物决策.opportunityDecisions[${String(index)}]不是对象`)
+    }
+    const decision = item as Record<string, unknown>
+    if (Object.keys(decision).some(key => !['opportunityId', 'disposition', 'responderId'].includes(key))
+      || decision.disposition !== 'retain' && decision.disposition !== 'use' && decision.disposition !== 'decline') {
+      throw new Error(`人物决策.opportunityDecisions[${String(index)}]字段无效`)
+    }
+    const opportunityId = boundedString(decision.opportunityId, `人物决策.opportunityDecisions[${String(index)}].opportunityId`, 240)
+    const responderId = decision.responderId === null || decision.responderId === undefined
+      ? undefined
+      : boundedString(decision.responderId, `人物决策.opportunityDecisions[${String(index)}].responderId`, 240)
+    if (opportunityId === '' || (decision.disposition === 'use') !== (responderId !== undefined)) {
+      throw new Error(`人物决策.opportunityDecisions[${String(index)}]内容无效`)
+    }
+    return {
+      opportunityId,
+      disposition: decision.disposition,
+      ...(responderId === undefined ? {} : { responderId }),
+    }
+  })
+  if (new Set(decisions.map(item => item.opportunityId)).size !== decisions.length
+    || decisions.filter(item => item.disposition === 'use').length > 1) {
+    throw new Error('人物决策包含重复或多个同时使用的世界机会')
+  }
+  return decisions
+}
+
 function parseCharacterDecision(text: string): StoryCharacterDecision {
   const record = jsonObject(text, '人物决策')
-  if (Object.keys(record).some(key => !['observation', 'action', 'speech', 'insights'].includes(key))
+  if (Object.keys(record).some(key => !['observation', 'action', 'speech', 'insights', 'opportunityDecisions'].includes(key))
     || !Array.isArray(record.insights)) throw new Error('人物决策字段无效')
   const observation = boundedString(record.observation, '人物决策.observation', 4_096)
   const action = boundedString(record.action, '人物决策.action', 4_096)
@@ -915,7 +983,13 @@ function parseCharacterDecision(text: string): StoryCharacterDecision {
     throw new Error('人物决策包含不应提前写定的逐字对白')
   }
   const insights = parseCharacterInsights(record.insights, '人物决策.insights', speech)
-  return { observation, action, speech, insights }
+  return {
+    observation,
+    action,
+    speech,
+    opportunityDecisions: parseCharacterOpportunityDecisions(record.opportunityDecisions),
+    insights,
+  }
 }
 
 function renderCharacterDecision(
@@ -927,6 +1001,7 @@ function renderCharacterDecision(
     `## ${characterName}`,
     `- 人物 ID：${characterId}`,
     `- 公开行动：${decision.action === '' ? '无' : decision.action}`,
+    ...decision.opportunityDecisions.map(item => `- 世界机会：${item.disposition} ${item.opportunityId}${item.responderId === undefined ? '' : ` → ${item.responderId}`}`),
     ...(decision.speech === undefined
       ? ['- 说话决定：无']
       : [
@@ -3069,12 +3144,16 @@ async function resolveStoryTurnCast(
   playerInput: string,
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
   worldActionCharacters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  recentExchange: StoryRecentPublicExchange | undefined,
   resultEventSeqs: number[],
 ): Promise<ReadonlySet<string>> {
   const worldActorIds = new Set(worldActionCharacters.map(character => character.id))
+  const pendingResponderIds = recentExchange?.status === 'open'
+    ? recentExchange.lines.flatMap(line => line.targetCharacterId === undefined ? [] : [line.targetCharacterId])
+    : []
   const fallback = new Set(worldActionCharacters.length === 0 || playerInput === ''
-    ? characters.map(character => character.id)
-    : worldActionCharacters.map(character => character.id))
+    ? [...characters.map(character => character.id), ...pendingResponderIds]
+    : [...worldActionCharacters.map(character => character.id), ...pendingResponderIds])
   if (characters.length <= 1) return fallback
   const mentionedCharacters = characters.filter(character =>
     characterReferenceNames(character.name).some(name => playerInput.includes(name)))
@@ -3136,6 +3215,70 @@ function projectWorldNarrative(
     context,
   )
   return projectPlayWorldNarrative(projection, sequences, context)
+}
+
+function projectCharacterWorldOpportunities(
+  input: RunStoryTurnPipelineInput,
+  characterId: string,
+): readonly PlayWorldCharacterOpportunity[] {
+  if (input.workspace.world === undefined || input.store === undefined) return []
+  const module = input.store.worlds.get(input.workspace.world.moduleId)
+  if (module.characterOpportunities === undefined) return []
+  const context = resolveStoryPlayWorldContext(input.workspace)
+  return projectPlayWorldCharacterOpportunities(
+    module.characterOpportunities(input.workspace.world, characterId, context),
+    input.workspace.world,
+    characterId,
+    context,
+  )
+}
+
+function renderCharacterWorldOpportunities(
+  opportunities: readonly PlayWorldCharacterOpportunity[],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): string {
+  if (opportunities.length === 0) return '（无）'
+  const characterNames = new Map(characters.map(character => [character.id, character.name]))
+  return opportunities.map(opportunity => [
+    `id=${opportunity.id}`,
+    `status=${opportunity.status}`,
+    `sourceEventSequences=${opportunity.sourceEventSequences.join(',')}`,
+    `requiredSpeechMove=${opportunity.use.move}`,
+    `responders=${opportunity.responderIds.map(id => `${id}:${characterNames.get(id) ?? id}`).join(',')}`,
+    `instruction=${opportunity.instruction}`,
+  ].join('\t')).join('\n')
+}
+
+function bindCharacterOpportunityDecisions(
+  decision: StoryCharacterDecision,
+  opportunities: readonly PlayWorldCharacterOpportunity[],
+): StoryCharacterDecision {
+  if (opportunities.length === 0) {
+    return decision.opportunityDecisions.length === 0
+      ? decision
+      : { ...decision, opportunityDecisions: [] }
+  }
+  try {
+    const opportunityById = new Map(opportunities.map(item => [item.id, item]))
+    if (decision.opportunityDecisions.length !== opportunities.length) {
+      throw new Error('人物没有逐项处置可用世界机会')
+    }
+    for (const item of decision.opportunityDecisions) {
+      const opportunity = opportunityById.get(item.opportunityId)
+      if (opportunity === undefined
+        || item.disposition === 'use' && (!opportunity.responderIds.includes(item.responderId ?? '')
+          || decision.speech?.move !== opportunity.use.move)) {
+        throw new Error('人物世界机会处置与可用机会不一致')
+      }
+    }
+    return decision
+  } catch {
+    return {
+      ...decision,
+      opportunityDecisions: [],
+      ...(decision.speech?.move === 'question' ? { speech: undefined } : {}),
+    }
+  }
 }
 
 function renderWorldNarrativeFacts(projection: PlayWorldNarrativeProjection | undefined): string {
@@ -3906,6 +4049,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     playerInput,
     enabledCharacters,
     worldActionCharacters,
+    recentExchange,
     resultEventSeqs,
   )
   const voiceEvidence = buildCharacterProfileVoiceEvidence(enabledCharacters)
@@ -3926,8 +4070,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         playerInput,
       })
       const publicResponseAllowed = publicCharacterIds.has(character.id)
-      const characterHasNarrativeCue = worldNarrativeProjection?.cues.some(cue =>
-        cue.characterIds.includes(character.id)) ?? false
+      const recentExchangeTarget = recentExchange?.lines.at(-1)?.targetCharacterId
+      const characterRecentExchange = recentExchange?.status === 'open'
+        && recentExchangeTarget !== undefined && recentExchangeTarget !== character.id
+        ? { ...recentExchange, status: 'closed' as const }
+        : recentExchange
+      const availableWorldOpportunities = publicResponseAllowed
+        ? projectCharacterWorldOpportunities(input, character.id)
+        : []
+      const characterHasNarrativeCue = (worldNarrativeProjection?.cues.some(cue =>
+        cue.characterIds.includes(character.id)) ?? false) || availableWorldOpportunities.length > 0
       const characterWorldNarrativeBrief = renderWorldNarrativeBrief(
         worldNarrativeProjection,
         worldNarrativeProjection?.cues.filter(cue => cue.characterIds.includes(character.id)) ?? [],
@@ -3943,9 +4095,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           characterHasNarrativeCue
             ? '本轮有此人物可回应的现场条件。action 只能是一项已经完成、由该条件直接引起且即使人物不开口也会留下可观察结果的非规则行动；只看向别人、摆出姿态、拿着物品等待发言或等待别人接话时使用空字符串。规则动作仍由 Host 执行。'
             : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串；除非 recent_public_exchange 明确标为尚待回答，speech 也使用 null。规则动作仍由 Host 执行。',
+          'world_opportunities 是此人物当前可以处置的持久世界机会。每项必须在 opportunityDecisions 中原样复制 id，并明确选择 retain、use 或 decline；retain 和 decline 的 responderId 为 null。use 必须选择 responders 中的一人，并把 responderId 写成其 id，同时 speech.move 必须等于 requiredSpeechMove。机会的选择不写进 insights。若声音阶段没有批准并公开这句 speech，Host 不会消耗 use。没有可用机会时 opportunityDecisions 使用空数组。',
           'speech 用于完成一项当下确有必要的交流动作。respondsTo 指向当前事实或 recent_public_exchange 中尚未收束的最后前提；move 取 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose；focus 只写本句新增的对象、区别、态度或答案；effect 写它当场改变的理解、决定或关系。已经收束的话轮和没有信息增量的结果以 speech=null 延续。声音阶段会另行检索原作证据并写出台词。',
           'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体选择；规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
-          '只返回 JSON：{"observation":"此人能观察到的事实","action":"本轮具体的非规则行动或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"本句新增的一点","effect":"本句当场完成的交流作用"},"insights":[{"kind":"knowledge|intention|decision|world-action","text":"新信息或当轮依据","futureChoice":"需要跨回合保存的一项选择，其他类型为空字符串"}]}。不开口时 speech 为 null；字段中不写逐字台词。',
+          '只返回 JSON：{"observation":"此人能观察到的事实","action":"本轮具体的非规则行动或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"本句新增的一点","effect":"本句当场完成的交流作用"},"opportunityDecisions":[{"opportunityId":"原样 id","disposition":"retain|use|decline","responderId":null}],"insights":[{"kind":"knowledge|intention|decision|world-action","text":"新信息或当轮依据","futureChoice":"需要跨回合保存的一项选择，其他类型为空字符串"}]}。不开口时 speech 为 null；字段中不写逐字台词。',
         ].join('\n'),
         [
           context.text,
@@ -3959,7 +4112,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           '<turn_participation>',
           `publicResponse=${publicResponseAllowed ? 'allowed' : 'observe-only'}`,
           '</turn_participation>',
-          '<recent_public_exchange>', renderRecentPublicExchange(recentExchange), '</recent_public_exchange>',
+          '<recent_public_exchange>', renderRecentPublicExchange(characterRecentExchange), '</recent_public_exchange>',
+          '<world_opportunities>', renderCharacterWorldOpportunities(
+            availableWorldOpportunities,
+            enabledCharacters,
+          ), '</world_opportunities>',
           '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
           '<world_narrative>', characterWorldNarrativeBrief, '</world_narrative>',
         ].join('\n'),
@@ -3967,7 +4124,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         0.5,
       ), resultEventSeqs, character.id)
       if (decision.text === undefined) return undefined
-      const parsed = parseCharacterDecision(decision.text)
+      const parsed = bindCharacterOpportunityDecisions(
+        parseCharacterDecision(decision.text),
+        availableWorldOpportunities,
+      )
       const bounded = {
         ...parsed,
         insights: removeWorldRestatementInsights(parsed.insights, worldOutcome),
@@ -3981,7 +4141,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         continuous,
         automaticAdvance,
         worldOutcome,
-        recentExchange,
+        characterRecentExchange,
         characterHasNarrativeCue,
       )
       return {
@@ -4386,13 +4546,36 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
+    const opportunityUse = characterDecisions.find(record => record.characterId === speech.characterId)
+      ?.decision.opportunityDecisions.find(item => item.disposition === 'use')
     return dialogue === undefined || dialogue === '' ? [] : [{
       characterId: speech.characterId,
+      ...(opportunityUse?.responderId === undefined ? {} : { targetCharacterId: opportunityUse.responderId }),
       dialogue,
       move: speech.intent.move,
       ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     }]
   })) ?? []
+  const worldOpportunityResolutions: readonly PlayWorldCharacterOpportunityResolution[] = characterDecisions
+    .flatMap(record => record.decision.opportunityDecisions.flatMap((decision): readonly PlayWorldCharacterOpportunityResolution[] => {
+      if (decision.disposition !== 'use') {
+        return [{
+          opportunityId: decision.opportunityId,
+          characterId: record.characterId,
+          disposition: decision.disposition,
+        }]
+      }
+      if (decision.responderId === undefined) return []
+      const publicQuestion = publicDialogues.find(dialogue => dialogue.characterId === record.characterId
+        && dialogue.targetCharacterId === decision.responderId && dialogue.move === 'question')
+      return publicQuestion === undefined ? [] : [{
+        opportunityId: decision.opportunityId,
+        characterId: record.characterId,
+        disposition: 'use' as const,
+        responderId: decision.responderId,
+        publicEvidence: publicQuestion.dialogue,
+      }]
+    }))
   const context = modelContext(finalDraft)
   const privateCharacterStates = characterDecisions.flatMap(record => record.decision.insights.length === 0
     ? []
@@ -4413,6 +4596,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     ...(worldEventSequences.length === 0
       ? {}
       : { publicWorldEvents: storyTurnPublicWorldEvents(input.workspace, worldEventSequences) }),
+    ...(worldOpportunityResolutions.length === 0 ? {} : { worldOpportunityResolutions }),
     directorBrief,
     ...(research.citations.length === 0 ? {} : { researchCitations: research.citations }),
     finalSections,
@@ -4627,6 +4811,9 @@ export async function materializeStoryTurn(input: {
     evidence: visibleReply,
     participantIds: participants.map(character => character.id),
     worldEventSequences: briefEvent.data.worldEventSequences ?? [],
+    ...(briefEvent.data.worldOpportunityResolutions === undefined
+      ? {}
+      : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
     changes: update.changes,
     citations: uniqueCitationDrafts([
       ...(briefEvent.data.researchCitations ?? []),
@@ -4649,6 +4836,9 @@ export async function materializeStoryTurn(input: {
     ...(continuityResultEventSeq === undefined ? {} : { continuityResultEventSeq }),
     eventSummary: update.history,
     changes: update.changes,
+    ...(briefEvent.data.worldOpportunityResolutions === undefined
+      ? {}
+      : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
     ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     publicTrace: {

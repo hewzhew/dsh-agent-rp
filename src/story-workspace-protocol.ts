@@ -1,6 +1,10 @@
 /** Public records for the typed Agent RP play space. */
 
-import type { PlayWorldBinding, PlayWorldSnapshot } from './play-world-protocol.ts'
+import type {
+  PlayWorldBinding,
+  PlayWorldCharacterOpportunityResolution,
+  PlayWorldSnapshot,
+} from './play-world-protocol.ts'
 import type { RoleplayResourceSelection } from './roleplay-resource-catalog-protocol.ts'
 
 /** Same-origin collection endpoint for local story workspaces. */
@@ -454,6 +458,8 @@ export interface StoryTurnMaterialization {
   readonly participantIds: readonly string[]
   /** Executable-world events processed by this turn, whether shown or intentionally omitted. */
   readonly worldEventSequences?: readonly number[]
+  /** Character-owned world choices committed atomically with this visible turn. */
+  readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
   readonly changes: StoryChangeSet
   /** Local source excerpts used by research or approved dialogue during this turn. */
   readonly citations?: readonly StoryCitationDraft[]
