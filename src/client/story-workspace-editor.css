@@ -254,6 +254,22 @@
 .story-world-cast-current label strong { font-size: 12px; }
 .story-world-cast-current label em { color: var(--studio-muted); font-size: 9px; font-style: normal; line-height: 1.45; }
 .story-world-cast-current .story-studio-input { margin: 0; }
+.story-studio-drawer.story-world-narrative-drawer { width: min(520px, 94vw); }
+.story-world-narrative-drawer .story-studio-drawer-header { align-items: flex-start; margin-bottom: 12px; }
+.story-world-narrative-drawer .story-studio-drawer-header > div { display: grid; gap: 4px; }
+.story-world-narrative-drawer .story-studio-drawer-header span { color: var(--studio-muted); font-size: 10px; line-height: 1.45; }
+.story-world-narrative-list { display: grid; gap: 12px; }
+.story-world-narrative-card { background: var(--studio-bg); border: 1px solid var(--studio-border); border-radius: 12px; padding: 12px; }
+.story-world-narrative-card > header { align-items: center; display: flex; justify-content: space-between; margin-bottom: 12px; }
+.story-world-narrative-card > header > div { display: grid; gap: 2px; }
+.story-world-narrative-card > header small { color: var(--story-accent); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+.story-world-narrative-card > header strong { font-size: 12px; }
+.story-world-trigger-field { align-items: center; display: grid; gap: 6px; grid-template-columns: auto 58px minmax(0, 1fr); }
+.story-world-trigger-field .story-studio-input { min-width: 0; padding-inline: 6px; }
+.story-world-narrative-card-foot { align-items: center; border-top: 1px solid var(--studio-border); color: var(--studio-muted); display: flex; flex-wrap: wrap; font-size: 9px; gap: 10px; justify-content: space-between; padding-top: 9px; }
+.story-world-narrative-card-foot .story-studio-check { color: inherit; font-size: inherit; }
+.story-world-narrative-add { margin-top: 12px; width: 100%; }
+.story-world-narrative-empty { height: auto; min-height: 130px; padding: 18px; }
 .story-studio-canvas { height: 100%; }
 .story-studio-canvas .react-flow__background { background: var(--studio-bg); }
 .story-studio-canvas .react-flow__controls { box-shadow: none; }
@@ -944,6 +960,7 @@
   .story-play-evidence-actions { flex-basis: 100%; }
   .story-flying-layout { grid-template-columns: 1fr; }
   .story-flying-board { min-width: 0; }
+  .story-world-narrative-card .story-studio-field-row { grid-template-columns: 1fr; }
   .story-map-toolbar { max-width: calc(100% - 28px); overflow-x: auto; }
   .story-knowledge-view { padding-left: 10px; padding-right: 10px; }
   .story-knowledge-row-head { display: none; }

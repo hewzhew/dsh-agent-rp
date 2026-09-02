@@ -88,6 +88,13 @@ export interface PlayWorldCastUpdateRequest {
   readonly cast: readonly PlayWorldCastSelection[]
 }
 
+/** Request to replace editable module configuration without resetting world state. */
+export interface PlayWorldConfigurationUpdateRequest {
+  readonly format: 0
+  readonly revision: number
+  readonly configuration: JsonValue
+}
+
 /** Request to recreate the current executable world and discard this playthrough's derived story state. */
 export interface PlayWorldRestartRequest {
   readonly format: 0

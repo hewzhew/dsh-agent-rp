@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
@@ -27,6 +28,7 @@ import type {
   PlayWorldBinding,
   PlayWorldCastSelection,
   PlayWorldCastUpdateRequest,
+  PlayWorldConfigurationUpdateRequest,
   PlayWorldInstallRequest,
   PlayWorldResourceDescriptor,
   PlayWorldRestartRequest,
@@ -2078,6 +2080,27 @@ export class StoryWorkspaceStore {
       sources: recoveredSources.sources,
       ...missingPlayWorldWorkspaceScaffold(current, module, context),
     })
+  }
+
+  /** Replace module configuration after the module accepts the current state under the new values. */
+  updateWorldConfiguration(id: string, request: PlayWorldConfigurationUpdateRequest): StoryWorkspaceSnapshot {
+    const current = this.get(id)
+    this.assertRevision(current, request.revision)
+    if (request.format !== 0 || current.world === undefined) {
+      throw new Error('当前游玩世界没有可更新的配置')
+    }
+    const configuration = snapshotJsonValue(request.configuration) as JsonValue | undefined
+    if (configuration === undefined || Buffer.byteLength(JSON.stringify(configuration), 'utf8') > 1024 * 1024) {
+      throw new Error('游玩世界配置无效')
+    }
+    const module = this.worlds.get(current.world.moduleId)
+    const existingBinding = current.worldBinding ?? normalizeWorldBinding(undefined, current.world.moduleId)
+    const worldBinding: PlayWorldBinding = { ...existingBinding, configuration }
+    const world = module.normalize(current.world, playWorldContext(current.characters, worldBinding))
+    if (!isDeepStrictEqual(world, current.world)) {
+      throw new Error('世界配置更新没有完整保留当前世界状态')
+    }
+    return this.commitWorld(current, current.world, current.worldActionReceipts ?? [], { worldBinding })
   }
 
   /** Recreate the attached world while preserving authored assets and accepted story-map decisions. */

@@ -30,7 +30,9 @@ import type { AgentRpStoryTurnProgress } from '../projection-types.ts'
 import {
   FLYING_CHESS_WORLD_MODULE_ID,
   isFlyingChessWorldState,
+  type FlyingChessNarrativeCard,
   type FlyingChessPiece,
+  type FlyingChessWorldConfiguration,
   type FlyingChessWorldState,
 } from '../flying-chess-protocol.ts'
 import {
@@ -555,6 +557,18 @@ async function updatePlayWorldCast(
     body: JSON.stringify({ format: 0, revision: workspace.revision, cast }),
   })
   return workspaceResult(value, '世界人物来源更新')
+}
+
+async function updatePlayWorldConfiguration(
+  workspace: StoryWorkspaceSnapshot,
+  configuration: FlyingChessWorldConfiguration,
+): Promise<StoryWorkspaceResult> {
+  const value = await storyRequest(`/${encodeURIComponent(workspace.id)}/world/configuration`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ format: 0, revision: workspace.revision, configuration }),
+  })
+  return workspaceResult(value, '世界事件牌更新')
 }
 
 async function restartPlayWorld(workspace: StoryWorkspaceSnapshot): Promise<StoryWorkspaceResult> {
@@ -2083,7 +2097,7 @@ function PlayWorldEvidenceStatus({ workspace, configureDisabled, onConfigureCast
   </section>
 }
 
-function FlyingChessPlayView({ workspace, state, turn, authoring, busy, dirty, onConfigureCast, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
+function FlyingChessPlayView({ workspace, state, turn, authoring, busy, dirty, onConfigureCast, onConfigureNarrativeCards, onImportSourceUrl, onImportSources, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly state: FlyingChessWorldState
   readonly turn: PlayWorldTurnProjection | null
@@ -2091,6 +2105,7 @@ function FlyingChessPlayView({ workspace, state, turn, authoring, busy, dirty, o
   readonly busy: boolean
   readonly dirty: boolean
   readonly onConfigureCast: (() => void) | undefined
+  readonly onConfigureNarrativeCards: (() => void) | undefined
   readonly onImportSourceUrl: () => void
   readonly onImportSources: () => void
   readonly onOpenCharacter: (id: string) => void
@@ -2111,6 +2126,8 @@ function FlyingChessPlayView({ workspace, state, turn, authoring, busy, dirty, o
           {state.winnerId === undefined && state.pendingRoll === undefined && <button className="story-studio-button" type="button"
             disabled={busy || dirty || !legalActionIds.has('roll')} onClick={() => { onAction('roll') }}>亲自掷骰</button>}
           {state.pendingRoll !== undefined && <span className="story-die" aria-label={`骰点 ${state.pendingRoll.value}`}>{state.pendingRoll.value}</span>}
+          {onConfigureNarrativeCards !== undefined && <button className="story-studio-button" type="button" disabled={busy || dirty}
+            onClick={onConfigureNarrativeCards}>场景事件牌</button>}
           <button className="story-studio-button" type="button" disabled={busy || dirty} onClick={() => {
             if (!restartArmed) {
               setRestartArmed(true)
@@ -2503,7 +2520,99 @@ function InstalledWorldCastDrawer({ workspace, world, actorResources, busy, dirt
   </>
 }
 
-function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, authoring, busy, dirty, renderPlayWorldView, onImportActor, onImportSourceUrl, onImportSources, onInstall, onUpdateCast, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
+const narrativeCueLabels: Readonly<Record<FlyingChessNarrativeCard['cue']['kind'], string>> = {
+  change: '局势变化',
+  pressure: '现场压力',
+  opportunity: '可用机会',
+  relationship: '关系后果',
+}
+
+function installedFlyingChessNarrativeCards(workspace: StoryWorkspaceSnapshot): readonly FlyingChessNarrativeCard[] {
+  const configuration = workspace.worldBinding?.configuration
+  if (typeof configuration !== 'object' || configuration === null || Array.isArray(configuration)) return []
+  const cards = (configuration as { readonly narrativeCards?: unknown }).narrativeCards
+  return Array.isArray(cards) ? cards as unknown as readonly FlyingChessNarrativeCard[] : []
+}
+
+function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }: {
+  readonly workspace: StoryWorkspaceSnapshot
+  readonly busy: boolean
+  readonly onUpdate: (configuration: FlyingChessWorldConfiguration) => Promise<boolean>
+  readonly onClose: () => void
+}) {
+  const [cards, setCards] = useState<readonly FlyingChessNarrativeCard[]>(() =>
+    installedFlyingChessNarrativeCards(workspace).map(card => ({
+      ...card,
+      trigger: { ...card.trigger },
+      event: { ...card.event },
+      cue: { ...card.cue },
+    })))
+  const updateCard = (index: number, transform: (card: FlyingChessNarrativeCard) => FlyingChessNarrativeCard): void => {
+    setCards(current => current.map((card, cardIndex) => cardIndex === index ? transform(card) : card))
+  }
+  const invalid = cards.some(card => card.event.title.trim() === '' || card.event.summary.trim() === ''
+    || card.cue.text.trim() === '' || !Number.isSafeInteger(card.trigger.count)
+    || card.trigger.count < 2 || card.trigger.count > 32)
+  const save = (): void => {
+    if (invalid || busy) return
+    void onUpdate({ format: 0, ruleset: 'classic-24', narrativeCards: cards }).then(updated => {
+      if (updated) onClose()
+    })
+  }
+  return <>
+    <button className="story-studio-drawer-backdrop" type="button" aria-label="关闭场景事件牌" onClick={onClose} />
+    <aside className="story-studio-drawer story-world-narrative-drawer" aria-label="场景事件牌">
+      <div className="story-studio-drawer-header"><div><h2>场景事件牌</h2><span>规则条件满足后，先记录世界事实，再让人物各自决定是否回应。</span></div>
+        <button className="story-studio-icon-button" type="button" onClick={onClose}>×</button></div>
+      <div className="story-world-narrative-list">{cards.map((card, index) => <article className="story-world-narrative-card" key={card.id}>
+        <header><div><small>事件牌 {index + 1}</small><strong>{card.event.title.trim() || '未命名事件'}</strong></div>
+          <button className="story-studio-icon-button story-studio-danger" type="button" aria-label={`删除${card.event.title || '事件牌'}`}
+            onClick={() => { setCards(current => current.filter((_item, cardIndex) => cardIndex !== index)) }}>×</button></header>
+        <div className="story-studio-field-row">
+          <Field label="触发条件"><span className="story-world-trigger-field">连续 <input className="story-studio-input" type="number" min={2} max={32}
+            value={card.trigger.count} onChange={event => {
+              const count = Number(event.currentTarget.value)
+              updateCard(index, current => ({ ...current, trigger: { ...current.trigger, count } }))
+            }} /> 个回合无棋可走</span></Field>
+          <Field label="形成的叙事方向"><select className="story-studio-input" value={card.cue.kind} onChange={event => {
+            const kind = event.currentTarget.value as FlyingChessNarrativeCard['cue']['kind']
+            updateCard(index, current => ({ ...current, cue: { ...current.cue, kind } }))
+          }}>{Object.entries(narrativeCueLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></Field>
+        </div>
+        <Field label="事件标题"><input className="story-studio-input" value={card.event.title} onChange={event => {
+          const title = event.currentTarget.value
+          updateCard(index, current => ({ ...current, event: { ...current.event, title } }))
+        }} /></Field>
+        <TextField label="已经发生的公开事实" rows={3} value={card.event.summary} onChange={summary => {
+          updateCard(index, current => ({ ...current, event: { ...current.event, summary } }))
+        }} />
+        <TextField label="人物可以回应的现场条件" rows={3} value={card.cue.text} onChange={text => {
+          updateCard(index, current => ({ ...current, cue: { ...current.cue, text } }))
+        }} />
+        <div className="story-world-narrative-card-foot"><span>回应范围：所有在场人物</span><label className="story-studio-check"><input type="checkbox" checked={card.repeat} onChange={event => {
+          const repeat = event.currentTarget.checked
+          updateCard(index, current => ({ ...current, repeat }))
+        }} />条件再次满足时可重复触发</label></div>
+      </article>)}</div>
+      {cards.length === 0 && <div className="story-studio-empty story-world-narrative-empty"><strong>还没有场景事件牌</strong><span>纯规则回合仍会推进，但不会凭空获得额外场景材料。</span></div>}
+      <button className="story-studio-button story-world-narrative-add" type="button" onClick={() => {
+        setCards(current => [...current, {
+          id: `event-${createClientOpaqueUuid()}`,
+          trigger: { kind: 'consecutive-passes', count: 4 },
+          event: { title: '新的场景变化', summary: '' },
+          cue: { kind: 'opportunity', text: '', responders: 'all' },
+          repeat: false,
+        }])
+      }}>＋ 添加事件牌</button>
+      {invalid && <small className="story-world-cast-error">每张事件牌需要完整的公开事实与现场条件；连续回合数应为 2 至 32。</small>}
+      <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
+        disabled={busy || invalid} onClick={save}>{busy ? '正在保存…' : '保存事件牌'}</button>
+        <button className="story-studio-button" type="button" disabled={busy} onClick={onClose}>取消</button></div>
+    </aside>
+  </>
+}
+
+function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailable, authoring, busy, dirty, renderPlayWorldView, onImportActor, onImportSourceUrl, onImportSources, onInstall, onUpdateCast, onUpdateConfiguration, onOpenCharacter, onOpenSources, onOpenOutputs, onRestart, onAction }: {
   readonly workspace: StoryWorkspaceSnapshot
   readonly worlds: readonly PlayWorldResourceDescriptor[]
   readonly actorResources: readonly RoleplayResourceDescriptor[]
@@ -2518,6 +2627,7 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onImportSources: () => void
   readonly onInstall: (resource: PlayWorldResourceDescriptor['resource'], cast: readonly PlayWorldCastSelection[]) => void
   readonly onUpdateCast: (cast: readonly PlayWorldCastSelection[]) => Promise<boolean>
+  readonly onUpdateConfiguration: (configuration: FlyingChessWorldConfiguration) => Promise<boolean>
   readonly onOpenCharacter: (id: string) => void
   readonly onOpenSources: () => void
   readonly onOpenOutputs: () => void
@@ -2525,7 +2635,11 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
   readonly onAction: (actionId: string) => void
 }) {
   const [castOpen, setCastOpen] = useState(false)
-  useEffect(() => { setCastOpen(false) }, [workspace.id, workspace.world?.moduleId, workspace.worldBinding?.resource?.id])
+  const [narrativeCardsOpen, setNarrativeCardsOpen] = useState(false)
+  useEffect(() => {
+    setCastOpen(false)
+    setNarrativeCardsOpen(false)
+  }, [workspace.id, workspace.world?.moduleId, workspace.worldBinding?.resource?.id])
   if (workspace.world === undefined) {
     return <div className="story-studio-view"><div className="story-studio-view-heading"><div><h1>选择一个世界</h1>
       <p>世界模块承载规则、状态、动作和事件；普通世界书仍可只提供提示词资料。</p></div></div>
@@ -2552,12 +2666,17 @@ function PlayWorldView({ workspace, worlds, actorResources, turn, moduleAvailabl
     ? <InstalledWorldCastDrawer workspace={workspace} world={installedResource} actorResources={actorResources}
         busy={busy} dirty={dirty} onImportActor={onImportActor} onUpdate={onUpdateCast} onClose={() => { setCastOpen(false) }} />
     : undefined
+  const narrativeCardsDrawer = narrativeCardsOpen && workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID
+    ? <FlyingChessNarrativeCardsDrawer workspace={workspace} busy={busy} onUpdate={onUpdateConfiguration}
+        onClose={() => { setNarrativeCardsOpen(false) }} />
+    : undefined
   if (workspace.world.moduleId === FLYING_CHESS_WORLD_MODULE_ID && isFlyingChessWorldState(workspace.world.state)) {
     return <><FlyingChessPlayView workspace={workspace} state={workspace.world.state} turn={turn} authoring={authoring} busy={busy} dirty={dirty}
       onConfigureCast={configureCast}
       onImportSourceUrl={onImportSourceUrl} onImportSources={onImportSources} onOpenCharacter={onOpenCharacter} onOpenSources={onOpenSources}
       onOpenOutputs={onOpenOutputs}
-      onRestart={onRestart} onAction={onAction} />{castDrawer}</>
+      onConfigureNarrativeCards={authoring ? () => { setNarrativeCardsOpen(true) } : undefined}
+      onRestart={onRestart} onAction={onAction} />{castDrawer}{narrativeCardsDrawer}</>
   }
   return <><GenericPlayWorldView workspace={workspace} module={installedResource}
     turn={turn} authoring={authoring} busy={busy} dirty={dirty}
@@ -2773,6 +2892,28 @@ export function StoryWorkspaceEditor({
       setItems(await listWorkspaces())
       setView('world')
       setNotice('人物来源已更新，棋局状态与事件保持不变')
+      return true
+    } catch (reason) {
+      setError(errorMessage(reason))
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+  const saveWorldConfiguration = async (configuration: FlyingChessWorldConfiguration): Promise<boolean> => {
+    if (workspace === undefined || workspace.world === undefined || dirty) return false
+    setSaving(true)
+    setError(undefined)
+    try {
+      const saved = await updatePlayWorldConfiguration(workspace, configuration)
+      setWorkspace(saved.workspace)
+      setWorldTurn(saved.worldTurn)
+      setWorldModuleAvailable(saved.worldModuleAvailable)
+      setWebFetchAvailable(saved.webFetchAvailable)
+      setWebSearchAvailable(saved.webSearchAvailable)
+      setItems(await listWorkspaces())
+      setView('world')
+      setNotice('场景事件牌已保存，棋局状态与既有事件保持不变')
       return true
     } catch (reason) {
       setError(errorMessage(reason))
@@ -3225,7 +3366,7 @@ export function StoryWorkspaceEditor({
         setSourceUrlOpen(true)
         setSourceUrlKind('original')
       }} onImportSources={() => { sourceFileInputRef.current?.click() }}
-      onInstall={installWorld} onUpdateCast={saveWorldCast}
+      onInstall={installWorld} onUpdateCast={saveWorldCast} onUpdateConfiguration={saveWorldConfiguration}
       onOpenCharacter={id => { select({ kind: 'character', id }) }}
       onOpenSources={() => { setView('sources'); setSelection(undefined); setReaderSourceId(undefined) }}
       onOpenOutputs={() => { setView('outputs'); setSelection(undefined) }}

@@ -3,6 +3,7 @@
 import type { IncomingMessage } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   jsonResponse as json,
   readJsonRequest,
@@ -25,6 +26,7 @@ import {
   type PlayWorldActionRequest,
   type PlayWorldCastSelection,
   type PlayWorldCastUpdateRequest,
+  type PlayWorldConfigurationUpdateRequest,
   type PlayWorldInstallRequest,
   type PlayWorldRestartRequest,
   type PlayWorldSurfaceProjection,
@@ -121,6 +123,17 @@ function parseWorldRestartRequest(value: unknown): PlayWorldRestartRequest {
     throw new Error('游玩世界重新开局请求字段无效')
   }
   return record as unknown as PlayWorldRestartRequest
+}
+
+function parseWorldConfigurationUpdateRequest(value: unknown): PlayWorldConfigurationUpdateRequest {
+  const record = requestRecord(value)
+  const configuration = snapshotJsonValue(record.configuration) as JsonValue | undefined
+  if (record.format !== 0 || typeof record.revision !== 'number' || configuration === undefined
+    || Buffer.byteLength(JSON.stringify(configuration), 'utf8') > 1024 * 1024
+    || Object.keys(record).some(key => key !== 'format' && key !== 'revision' && key !== 'configuration')) {
+    throw new Error('游玩世界配置更新请求字段无效')
+  }
+  return { format: 0, revision: record.revision, configuration }
 }
 
 function parseWorldActionRequest(value: unknown): PlayWorldActionRequest {
@@ -289,6 +302,13 @@ export function installStoryWorkspaceHttp(
         }
         if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'cast') {
           const workspace = store.updateWorldCast(segments[0]!, parseWorldCastUpdateRequest(await readJson(request)))
+          json(response, 200, workspaceResponse(ctx, store, workspace))
+          return
+        }
+        if (request.method === 'POST' && segments.length === 3 && segments[1] === 'world' && segments[2] === 'configuration') {
+          const workspace = store.updateWorldConfiguration(
+            segments[0]!, parseWorldConfigurationUpdateRequest(await readJson(request)),
+          )
           json(response, 200, workspaceResponse(ctx, store, workspace))
           return
         }

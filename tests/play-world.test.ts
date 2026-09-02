@@ -574,6 +574,73 @@ test('upgrades a legacy cast binding through HTTP without resetting world state 
   assert.deepEqual((upgraded.world?.state as FlyingChessWorldState).playerOrder, [reimuId, marisaId])
 })
 
+test('updates resource-authored narrative cards without resetting the current world', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-configuration-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule())
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '事件牌配置' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const prepared = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+  })
+  const installed = store.installWorld(prepared.id, {
+    format: 0,
+    revision: prepared.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  const beforeWorld = structuredClone(installed.world)
+  const configuration = {
+    format: 0,
+    ruleset: 'classic-24',
+    narrativeCards: [{
+      id: 'custom-card',
+      trigger: { kind: 'consecutive-passes', count: 3 },
+      event: { title: '茶杯倾斜', summary: '连续三轮停顿后，桌沿的茶杯向棋盘倾斜。' },
+      cue: { kind: 'pressure', text: '在场人物可以决定先顾棋盘还是先扶茶杯。', responders: 'all' },
+      repeat: false,
+    }],
+  }
+  const route = storyWorkspaceRoute(store)
+  const path = `/api/agent-rp/story-workspaces/${encodeURIComponent(installed.id)}/world/configuration`
+  const response = await invokeStoryWorkspaceRoute(route, 'POST', path, {
+    format: 0,
+    revision: installed.revision,
+    configuration,
+  })
+  assert.equal(response.status, 200)
+  const updated = store.get(installed.id)
+  assert.deepEqual(updated.world, beforeWorld)
+  assert.deepEqual(updated.worldBinding?.configuration, configuration)
+
+  const invalid = await invokeStoryWorkspaceRoute(route, 'POST', path, {
+    format: 0,
+    revision: updated.revision,
+    configuration: {
+      ...configuration,
+      narrativeCards: [{ ...configuration.narrativeCards[0]!, trigger: { kind: 'consecutive-passes', count: 1 } }],
+    },
+  })
+  assert.equal(invalid.status, 400)
+  assert.deepEqual(store.get(installed.id), updated)
+
+  const stale = await invokeStoryWorkspaceRoute(route, 'POST', path, {
+    format: 0,
+    revision: installed.revision,
+    configuration,
+  })
+  assert.equal(stale.status, 409)
+
+  const restoredStore = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const restored = restoredStore.get(installed.id)
+  assert.deepEqual(restored.world, beforeWorld)
+  assert.deepEqual(restored.worldBinding?.configuration, configuration)
+})
+
 test('persists resource recipes, restores legacy sources, and keeps worlds readable without a rule module', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-resource-recipe-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
