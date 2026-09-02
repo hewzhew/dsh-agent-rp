@@ -1544,7 +1544,12 @@ function sharesLongVoiceSpan(left: string, right: string, minimumLength = 5): bo
   return false
 }
 
-function substantiallyRestatesText(value: string, source: string, minimumLength = 4): boolean {
+function substantiallyRestatesText(
+  value: string,
+  source: string,
+  minimumLength = 4,
+  minimumOverlap = 0.35,
+): boolean {
   const candidate = normalizedComparableText(value)
   const normalizedSource = normalizedComparableText(source)
   if (candidate.length < minimumLength || normalizedSource.length < minimumLength) return false
@@ -1554,7 +1559,7 @@ function substantiallyRestatesText(value: string, source: string, minimumLength 
   const comparable = Math.min(candidateBigrams.size, sourceBigrams.size)
   if (comparable < minimumLength) return false
   const overlap = [...candidateBigrams].filter(pair => sourceBigrams.has(pair)).length
-  return overlap / comparable >= 0.35
+  return overlap / comparable >= minimumOverlap
 }
 
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
@@ -3469,10 +3474,23 @@ function narrativeNumbers(value: string): ReadonlySet<number> {
   return result
 }
 
+function narrativeFactWindows(prose: string): readonly string[] {
+  const sentences = prose.split(/(?<=[。！？!?；;])|\r?\n+/gu)
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence !== '')
+  return sentences.flatMap((sentence, index) => {
+    const next = sentences[index + 1]
+    return next === undefined ? [sentence] : [sentence, `${sentence}${next}`]
+  })
+}
+
 function proseRetainsWorldFact(prose: string, fact: string): boolean {
-  if (!substantiallyRestatesText(prose, fact, 5) && !sharesLongVoiceSpan(prose, fact, 6)) return false
-  const proseNumbers = narrativeNumbers(prose)
-  return [...narrativeNumbers(fact)].every(number => proseNumbers.has(number))
+  const factNumbers = narrativeNumbers(fact)
+  return narrativeFactWindows(prose).some(window => {
+    if (!substantiallyRestatesText(window, fact, 5, 0.2) && !sharesLongVoiceSpan(window, fact, 6)) return false
+    const proseNumbers = narrativeNumbers(window)
+    return [...factNumbers].every(number => proseNumbers.has(number))
+  })
 }
 
 function renderWorldNarrativeBrief(

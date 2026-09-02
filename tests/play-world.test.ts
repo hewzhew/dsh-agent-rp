@@ -3155,6 +3155,7 @@ test('writes a manually completed world result without persisting a character co
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
   })
+  const naturalWorldScene = '灵梦和魔理沙在棋盘两侧坐定。骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。'
   const characterBodies: string[] = []
   const fake = {
     sessions: { flush: async () => true },
@@ -3196,11 +3197,11 @@ test('writes a manually completed world result without persisting a character co
                 insights: [],
               })
           : system.includes('分区的 prose Worker')
-            ? '骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。'
+            ? naturalWorldScene
             : system.includes('最终正文编辑 Worker')
               ? JSON.stringify({ sections: [{
                   sectionId: proseId,
-                  text: '骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。',
+                  text: naturalWorldScene,
                 }, {
                   sectionId: historyId,
                   text: '错误的模型历史会被 Host 替换。',
@@ -3262,7 +3263,8 @@ test('writes a manually completed world result without persisting a character co
     && request.subjectId === reimuId)?.dispatch), /thisCharacterRole=actor/u)
   assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
     && request.subjectId === marisaId)?.dispatch), /thisCharacterRole=observer/u)
-  assert.equal(result.finalDraft, '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步。')
+  assert.equal(result.finalDraft, naturalWorldScene)
+  assert.doesNotMatch(result.finalDraft, /博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
   assert.equal(result.hostOwnedWorldDraft, undefined)
   assert.deepEqual(result.publicWorldEvents?.slice(0, 3).map(event => event.type), ['game.started', 'die.rolled', 'piece.moved'])
   assert.equal(manuallyAdvanced.world?.events.findLast(event => event.type === 'piece.moved')?.summary, '飞机前进到航线第 1 步。')
