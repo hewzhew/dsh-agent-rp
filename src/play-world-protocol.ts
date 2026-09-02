@@ -149,3 +149,27 @@ export interface PlayWorldPromptProjection {
   readonly title: string
   readonly text: string
 }
+
+/** How selected world events should occupy the next visible story passage. */
+export type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution'
+
+/** One immutable public fact backed by selected authoritative world events. */
+export interface PlayWorldNarrativeFact {
+  readonly eventSequences: readonly number[]
+  readonly text: string
+}
+
+/** One optional dramatic direction made available by selected world events. */
+export interface PlayWorldNarrativeCue {
+  readonly eventSequences: readonly number[]
+  readonly kind: 'change' | 'pressure' | 'opportunity' | 'relationship'
+  readonly text: string
+  readonly characterIds: readonly string[]
+}
+
+/** Public story material derived from one selected batch of authoritative events. */
+export interface PlayWorldNarrativeProjection {
+  readonly cadence: PlayWorldNarrativeCadence
+  readonly facts: readonly PlayWorldNarrativeFact[]
+  readonly cues: readonly PlayWorldNarrativeCue[]
+}

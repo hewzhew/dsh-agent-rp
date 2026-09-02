@@ -17,6 +17,7 @@ import type {
 import { createFlyingChessWorldModule } from './flying-chess-world.ts'
 import type {
   PlayWorldModuleDescriptor,
+  PlayWorldNarrativeProjection,
   PlayWorldPromptProjection,
   PlayWorldSnapshot,
   PlayWorldSurfaceProjection,
@@ -119,17 +120,12 @@ export interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection
-  /** Render selected authoritative events as a factual skeleton for the prose Worker. */
-  renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string
-  /**
-   * Decide whether completed character turns now form a useful narrative beat.
-   * Omission preserves one character turn per visible story turn.
-   */
-  isNarrativeCheckpoint?(
+  /** Project immutable facts, optional dramatic directions, and presentation cadence for selected events. */
+  projectNarrative(
     snapshot: PlayWorldSnapshot,
     eventSequences: readonly number[],
     context: PlayWorldContext,
-  ): boolean
+  ): PlayWorldNarrativeProjection
 }
 
 interface PlayWorldRegistration {
@@ -170,6 +166,57 @@ function requiredProjectionText(value: unknown, label: string, maxLength: number
     throw new Error(`${label}无效`)
   }
   return value
+}
+
+/** Validate a module narrative projection before it reaches any model request. */
+export function projectPlayWorldNarrative(
+  projection: PlayWorldNarrativeProjection,
+  eventSequences: readonly number[],
+  context: PlayWorldContext,
+): PlayWorldNarrativeProjection {
+  if (projection.cadence !== 'transition' && projection.cadence !== 'scene'
+    && projection.cadence !== 'resolution') {
+    throw new Error('游玩世界叙事节奏无效')
+  }
+  if (!Array.isArray(projection.facts) || projection.facts.length === 0 || projection.facts.length > 64
+    || !Array.isArray(projection.cues) || projection.cues.length > 32) {
+    throw new Error('游玩世界叙事投影无效')
+  }
+  const selected = new Set(eventSequences)
+  const characterIds = new Set(context.characters.map(character => character.id))
+  const validateEventReferences = (references: readonly number[], label: string): readonly number[] => {
+    if (!Array.isArray(references) || references.length === 0 || references.length > 64
+      || new Set(references).size !== references.length
+      || references.some(sequence => !Number.isSafeInteger(sequence) || !selected.has(sequence))) {
+      throw new Error(`${label}引用了未选择的世界事件`)
+    }
+    return Object.freeze([...references])
+  }
+  const facts = projection.facts.map((fact, index) => Object.freeze({
+    eventSequences: validateEventReferences(fact.eventSequences, `游玩世界叙事事实 ${String(index + 1)}`),
+    text: requiredProjectionText(fact.text, `游玩世界叙事事实 ${String(index + 1)}`, 4_000),
+  }))
+  const cues = projection.cues.map((cue, index) => {
+    if (cue.kind !== 'change' && cue.kind !== 'pressure' && cue.kind !== 'opportunity'
+      && cue.kind !== 'relationship') {
+      throw new Error(`游玩世界叙事方向 ${String(index + 1)}类型无效`)
+    }
+    if (!Array.isArray(cue.characterIds) || new Set(cue.characterIds).size !== cue.characterIds.length
+      || cue.characterIds.some((characterId: string) => !characterIds.has(characterId))) {
+      throw new Error(`游玩世界叙事方向 ${String(index + 1)}人物无效`)
+    }
+    return Object.freeze({
+      eventSequences: validateEventReferences(cue.eventSequences, `游玩世界叙事方向 ${String(index + 1)}`),
+      kind: cue.kind,
+      text: requiredProjectionText(cue.text, `游玩世界叙事方向 ${String(index + 1)}`, 2_000),
+      characterIds: Object.freeze([...cue.characterIds]),
+    })
+  })
+  return Object.freeze({
+    cadence: projection.cadence,
+    facts: Object.freeze(facts),
+    cues: Object.freeze(cues),
+  })
 }
 
 /** Remove Host-only action payloads from one module-advertised character turn. */

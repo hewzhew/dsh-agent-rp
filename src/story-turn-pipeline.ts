@@ -23,7 +23,8 @@ import {
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { jsonrepair } from 'jsonrepair'
 import { roleplayActModelDispatch, roleplayActModelFailure, type RoleplayActModelDispatch, type RoleplayActModelFailureKind } from './roleplay-act-model-log.ts'
-import type { PlayWorldCharacterTurn } from './play-world.ts'
+import { projectPlayWorldNarrative, type PlayWorldCharacterTurn } from './play-world.ts'
+import type { PlayWorldNarrativeProjection } from './play-world-protocol.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
   compileStoryCharacterContext,
@@ -1444,6 +1445,7 @@ function substantiallyRestatesText(value: string, source: string, minimumLength 
 }
 
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
+const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
 
 function playerForbidsWorldRecap(playerInput: string): boolean {
   return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
@@ -1480,6 +1482,7 @@ function constrainAutomaticWorldDecision(
   automaticAdvance: boolean,
   worldOutcome: string,
   exchange: StoryRecentPublicExchange | undefined,
+  allowSceneReaction: boolean,
 ): StoryCharacterDecision {
   if (!automaticAdvance || worldOutcome === '') return decision
   const lastExchangeLine = exchange?.lines.at(-1)
@@ -1496,7 +1499,9 @@ function constrainAutomaticWorldDecision(
     )
   return {
     ...decision,
-    action: '',
+    action: allowSceneReaction && !CHARACTER_RULE_ACTION_PATTERN.test(decision.action)
+      ? decision.action
+      : '',
     ...(speech === undefined || respondsToCurrentOutcome || answersOpenExchange
       ? {}
       : { speech: undefined }),
@@ -3097,14 +3102,44 @@ function renderWorldOutcome(workspace: StoryWorkspaceSnapshot, sequences: readon
     .join('\n')
 }
 
-function renderWorldNarrative(input: RunStoryTurnPipelineInput, sequences: readonly number[]): string {
-  if (input.workspace.world === undefined || sequences.length === 0) return ''
+function projectWorldNarrative(
+  input: RunStoryTurnPipelineInput,
+  sequences: readonly number[],
+): PlayWorldNarrativeProjection | undefined {
+  if (input.workspace.world === undefined || sequences.length === 0) return undefined
   if (input.store === undefined) throw new Error('可执行世界缺少权威故事存储')
-  return input.store.worlds.get(input.workspace.world.moduleId).renderEventNarrative(
+  const context = resolveStoryPlayWorldContext(input.workspace)
+  const projection = input.store.worlds.get(input.workspace.world.moduleId).projectNarrative(
     input.workspace.world,
     sequences,
-    resolveStoryPlayWorldContext(input.workspace),
+    context,
   )
+  return projectPlayWorldNarrative(projection, sequences, context)
+}
+
+function renderWorldNarrativeFacts(projection: PlayWorldNarrativeProjection | undefined): string {
+  return projection?.facts.map(fact => fact.text).join('') ?? ''
+}
+
+function renderWorldNarrativeBrief(
+  projection: PlayWorldNarrativeProjection | undefined,
+  cues: readonly PlayWorldNarrativeProjection['cues'][number][],
+): string {
+  if (projection === undefined) return ''
+  const cadence = projection.cadence === 'transition'
+    ? '压缩过渡'
+    : projection.cadence === 'scene' ? '完整场景节拍' : '场景收束'
+  return [
+    `呈现节奏：${cadence}`,
+    '必须保留的事实：',
+    ...projection.facts.map(fact => `- ${fact.text}`),
+    ...(cues.length === 0
+      ? []
+      : [
+          '可以发展的现场条件：',
+          ...cues.map(cue => `- ${cue.kind}：${cue.text}`),
+        ]),
+  ].join('\n')
 }
 
 function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): string {
@@ -3195,12 +3230,13 @@ async function advanceStoryWorld(
   const shouldPresentNarrative = (): boolean => {
     if (completedCharacterTurns >= MAX_WORLD_CHARACTER_TURNS_PER_STORY_TURN) return true
     if (completedCharacterTurns === 0 || workspace.world === undefined) return false
-    if (module.isNarrativeCheckpoint === undefined) return true
-    return module.isNarrativeCheckpoint(
+    const context = resolveStoryPlayWorldContext(workspace)
+    const projection = projectPlayWorldNarrative(module.projectNarrative(
       workspace.world,
       runWorldEventSequences(),
-      resolveStoryPlayWorldContext(workspace),
-    )
+      context,
+    ), runWorldEventSequences(), context)
+    return projection.cadence !== 'transition'
   }
   if (cycleIds.at(-1) !== turn.id && shouldPresentNarrative()) return workspace
 
@@ -3722,7 +3758,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     return character
   })
   const worldOutcome = renderWorldOutcome(input.workspace, worldEventSequences)
-  const worldNarrative = renderWorldNarrative(input, worldEventSequences)
+  const worldNarrativeProjection = projectWorldNarrative(input, worldEventSequences)
+  const worldNarrative = renderWorldNarrativeFacts(worldNarrativeProjection)
+  const worldNarrativeBrief = renderWorldNarrativeBrief(
+    worldNarrativeProjection,
+    worldNarrativeProjection?.cues ?? [],
+  )
+  const worldNarrativeWritingBrief = renderWorldNarrativeBrief(worldNarrativeProjection, [])
+  const worldHasNarrativeCues = (worldNarrativeProjection?.cues.length ?? 0) > 0
 
   const enabledCharacters = storyTurnParticipants(
     input.workspace,
@@ -3759,25 +3802,26 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         playerInput,
       })
       const publicResponseAllowed = publicCharacterIds.has(character.id)
+      const characterHasNarrativeCue = worldNarrativeProjection?.cues.some(cue =>
+        cue.characterIds.includes(character.id)) ?? false
+      const characterWorldNarrativeBrief = renderWorldNarrativeBrief(
+        worldNarrativeProjection,
+        worldNarrativeProjection?.cues.filter(cue => cue.characterIds.includes(character.id)) ?? [],
+      )
       const decision = await runStage(input, 'character', generateOptions(
         input,
         reasoning,
         characterReasoningMode,
         [
-          '你是一个只拥有指定人物认知的角色 Worker。独立判断人物此刻能观察到什么、相信什么、如何回应 current_world_outcome 以及是否确实需要开口。不能使用未出现在输入中的知识。',
-          'retrieved_history 是独立历史检索 Worker 从此人物获准记录中选出的原文，只用于恢复此人物自己的连续记忆。它不会授予对其他人物私有记录、导演故事图或未来安排的访问权，也不能覆盖当前世界状态。',
-          'story:player-input 是所有在场人物共同看见的公开输入，其中既可能包含已经发生的公开前提，也可能包含对本轮参与范围的要求。名字出现在前提或引用中不等于此人物获准新增公开回应；公开回应权限只由 turn_participation 决定。',
-          'turn_participation 的 publicResponse=allowed 表示此人物可以自行决定是否返回公开 action 或 speech；publicResponse=observe-only 表示仍须形成自己的 observation 和合法私有 insights，但 action 必须为空、speech 必须为 null。Host 会强制清除越权公开内容。',
-          '若存在 world_turn_assignment，其中列出的 actors 是这一叙事节拍内实际完成规则动作的人物，observer 是旁观者。该分工描述已经完成的规则动作，不会覆盖 turn_participation，也不改变公开输入对所有人物可见。',
-          '可执行世界中的状态和事件已经由程序决定：current_world_outcome 是本轮刚刚执行完成、必须优先回应的结果，不得跳到下一位人物准备行动；不得自行掷骰、移动棋子、切换回合、决定胜负或虚构新的世界状态。当前行动人由 world state 决定；不得催促、等待或描写任何人物将来进行规则动作。',
-          'action 只保留由本轮结果直接引起、能够改变当场互动、人物关系或下一项非规则选择的具体反应；只表达态度、情绪或为说话摆姿势的动作不进入 action。不要用看向、伸手、换手、拨弄物件、摆姿势、轻笑或等待开口填空，也不要用“像是”“仿佛”“似乎”替动作解释内心；没有实际互动变化时留空。不得用 action 代替程序掷骰、移动棋子、切换回合或决定胜负。',
-          'speech 必须是 null，或者由 respondsTo、move、focus 和 effect 组成的对象。respondsTo 只写输入中已经公开发生、这句话要接住的具体前提；不能填未来假设、人物不知情的事或抽象话题。move 只能是 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose。focus 不是完整论点，只命名这个人要新增给当前交流的一个对象、区别、态度或直接答案，例如“对方先前主动采用的接法”“门外的人”“连续小点的荒唐”“先确认刻痕”；不写原因链、句式、口癖或逐字台词，也不重复 respondsTo 已经包含的前提。effect 写这次开口当场完成的一项交流作用：可以改变对方的理解、决定或行动，也可以向在场熟人明确表达态度、打趣、认输、拒绝或提议；它用于判断是否确实需要开口以及清除伪装成持久意图的本轮复述，不会交给声音 Worker 改写成对白。',
-          '人物不必为了让场面热闹而每轮开口。只有这次结果真正回答、推翻或改变了一句尚未收束的公开发言，或者引出了此人物特有的一项判断、拒绝、提议或关系动作时，才返回 speech；若已有相邻公开对白，respondsTo 优先逐项接住其中最后一个仍有效的前提，不能绕过它另起一段点数感想。单纯复述点数、领先落后、双方相同处境或众所周知的规则，单靠“熟人会互相打趣”制造话题，或者只能生成可替换到任意朋友与对手的感叹时，speech 必须为 null。人物档案中的对话示例只帮助判断人物会不会这样回应；不要选择逐字证据或模仿句式，后续声音阶段会独立检索该人物的原作证据，证据不足时让人物沉默。',
-          'recent_public_exchange 是紧邻本轮之前、真正获准展示的逐字对白。status=open 只表示最后一句明确要求回答、命令或提出建议；其他话轮一律是 closed。closed 的打趣、回答和陈述已经完成，当前结果只是再次印证同一处境时不得重开、升级或换句话续梗。只有本轮新结果推翻其前提，或者产生与旧话题不同的人物特有决定时，才可另起 speech。',
-          '玩家输入为空只表示导演没有介入，不构成要求人物表演的指令。规则结果本身已经由场地和正文承担；没有未收束话轮或人物特有的信息增量时，保持沉默并继续棋局就是完整决定。',
-          '当玩家输入为空且 current_world_outcome 非空时，这是场地程序已经完成的自动世界回合。action 必须为空；不得把新世界状态中轮到下一人物解释成准备掷骰、拿起棋子或任何未来行动。若 recent_public_exchange 不是 open，speech 的 respondsTo 必须直接指向 current_world_outcome 中本轮刚发生的结果；更早的公开事件和对白只用于连续记忆，不是待续的话头。',
-          'insights 中 knowledge 是本轮新获得且未公开的知识，写入 text，futureChoice 使用空字符串。intention 是会跨规则动作延续的非规则目标，decision 是已经作出且会跨规则动作持续的非规则选择；两者的 text 只写形成本项的当轮依据，futureChoice 必须写明：假设本轮 action 与 speech 已经完整结束，下一轮仍会因此改变的一个具体非规则选择。futureChoice 是 Host 唯一持久化的内容，必须是可独立复用的一项原子选择，不复述当轮骰点、棋子位置、公开历史、当前回合或解释性背景。只把 speech 的发言焦点换成“继续……”，或者改成“以后遇到相似结果再开口回敬”，都不构成新的未来选择；Host 会把 text 与 futureChoice 合在一起和本轮说话决定比较并丢弃这种复述。当前或下一项掷骰、移动、结束回合等程序动作必须标成 world-action，futureChoice 使用空字符串，Host 会丢弃整项。公开世界事实和瞬时情绪不能进入 insights，没有持久私有变化时使用空数组。',
-          '不要写完整正文或逐字对白。只返回 JSON：{"observation":"此人能观察到的事实","action":"会改变当场互动、关系或下一项非规则选择的具体反应，或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"一个对象、区别、态度或直接答案","effect":"这次开口当场完成的一项交流作用"},"insights":[{"kind":"knowledge|intention|decision|world-action","text":"knowledge 的私有事实、intention/decision 的当轮依据或待丢弃的规则动作","futureChoice":"intention/decision 唯一需要长期保存的原子选择，其他类型为空字符串"}]}。不开口时把 speech 设为 null。observation、action、speech 内容和 insights 不能包含引号包围的台词。不要使用 Markdown 围栏。',
+          '你是一个只拥有指定人物认知的角色 Worker。只依据 character context、retrieved_history、公开玩家输入和当前世界投影，形成这个人物自己的决定。',
+          'current_world_outcome 列出程序已经完成的规则事实。world_narrative 给出本轮的呈现节奏、同一批事实，以及此人物可以回应的现场条件；现场条件提供选择，不表示人物已经采取行动。world_turn_assignment 只标明已完成规则动作的参与者。',
+          'turn_participation 决定公开权限。publicResponse=allowed 时人物可以选择公开 action 或 speech；publicResponse=observe-only 时只形成 observation 和私有 insights，Host 会清除公开输出。',
+          characterHasNarrativeCue
+            ? '本轮有此人物可回应的现场条件。action 可以是一项由该条件引起、会实际改变现场互动、关系或后续非规则选择的动作；规则动作仍由 Host 执行。'
+            : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串，规则动作仍由 Host 执行。',
+          'speech 用于完成一项当下确有必要的交流动作。respondsTo 指向当前事实或 recent_public_exchange 中尚未收束的最后前提；move 取 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose；focus 只写本句新增的对象、区别、态度或答案；effect 写它当场改变的理解、决定或关系。已经收束的话轮和没有信息增量的结果以 speech=null 延续。声音阶段会另行检索原作证据并写出台词。',
+          'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体选择；规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
+          '只返回 JSON：{"observation":"此人能观察到的事实","action":"本轮具体的非规则行动或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"本句新增的一点","effect":"本句当场完成的交流作用"},"insights":[{"kind":"knowledge|intention|decision|world-action","text":"新信息或当轮依据","futureChoice":"需要跨回合保存的一项选择，其他类型为空字符串"}]}。不开口时 speech 为 null；字段中不写逐字台词。',
         ].join('\n'),
         [
           context.text,
@@ -3793,6 +3837,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           '</turn_participation>',
           '<recent_public_exchange>', renderRecentPublicExchange(recentExchange), '</recent_public_exchange>',
           '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
+          '<world_narrative>', characterWorldNarrativeBrief, '</world_narrative>',
         ].join('\n'),
         2_048,
         0.5,
@@ -3809,6 +3854,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         automaticAdvance,
         worldOutcome,
         recentExchange,
+        characterHasNarrativeCue,
       )
       return {
         characterId: character.id,
@@ -3843,6 +3889,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     automaticAdvance,
   )
   const research = hostDirectorAssignment === undefined
+    && !(automaticAdvance && worldHasNarrativeCues)
     ? await runResearch(
         input,
         reasoning,
@@ -3872,13 +3919,21 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       input,
       reasoning,
       directorReasoningMode,
-        '你是剧情导演 Worker。依据大纲、伏笔、带原始证据的研究简报和各人物独立行动提案，为本轮分配叙事节拍。保证因果连续，尊重玩家输入；隐藏知识只能影响拥有者或导演安排，不能让不知情人物表现出全知。recent_public_prose 是用户上一轮实际读到的正文；本轮必须承接它的时空、视角、叙述距离和节奏，但不得复制旧句、旧标题或已经完成的节拍。current_world_outcome 是本轮刚由规则程序产生的结果；world_narrative 是 Host 提供的权威事实骨架，不是成品正文。不要在 beats 中逐项复述它，只安排确有信息增量的后续人物反应；prose Worker 会把必要的规则动作和结果自然写入场景。多个相似的机械回合属于同一个连续时间段，不要逐轮报点。先逐项核对人物提案与 world_state：当前行动人由 world state 决定；与回合、棋子或合法行动冲突的动作必须删除，不能为了保留人物提案而改写世界状态。看向、换手、敲碰物件、摆姿势、轻笑或等待开口若不表达新的决定或关系变化，也必须删除。speech 只负责从 character_decisions 中已有非空说话决定里选择真正值得展示的分区和顺序；可以省略没有信息增长、只是复述处境或续已经收束玩笑的决定，Host 会尊重省略，不得新建、复述、扩写或改写决定，也不得为同一人物安排两次开口。各人物决定由并行 Worker 独立产生，任何人物都没有听见本轮其他人物尚未生成的台词；不得把两份独立决定排成伪造的一问一答。玩家没有输入且本轮包含世界规则动作时，最多安排一人开口。recent_public_exchange 的 status=closed 表示上一轮话轮已经完成，当前结果仅再次印证同一处境时不要重开。只写 characterId，不写 intent、voiceEvidence 或逐字台词。可执行世界严格只读：节拍只能表现 world_state 中已经记录的世界事件及人物反应，不得新增、预测或代替程序执行掷骰、移动、回合切换、胜负等世界变化。给每个启用分区分配互不重复的材料；公共反应和对白只进入 prose，character 只接收会影响后续回合的私有知识，不能把下一项世界规则动作保存成意图或决定。只返回 JSON：{"sections":[{"sectionId":"输入中的分区 id","beats":["不含逐字对白的额外反应节拍"],"speech":[{"characterId":"character_decisions 中已有非空说话决定的人物 id"}]}]}。每个启用分区必须恰好出现一次；没有独有材料时使用空数组。不要使用 Markdown 围栏。',
+      [
+        '你是剧情导演 Worker。把本轮权威事实、人物独立决定、大纲义务和玩家方向组织成一组可写作的场景节拍，并分配给启用的输出分区。',
+        'recent_public_prose 确定当前时空、视角、叙述距离与节奏。新节拍从它已经完成的位置继续。world_narrative 中的 cadence 决定本轮是压缩过渡、完整场景还是收束；facts 是已发生的规则事实；现场条件只是人物可能回应的局势。',
+        'character_decisions 是人物在彼此尚未听见本轮新台词时分别作出的决定。beats 只采用其中已提出的非规则行动，以及大纲、伏笔或研究材料要求在本轮公开的变化。并行决定保持独立，不排列成临时拼出的一问一答。',
+        'speech 只从 character_decisions 的非空说话决定中挑选人物、分区和顺序；Host 随后让该人物自己的声音 Worker 写出台词。已经完成交流作用或没有新增内容的决定可以省略；自动世界推进最多选择一人开口。',
+        'world_state 是规则事实的最终依据。导演不产生骰点、移动、回合或胜负，也不把 cue 直接写成人物已经采取的行动。相似规则结果作为同一段时间流动处理。',
+        '公共场景、行动和对白进入 prose；history 记录独有的可核对事实；character 只接收会跨回合保留的所属人物私有材料。每个启用分区恰好出现一次，材料不在分区间重复。',
+        '只返回 JSON：{"sections":[{"sectionId":"输入中的分区 id","beats":["不含逐字对白的场景节拍"],"speech":[{"characterId":"已有非空说话决定的人物 id"}]}]}。没有独有材料时使用空数组。',
+      ].join('\n'),
       [
         '<story_map>', storyMap, '</story_map>',
         '<foreshadowing>', foreshadowing, '</foreshadowing>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
-        '<world_narrative>', worldNarrative, '</world_narrative>',
+        '<world_narrative>', worldNarrativeBrief, '</world_narrative>',
         '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
         '<recent_public_exchange>', renderRecentPublicExchange(recentExchange), '</recent_public_exchange>',
         '<public_history>', storyPublicHistory(input.workspace), '</public_history>',
@@ -4092,11 +4147,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const outputInstruction = section.kind === 'prose' && worldNarrative !== ''
-          ? '把 world_narrative 中本轮实际发生的动作与结果写成可以直接阅读的完整场景节拍，并接上确有信息增量的公开行动和获准对白。篇幅由场景节拍决定；多个相似机械结果要压缩成连续的时间流动，不能逐项报点，也不能把每个机械回合各写一句。world_state 只用于核对事实，未在 world_narrative 中变化的其他人物、棋子和位置不是本轮素材，不要为了对照或收尾补报。不得解释规则、计算点数差、汇报下一行动者或写成系统结算。只返回本分区正文，不能返回 <omit-section />。'
+          ? '依照 world_narrative 的呈现节奏，把其中 facts 写进一段可直接阅读的连续场景。transition 压缩相似动作形成的时间流动；scene 展开事实引起的具体变化；resolution 收束本场已经形成的关系或目标。只返回本分区正文，不能返回 <omit-section />。'
           : '只返回这个分区可直接展示的非空内容，不能返回 <omit-section />。'
         const worldInstruction = worldNarrative === ''
-          ? 'current_world_outcome 是本轮刚发生的权威结果：prose 必须完整表现这些事件及执行动作的人。'
-          : 'world_narrative 是本轮权威事实骨架，不是待粘贴的成品。prose 要让读者自然看见其中必要的动作和结果，但不能把规则事件换成说明文，也不能增添 world_state 没有记录的规则动作。'
+          ? 'current_world_outcome 是本轮已经发生的权威结果，正文需要让读者看见事件和执行者。'
+          : 'world_narrative 提供权威事实与本轮节奏。正文用场景中的动作、感官和人物关系呈现 facts；规则状态以 world_state 为准。'
         const sectionPlan = directorDecision?.sections.find(plan => plan.sectionId === section.id)
         const sectionDirectorBrief = sectionPlan === undefined
           ? directorBrief
@@ -4110,7 +4165,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           input,
           reasoning,
           'quality',
-          `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}recent_public_prose 是用户上一轮实际读到的正文；延续它的时空、视角、叙述距离、句法密度和节奏，不要复制旧句、旧标题或已完成的动作。${worldInstruction}不能跳到下一位人物准备未来规则动作。director_brief 中标为“获准对白”的字面内容已经由专职声音阶段依据原作证据写定：每句必须完整逐字保留一次，并在叙述中明确说话人；可以用自然的叙述句、冒号或“某某说”衔接，不能把它们拆成一串没有归属的引号段。不得省略、添加、改写、拆分或模仿生成其他对白。没有获准对白时不要写人物正在说话、即将接话、语气如何或对一句不存在的话作出反应。看向、换手、敲碰物件、摆姿势、轻笑等动作若不表达新的决定或关系变化，不得用来填充场面。可执行世界严格只读；若导演方案与 world_state 冲突，以 world_state 为准，并删除未记录的掷骰、移动、回合切换、胜负或其他世界变化。${outputInstruction}`,
+          [
+            `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}`,
+            'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
+            worldInstruction,
+            'director_brief 只列本分区需要兑现的额外节拍。人物行动必须来自其中已经选定的决定；当前世界 facts 之外的规则变化不属于本轮。',
+            '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
+            outputInstruction,
+          ].join('\n'),
           [
             `<section_reference kind="${section.kind}">`, existing, '</section_reference>',
             '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
@@ -4118,7 +4180,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               ? []
               : ['<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>']),
             '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
-            '<world_narrative>', worldNarrative, '</world_narrative>',
+            '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
             '<director_brief>', sectionDirectorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
           ].join('\n'),
@@ -4151,12 +4213,18 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       input,
       reasoning,
       'routine',
-        '你是最终正文编辑 Worker，负责决定用户会看到的文本。recent_public_prose 是上一轮实际可见正文；成稿必须自然接续它的时空、视角、叙述距离和节奏，但不能复制旧句、旧标题或已经完成的节拍。人物私有认知和内部历史不会交给你，也不得补写。公共场景、行动和对白只保留在 prose。world_narrative 与 current_world_outcome 是事实约束，不是待粘贴的正文；prose 应保留让读者理解本轮所必需的动作与结果，并把多个相似机械回合压缩成一个完整场景节拍，不能写成“掷骰—报点—报位置”的逐项清单。world_state 只用于校验，删除未在 world_narrative 中变化、也不承担获准对白或公开行动因果的其他人物、棋子与位置播报。删掉规则解释、点数差计算和下一行动者播报。篇幅由场景节拍决定：机械重复要表现为连续的时间流动，不能每个结果各写一句，也不能用空镜或总结凑长度。不能把重点改成下一位人物准备未来动作。相同材料不许换句话重演。随后逐句检查 prose：删除无因由的迟疑，以及为了显得细腻而补出的手指、目光、换手、敲碰物件、摆姿势、轻笑、抬下巴等微动作；但不要删除承担实际掷骰、移动、明确说话人或可观察关系变化的必要动作。删除八股句式、空泛总结、机械排比、正文外解释和无信息的“像……”比喻。获准对白已经在正文写定；每个获准引号内容必须逐字保留一次，允许编辑它周围的说话人标识和叙述衔接，不能把对白重新拆成无归属的引号段。不得新增、恢复、拆分或重写对白。不要增加事件，不要改变人物认知。可执行世界严格只读：删除所有未出现在 world_state 中的掷骰、点数、棋子移动、回合切换、胜负或其他世界变化；允许保留人物对已记录事件的反应和对白。只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 不得新增、重复或改序；省略应删除的分区。text 内不能使用二级标题，需要内部标题时从三级标题开始。不要使用 Markdown 围栏。',
+      [
+        '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
+        'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
+        'prose 应读成一段连续场景：相似机械结果压缩成时间流动，场景变化获得完整的因果位置，收束落在本场已经形成的结果上。保留理解本轮所需的动作，删去规则播报、同义复述、空泛总结和只为拉长篇幅的装饰。',
+        '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
+        '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 内部标题从三级标题开始。',
+      ].join('\n'),
       [
         '<recent_public_prose>', priorPublicProse, '</recent_public_prose>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
-        '<world_narrative>', worldNarrative, '</world_narrative>',
+        '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
         '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
       ].join('\n'),
       8_192,

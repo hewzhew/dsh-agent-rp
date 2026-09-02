@@ -9,7 +9,11 @@ import {
   type FlyingChessWorldState,
 } from './flying-chess-protocol.ts'
 import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
-import type { PlayWorldEvent } from './play-world-protocol.ts'
+import type {
+  PlayWorldEvent,
+  PlayWorldNarrativeCue,
+  PlayWorldNarrativeProjection,
+} from './play-world-protocol.ts'
 
 const INSTANCE_ID_PATTERN = /^world-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const EVENT_ID_PATTERN = /^world-event-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -279,6 +283,120 @@ function renderEventNarratives(events: readonly PlayWorldEvent[], context: PlayW
   return narratives.join('')
 }
 
+const STALLED_TURNS_PER_SCENE = 4
+
+function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
+  let count = 0
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const item = events[index]!
+    if (item.type === 'turn.passed') {
+      count += 1
+    } else if (item.type !== 'die.rolled') {
+      break
+    }
+  }
+  return count
+}
+
+function appendStalledScene(
+  events: readonly PlayWorldEvent[],
+  state: FlyingChessWorldState,
+): readonly PlayWorldEvent[] {
+  if (consecutivePassedTurns(events) < STALLED_TURNS_PER_SCENE) return events
+  const summary = '接连几轮都没有飞机起飞时，一阵风掀起棋盘一角，基地里的木机随之晃动。'
+  return [...events, event(events, 'scene.changed', '棋盘被风掀动', summary, undefined, {
+    kind: 'narrative-situation',
+    cueKind: 'pressure',
+    cueText: '棋盘需要先被重新压稳。由谁先处理、另一人是否搭手，可以成为这一刻实际发生的人物关系动作。',
+    characterIds: [...state.playerOrder],
+  })]
+}
+
+function narrativeCues(
+  events: readonly PlayWorldEvent[],
+  allEvents: readonly PlayWorldEvent[],
+  state: FlyingChessWorldState,
+  context: PlayWorldContext,
+): readonly PlayWorldNarrativeCue[] {
+  const everyone = state.playerOrder
+  const firstLaunchSequence = allEvents.find(item => {
+    const data = eventData(item)
+    return item.type === 'piece.moved' && data?.kind === 'piece-moved' && data.fromStatus === 'base'
+  })?.sequence
+  return events.flatMap((item): readonly PlayWorldNarrativeCue[] => {
+    const data = eventData(item)
+    if (item.type === 'game.started') {
+      return [{
+        eventSequences: [item.sequence],
+        kind: 'change',
+        text: '这是棋局进入当前场景的开场。可依据人物档案与故事地图，用一个具体行动建立人物关系和现场气氛。',
+        characterIds: everyone,
+      }]
+    }
+    if (item.type === 'scene.changed' && data?.kind === 'narrative-situation'
+      && (data.cueKind === 'change' || data.cueKind === 'pressure'
+        || data.cueKind === 'opportunity' || data.cueKind === 'relationship')
+      && typeof data.cueText === 'string' && Array.isArray(data.characterIds)
+      && data.characterIds.every(id => typeof id === 'string')) {
+      return [{
+        eventSequences: [item.sequence],
+        kind: data.cueKind,
+        text: data.cueText,
+        characterIds: data.characterIds as string[],
+      }]
+    }
+    if (item.type === 'piece.moved' && data?.kind === 'piece-moved'
+      && item.sequence === firstLaunchSequence) {
+      const actor = eventActor(item, context)
+      return [{
+        eventSequences: [item.sequence],
+        kind: 'change',
+        text: `${actor ?? '当前棋手'}让本局第一阶段的僵持出现了明确变化。人物可以回应领先关系的变化，也可以不把它说出口。`,
+        characterIds: everyone,
+      }]
+    }
+    if (item.type === 'piece.captured') {
+      return [{
+        eventSequences: [item.sequence],
+        kind: 'relationship',
+        text: '这次碰撞直接改变了两位棋手之间的得失关系，适合承载一次有对象、有结果的反应。',
+        characterIds: everyone,
+      }]
+    }
+    if (item.type === 'game.finished') {
+      return [{
+        eventSequences: [item.sequence],
+        kind: 'relationship',
+        text: '棋局已经分出胜负；用人物实际在意的关系或先前约定收束现场，不要继续制造新的规则回合。',
+        characterIds: everyone,
+      }]
+    }
+    return []
+  })
+}
+
+function projectNarrative(
+  events: readonly PlayWorldEvent[],
+  allEvents: readonly PlayWorldEvent[],
+  state: FlyingChessWorldState,
+  context: PlayWorldContext,
+): PlayWorldNarrativeProjection {
+  const text = renderEventNarratives(events, context)
+  const cues = narrativeCues(events, allEvents, state, context)
+  const cadence = events.some(item => item.type === 'game.finished')
+    ? 'resolution'
+    : cues.length > 0 || events.some(item => item.type === 'piece.captured'
+      || item.type === 'scene.changed'
+      || item.type === 'piece.moved' && eventData(item)?.toStatus === 'home')
+      ? 'scene'
+      : 'transition'
+  return {
+    cadence,
+    facts: [{ eventSequences: events.map(item => item.sequence), text }],
+    cues,
+  }
+}
+
 function renderState(state: FlyingChessWorldState, events: readonly PlayWorldEvent[], context: PlayWorldContext): string {
   const names = characterMap(context)
   const lines = state.playerOrder.map(playerId => {
@@ -407,10 +525,11 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
             action.actorId,
             { kind: 'turn-passed', reason, rolled: value, required: 6, nextPlayerId },
           )
+          const nextEvents = appendStalledScene([...normalized.events, rolled, passed], state)
           return this.normalize({
             ...normalized,
             state: { ...state, turn: state.turn + 1, currentPlayerId: nextPlayerId },
-            events: [...normalized.events, rolled, passed],
+            events: nextEvents,
           }, context)
         }
         return this.normalize({
@@ -450,7 +569,16 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         ...(winnerId === undefined ? {} : { winnerId }),
       }
       const movedEvent = event(normalized.events, 'piece.moved', `${playerName(context, moving.ownerId)}移动 ${String(moving.number)} 号飞机`,
-        moved.status === 'home' ? '飞机抵达终点。' : `飞机前进到航线第 ${String(moved.steps)} 步。`, moving.ownerId)
+        moved.status === 'home' ? '飞机抵达终点。' : `飞机前进到航线第 ${String(moved.steps)} 步。`, moving.ownerId, {
+          kind: 'piece-moved',
+          pieceId: moving.id,
+          pieceNumber: moving.number,
+          fromStatus: moving.status,
+          fromSteps: moving.steps,
+          toStatus: moved.status,
+          toSteps: moved.steps,
+          rolled: value,
+        })
       const collisionEvents = captured.length === 0 ? [] : [event([...normalized.events, movedEvent], 'piece.captured', '发生碰撞',
         `${String(captured.length)} 架对方飞机返回基地。`, moving.ownerId)]
       const winnerEvents = winnerId === undefined ? [] : [event([...normalized.events, movedEvent, ...collisionEvents], 'game.finished',
@@ -530,21 +658,13 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
       const normalized = this.normalize(snapshot, context)
       return { title: normalized.title, text: renderState(normalized.state as FlyingChessWorldState, normalized.events, context) }
     },
-    renderEventNarrative(snapshot, eventSequences, context) {
+    projectNarrative(snapshot, eventSequences, context) {
       const normalized = this.normalize(snapshot, context)
       const selected = new Set(eventSequences)
       const events = normalized.events.filter(item => selected.has(item.sequence))
       if (events.length !== selected.size) throw new Error('飞行棋叙事引用了不存在的世界事件')
-      return renderEventNarratives(events, context)
-    },
-    isNarrativeCheckpoint(snapshot, eventSequences, context) {
-      const normalized = this.normalize(snapshot, context)
-      const selected = new Set(eventSequences)
-      const events = normalized.events.filter(item => selected.has(item.sequence))
-      if (events.length !== selected.size) throw new Error('飞行棋叙事检查点引用了不存在的世界事件')
-      return events.some(item => item.type === 'piece.moved'
-        || item.type === 'piece.captured'
-        || item.type === 'game.finished')
+      if (events.length === 0) throw new Error('飞行棋叙事至少需要一个世界事件')
+      return projectNarrative(events, normalized.events, normalized.state as FlyingChessWorldState, context)
     },
   }
 }

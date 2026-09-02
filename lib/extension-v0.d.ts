@@ -1359,6 +1359,26 @@ interface PlayWorldPromptProjection {
   readonly title: string;
   readonly text: string;
 }
+/** How selected world events should occupy the next visible story passage. */
+type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution';
+/** One immutable public fact backed by selected authoritative world events. */
+interface PlayWorldNarrativeFact {
+  readonly eventSequences: readonly number[];
+  readonly text: string;
+}
+/** One optional dramatic direction made available by selected world events. */
+interface PlayWorldNarrativeCue {
+  readonly eventSequences: readonly number[];
+  readonly kind: 'change' | 'pressure' | 'opportunity' | 'relationship';
+  readonly text: string;
+  readonly characterIds: readonly string[];
+}
+/** Public story material derived from one selected batch of authoritative events. */
+interface PlayWorldNarrativeProjection {
+  readonly cadence: PlayWorldNarrativeCadence;
+  readonly facts: readonly PlayWorldNarrativeFact[];
+  readonly cues: readonly PlayWorldNarrativeCue[];
+}
 /** Editable role assigned to one ordered output section. */
 type StoryOutputKind = 'prose' | 'character' | 'history';
 /** Node categories rendered on the story map. */
@@ -1506,13 +1526,8 @@ interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection;
-  /** Render selected authoritative events as a factual skeleton for the prose Worker. */
-  renderEventNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): string;
-  /**
-   * Decide whether completed character turns now form a useful narrative beat.
-   * Omission preserves one character turn per visible story turn.
-   */
-  isNarrativeCheckpoint?(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): boolean;
+  /** Project immutable facts, optional dramatic directions, and presentation cadence for selected events. */
+  projectNarrative(snapshot: PlayWorldSnapshot, eventSequences: readonly number[], context: PlayWorldContext): PlayWorldNarrativeProjection;
 }
 /** Installed world modules keyed by stable module id. */
 declare class PlayWorldRegistry {
@@ -1679,4 +1694,4 @@ declare function readRoleplayArtifactAutoStageIntent(value: JsonValue | undefine
 /** Versioned public contract for independent DSH plugins extending Agent RP. */
 /** The API version encoded by the `@hewzhew/dsh-agent-rp/extension/v0` export. */
 declare const AGENT_RP_EXTENSION_API_VERSION: 0;
-export { AGENT_RP_EXTENSION_API_VERSION, type LocatedPlayWorldResource, PLAY_WORLD_REGISTRY_KEY, type PlayWorldBinding, type PlayWorldCharacterAction, type PlayWorldCharacterTurn, type PlayWorldContext, type PlayWorldEvent, type PlayWorldModule, type PlayWorldModuleDescriptor, type PlayWorldPromptProjection, type PlayWorldResourceDescriptor, type PlayWorldSnapshot, type PlayWorldWorkspaceEdgeTemplate, type PlayWorldWorkspaceNodeTemplate, type PlayWorldWorkspaceOutputTemplate, type PlayWorldWorkspaceScaffold, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorProjection, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayStorySourceProjection, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, type RoleplayWorldProjection, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerPlayWorldModule, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };
+export { AGENT_RP_EXTENSION_API_VERSION, type LocatedPlayWorldResource, PLAY_WORLD_REGISTRY_KEY, type PlayWorldBinding, type PlayWorldCharacterAction, type PlayWorldCharacterTurn, type PlayWorldContext, type PlayWorldEvent, type PlayWorldModule, type PlayWorldModuleDescriptor, type PlayWorldNarrativeCadence, type PlayWorldNarrativeCue, type PlayWorldNarrativeFact, type PlayWorldNarrativeProjection, type PlayWorldPromptProjection, type PlayWorldResourceDescriptor, type PlayWorldSnapshot, type PlayWorldWorkspaceEdgeTemplate, type PlayWorldWorkspaceNodeTemplate, type PlayWorldWorkspaceOutputTemplate, type PlayWorldWorkspaceScaffold, ROLEPLAY_ACTOR_DEFINITION_FIELDS, ROLEPLAY_ACTOR_REVISION_REGISTRY_KEY, ROLEPLAY_ARTIFACT_AUTO_STAGE_FORMAT, ROLEPLAY_RESOURCE_CATALOG_KEY, ROLEPLAY_RESOURCE_KINDS, ROLEPLAY_RUNTIME_EXTENSIONS_KEY, ROLEPLAY_TURN_WORKERS_KEY, type RoleplayActorDefinition, type RoleplayActorDefinitionField, type RoleplayActorProjection, type RoleplayActorRevisionChanges, RoleplayActorRevisionConflictError, type RoleplayActorRevisionInput, type RoleplayActorRevisionProvider, type RoleplayActorRevisionSnapshot, type RoleplayArtifactAutoStageIntent, type RoleplayResourceDescriptor, type RoleplayResourceDetail, type RoleplayResourceKind, type RoleplayResourceMaterialization, type RoleplayResourceMaterializationContext, type RoleplayResourceMaterializationInput, type RoleplayResourceProvider, type RoleplayResourceReference, type RoleplayResourceSelection, type RoleplayRuntimeExtensionDefinition, type RoleplayRuntimeExtensionResolution, type RoleplayRuntimeExtensionResolveInput, type RoleplayStorySourceProjection, type RoleplayToolImageArtifact, type RoleplayTurnWorker, type RoleplayTurnWorkerInput, type RoleplayTurnWorkerOutcome, type RoleplayTurnWorkerPhase, type RoleplayWorldProjection, TAVERN_RESOURCE_PREFLIGHT_KEY, TOOL_ARTIFACT_PRESENTATION_FORMAT, type TavernResourcePreflightContributor, type TavernResourcePreflightResolveInput, type ToolArtifactPresentationMeta, readRoleplayArtifactAutoStageIntent, readToolArtifactPresentationMeta, registerPlayWorldModule, registerRoleplayActorRevisionProvider, registerRoleplayResourceProvider, registerRoleplayRuntimeExtension, registerRoleplayTurnWorker, registerTavernResourcePreflightContributor, roleplayToolArtifactPresentationMeta };

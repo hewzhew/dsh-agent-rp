@@ -11,7 +11,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { createFlyingChessWorldModule } from '../src/flying-chess-world.ts'
 import { FLYING_CHESS_WORLD_MODULE_ID, type FlyingChessWorldState } from '../src/flying-chess-protocol.ts'
-import { PlayWorldRegistry, type PlayWorldModule } from '../src/play-world.ts'
+import { PlayWorldRegistry, projectPlayWorldNarrative, type PlayWorldModule } from '../src/play-world.ts'
 import { RoleplayResourceCatalog } from '../src/roleplay-resource-catalog.ts'
 import {
   FLYING_CHESS_WORLD_CAST_SLOTS,
@@ -176,9 +176,13 @@ function counterWorldModule(name = '计数世界'): PlayWorldModule {
       const state = this.normalize(snapshot, context).state as { readonly step: number }
       return { title: name, text: `权威计数为 ${String(state.step)}。` }
     },
-    renderEventNarrative(snapshot, eventSequences, context) {
+    projectNarrative(snapshot, eventSequences, context) {
       const events = this.normalize(snapshot, context).events.filter(event => eventSequences.includes(event.sequence))
-      return events.map(event => `${event.title}。`).join('')
+      return {
+        cadence: 'scene',
+        facts: [{ eventSequences: events.map(event => event.sequence), text: events.map(event => `${event.title}。`).join('') }],
+        cues: [],
+      }
     },
   }
 }
@@ -829,11 +833,11 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(afterMove.pieces.find(piece => piece.id === pieceId)?.status, 'track')
   assert.equal(afterMove.currentPlayerId, reimuId)
   assert.deepEqual(moved.worldActionReceipts?.map(receipt => receipt.actionId), ['roll', moveAction!.id])
-  assert.equal(worlds.get(FLYING_CHESS_WORLD_MODULE_ID).renderEventNarrative(
+  assert.equal(worlds.get(FLYING_CHESS_WORLD_MODULE_ID).projectNarrative(
     moved.world!,
     [2, 3],
     resolveStoryPlayWorldContext(moved),
-  ), '博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步。')
+  ).facts[0]?.text, '博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步。')
 
   const manualRollTurn = store.worldTurn(moved.id)
   assert.equal(manualRollTurn?.actions[0]?.id, 'roll')
@@ -973,6 +977,305 @@ test('advances a host-owned flying-chess world only through typed actions', (con
   assert.equal(restarted.graph.nodes.some(node => node.title === '尚未接受的剧情方向'), false)
   assert.equal(restarted.graph.nodes.some(node => node.title === '已接受的剧情方向'), true)
   assert.equal(restarted.graph.nodes.find(node => node.title === '已接受的剧情方向')?.sourceEventId, undefined)
+})
+
+test('turns a stalled flying-chess opening into a recorded scene pressure', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-stalled-flying-chess-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '僵持场景' })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  let workspace = store.save({
+    ...editable(created),
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+  })
+  workspace = store.installWorld(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+
+  for (let turn = 0; turn < 4; turn += 1) {
+    const available = store.worldTurn(workspace.id)
+    assert.equal(available?.actions[0]?.id, 'roll')
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available!.cycleId,
+      actionId: 'roll',
+    })
+  }
+
+  const scene = workspace.world?.events.at(-1)
+  assert.equal(scene?.type, 'scene.changed')
+  assert.match(scene?.summary ?? '', /一阵风掀起棋盘一角/u)
+  const eventSequences = workspace.world!.events.map(event => event.sequence)
+  const playContext = resolveStoryPlayWorldContext(workspace)
+  const projection = projectPlayWorldNarrative(
+    worlds.get(FLYING_CHESS_WORLD_MODULE_ID).projectNarrative(
+      workspace.world!, eventSequences, playContext,
+    ),
+    eventSequences,
+    playContext,
+  )
+  assert.equal(projection.cadence, 'scene')
+  assert.match(projection.facts[0]?.text ?? '', /棋盘被风掀动/u)
+  assert.deepEqual(projection.cues.find(cue => cue.kind === 'pressure'), {
+    eventSequences: [scene!.sequence],
+    kind: 'pressure',
+    text: '棋盘需要先被重新压稳。由谁先处理、另一人是否搭手，可以成为这一刻实际发生的人物关系动作。',
+    characterIds: [reimuId, marisaId],
+  })
+  assert.match(compileStoryCharacterContext(workspace, reimuId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
+  assert.match(compileStoryCharacterContext(workspace, marisaId, { playerInput: '' }, worlds).worldContext, /棋盘被风掀动/u)
+  assert.throws(() => projectPlayWorldNarrative({
+    cadence: 'scene',
+    facts: projection.facts,
+    cues: [{ ...projection.cues[0]!, eventSequences: [999] }],
+  }, eventSequences, playContext), /未选择的世界事件/u)
+})
+
+test('projects first launch, ordinary movement, collision, and finish at their narrative cadence', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const playContext = {
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: {},
+    sourceReferences: [],
+  }
+  const rolls = [6, 2]
+  const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
+  let snapshot = module.create(playContext)
+
+  let turn = module.characterTurn(snapshot, playContext)!
+  const firstStart = snapshot.events.length
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  const firstSequences = snapshot.events.slice(firstStart).map(event => event.sequence)
+  const firstLaunch = projectPlayWorldNarrative(
+    module.projectNarrative(snapshot, firstSequences, playContext),
+    firstSequences,
+    playContext,
+  )
+  assert.equal(firstLaunch.cadence, 'scene')
+  assert.equal(firstLaunch.cues.some(cue => cue.kind === 'change'), true)
+
+  turn = module.characterTurn(snapshot, playContext)!
+  const ordinaryStart = snapshot.events.length
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  const ordinarySequences = snapshot.events.slice(ordinaryStart).map(event => event.sequence)
+  const ordinaryMove = projectPlayWorldNarrative(
+    module.projectNarrative(snapshot, ordinarySequences, playContext),
+    ordinarySequences,
+    playContext,
+  )
+  assert.equal(ordinaryMove.cadence, 'transition')
+  assert.deepEqual(ordinaryMove.cues, [])
+
+  const collisionModule = createFlyingChessWorldModule()
+  const collisionCreated = collisionModule.create(playContext)
+  const collisionState = collisionCreated.state as FlyingChessWorldState
+  const reimuPiece = collisionState.pieces.find(piece => piece.ownerId === reimuId)!
+  const marisaPiece = collisionState.pieces.find(piece => piece.ownerId === marisaId)!
+  const collisionPrepared = {
+    ...collisionCreated,
+    state: {
+      ...collisionState,
+      pieces: collisionState.pieces.map(piece => piece.id === reimuPiece.id
+        ? { ...piece, status: 'track' as const, steps: 12 }
+        : piece.id === marisaPiece.id
+          ? { ...piece, status: 'track' as const, steps: 1 }
+          : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [reimuPiece.id] },
+    },
+  }
+  const collided = collisionModule.dispatch(collisionPrepared, {
+    type: 'move',
+    actorId: reimuId,
+    pieceId: reimuPiece.id,
+  }, playContext)
+  const collisionSequences = collided.events.slice(collisionCreated.events.length).map(event => event.sequence)
+  const collision = projectPlayWorldNarrative(
+    collisionModule.projectNarrative(collided, collisionSequences, playContext),
+    collisionSequences,
+    playContext,
+  )
+  assert.equal(collision.cadence, 'scene')
+  assert.equal(collision.cues.some(cue => cue.kind === 'relationship'), true)
+
+  const finishModule = createFlyingChessWorldModule()
+  const finishCreated = finishModule.create(playContext)
+  const finishState = finishCreated.state as FlyingChessWorldState
+  const finishingPieces = finishState.pieces.filter(piece => piece.ownerId === reimuId)
+  const finishingPiece = finishingPieces[0]!
+  const alreadyHome = new Set(finishingPieces.slice(1).map(piece => piece.id))
+  const finishPrepared = {
+    ...finishCreated,
+    state: {
+      ...finishState,
+      pieces: finishState.pieces.map(piece => piece.id === finishingPiece.id
+        ? { ...piece, status: 'track' as const, steps: 23 }
+        : alreadyHome.has(piece.id)
+          ? { ...piece, status: 'home' as const, steps: 24 }
+          : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [finishingPiece.id] },
+    },
+  }
+  const finished = finishModule.dispatch(finishPrepared, {
+    type: 'move',
+    actorId: reimuId,
+    pieceId: finishingPiece.id,
+  }, playContext)
+  const finishSequences = finished.events.slice(finishCreated.events.length).map(event => event.sequence)
+  const finish = projectPlayWorldNarrative(
+    finishModule.projectNarrative(finished, finishSequences, playContext),
+    finishSequences,
+    playContext,
+  )
+  assert.equal(finish.cadence, 'resolution')
+  assert.equal(finish.cues.some(cue => cue.kind === 'relationship'), true)
+})
+
+test('shows recorded facts to every character but only offers a cue to its named characters', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-pressure-scene-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const flyingChess = createFlyingChessWorldModule({ rollDie: () => 1 })
+  worlds.register({
+    ...flyingChess,
+    projectNarrative(snapshot, eventSequences, playContext) {
+      const projection = flyingChess.projectNarrative(snapshot, eventSequences, playContext)
+      return {
+        ...projection,
+        cues: projection.cues.map(cue => ({ ...cue, characterIds: [reimuId] })),
+      }
+    },
+  })
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '现场压力正文' })
+  const proseId = createStoryOutputId()
+  let workspace = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+    outputs: [{
+      id: proseId,
+      name: '正文',
+      kind: 'prose',
+      enabled: true,
+      instructions: '写成一段连续的场景。',
+    }],
+  })
+  workspace = store.installWorld(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  for (let turn = 0; turn < 4; turn += 1) {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: 'roll',
+    })
+  }
+  const session = Session.create(SessionId('world-pressure-scene'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const sceneText = '几轮骰声过去，两边的飞机都没能离开基地。风忽然掀起棋盘一角，灵梦伸手压住翻卷的边沿，木机的晃动才停下来。'
+  const characterBodies: string[] = []
+  let directorBody = ''
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        if (system.includes('指定人物认知')) characterBodies.push(body)
+        if (system.includes('剧情导演 Worker')) directorBody = body
+        const text = system.includes('单个人物的历史检索 Worker')
+          ? JSON.stringify({ references: [] })
+          : system.includes('指定人物认知')
+            ? body.includes('# 人物：博丽灵梦')
+              ? JSON.stringify({
+                  observation: '风掀起棋盘一角，基地里的木机正在晃动。',
+                  action: '灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住。',
+                  speech: null,
+                  insights: [],
+                })
+              : JSON.stringify({
+                  observation: '风掀起棋盘一角，灵梦已经伸手压住棋盘。',
+                  action: '魔理沙把手按到棋盘另一角。',
+                  speech: null,
+                  insights: [],
+                })
+            : system.includes('剧情导演 Worker')
+              ? JSON.stringify({ sections: [{
+                  sectionId: proseId,
+                  beats: ['灵梦压住被风掀起的棋盘边沿，木机重新稳住。'],
+                  speech: [],
+                }] })
+              : system.includes('分区的 prose Worker')
+                ? sceneText
+                : system.includes('最终正文编辑 Worker')
+                  ? JSON.stringify({ sections: [{ sectionId: proseId, text: sceneText }] })
+                  : (() => { throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`) })()
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(result.finalDraft, sceneText)
+  assert.match(result.finalDraft, /几轮骰声过去/u)
+  assert.doesNotMatch(result.finalDraft, /掷出 1|第 \d+ 回合/u)
+  const reimuBody = characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
+  const marisaBody = characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
+  assert.match(reimuBody, /棋盘被风掀动/u)
+  assert.match(marisaBody, /棋盘被风掀动/u)
+  assert.match(reimuBody, /棋盘需要先被重新压稳/u)
+  assert.doesNotMatch(marisaBody, /棋盘需要先被重新压稳/u)
+  assert.doesNotMatch(directorBody, /魔理沙把手按到棋盘另一角/u)
+  const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+  assert.equal(characterRequests.length, 2)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'research'), false)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'director'), true)
+  assert.equal(result.publicWorldEvents?.at(-1)?.type, 'scene.changed')
 })
 
 test('scaffolds fresh world authoring surfaces without replacing authored work', (context) => {
