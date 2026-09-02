@@ -1056,11 +1056,11 @@ test('runs logged story stages while keeping each character request privately sc
   const result = await runStoryTurnPipeline(input)
   const briefEvent = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
 
-  assert.equal(calls, 14)
+  assert.equal(calls, 15)
   assert.equal(voiceReviewCalls, 2)
   assert.equal(maxActive, 2)
   assert.equal(routes.every(route => route === 'worker-fixture/worker-model'), true)
-  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 5)
+  assert.equal(reasoningEfforts.filter(effort => effort === 'off').length, 6)
   assert.equal(reasoningEfforts.filter(effort => effort === 'low').length, 4)
   assert.equal(reasoningEfforts.filter(effort => effort === 'high').length, 5)
   const voiceStageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
@@ -1124,7 +1124,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.match(characterSystems[0]!, /已经收束的话轮和没有信息增量的结果以 speech=null 延续/u)
   assert.match(characterSystems[0]!, /声音阶段会另行检索原作证据/u)
   assert.match(characterSystems[0]!, /跨规则回合仍会改变选择的 intention\/decision/u)
-  assert.match(characterSystems[0]!, /futureChoice 中写一项可独立复用的具体选择/u)
+  assert.match(characterSystems[0]!, /futureChoice 中写一项可独立复用的具体非语言选择/u)
   assert.match(characterSystems[0]!, /规则动作标为 world-action，由 Host 丢弃/u)
   assert.match(characterSystems[0]!, /字段中不写逐字台词/u)
   assert.match(directorBody, /回应前提：对方准备在没有看清徽章刻痕时就下结论/u)
@@ -1259,10 +1259,7 @@ test('runs logged story stages while keeping each character request privately sc
     { sectionId, kind: 'prose', characterId: undefined },
     { sectionId: historySectionId, kind: 'history', characterId: undefined },
   ])
-  assert.deepEqual(result.privateCharacterStates, [{
-    characterId: aliceId,
-    insights: [{ kind: 'knowledge', text: '阿梨把徽章刻痕和自己的旧站记忆联系起来。' }],
-  }])
+  assert.equal(result.privateCharacterStates, undefined)
   assert.doesNotMatch(result.finalDraft, /自己的旧站记忆/u)
   assert.match(result.modelContext, /阿梨把徽章转向窗光/u)
   assert.match(result.modelContext, /原样返回 edited_draft/u)
@@ -1270,8 +1267,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-start'
     ? [{ workspaceId: event.data.workspaceId, turn: event.data.turn, step: event.data.step }]
     : []), [{ workspaceId: currentWorkspace.id, turn: 1, step: 1 }])
-  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-request').length, 14)
-  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-result').length, 14)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-request').length, 15)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-stage-result').length, 15)
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-brief'
     ? [event.data.turn]
     : []), [0, 1])
@@ -1282,8 +1279,8 @@ test('runs logged story stages while keeping each character request privately sc
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research' ? [event.data.subjectId] : []), ['pass-1', 'pass-2'])
   const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request' ? [event.data] : [])
-  assert.equal(stageRequests.some(request => request.subjectId?.startsWith('retry-draft:') === true
-    || request.subjectId?.startsWith('retry-review:') === true), false)
+  assert.deepEqual(stageRequests.filter(request => request.subjectId?.startsWith('retry-') === true)
+    .map(request => request.subjectId), [`retry-draft:${aliceId}:1`])
   const stageRequestEvents = new Map<number, import('@deepseek-ai/dsh-session').SessionEvent<'agent-rp/story-stage-request'>['data']>(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     ? [[event.seq, event.data] as const]
     : []))
@@ -1305,7 +1302,7 @@ test('runs logged story stages while keeping each character request privately sc
     || event.ignorable === true), true)
 
   assert.deepEqual(await runStoryTurnPipeline(input), result)
-  assert.equal(calls, 14)
+  assert.equal(calls, 15)
   assert.equal(sessionEvents(session).filter(event => event.type === 'agent-rp/story-turn-start').length, 1)
 })
 

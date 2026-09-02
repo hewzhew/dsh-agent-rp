@@ -39,6 +39,26 @@ test('retains prose as notes and deduplicates repeated labelled lines', () => {
   assert.equal(parts.notes, '这一段说明她会直接反问。')
 })
 
+test('parses unquoted SillyTavern dialogue only inside START blocks', () => {
+  const parts = parseStoryVoiceEvidence(['博丽灵梦'], [
+    '语气：简短而直接。',
+    '<START>',
+    '雾雨魔理沙: 你问的是哪句话？',
+    '博丽灵梦: 你自己把两句话接在一起，还问我是哪句？',
+    '<START>',
+    '霧雨魔理沙: どの台詞のことだ？',
+    '博丽灵梦: 自分で二つの話を繋げておいて、どっちかなんて聞くの？',
+  ].join('\n'))
+
+  assert.deepEqual(parts.orderedLines.map(line => [line.owner, line.variant, line.speaker]), [
+    ['context', 'example', '雾雨魔理沙'],
+    ['target', 'example', '博丽灵梦'],
+    ['context', 'original', '霧雨魔理沙'],
+    ['target', 'original', '博丽灵梦'],
+  ])
+  assert.equal(parts.notes, '语气：简短而直接。')
+})
+
 test('resets original and translated variants across repeated bilingual blocks', () => {
   const parts = parseStoryVoiceEvidence(['灵梦'], [
     '原文：',

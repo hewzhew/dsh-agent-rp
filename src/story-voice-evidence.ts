@@ -1,6 +1,52 @@
 /** Shared parsing for speaker-labelled dialogue used by voice generation and readiness views. */
 
 const LABELED_DIALOGUE_PATTERN = /([\p{L}·・]{1,16})(?:\s*[：:]\s*[“"]([^”"\r\n]+)[”"]|\s*[：:]?\s*[「『]([^」』\r\n]+)[」』])/gu
+const START_MARKER_PATTERN = /^<START>\s*$/u
+const START_BLOCK_DIALOGUE_PATTERN = /^\s*([\p{L}·・]{1,16})\s*[：:]\s*([^\s“"「『][^\r\n]*)\s*$/u
+
+interface StoryVoiceDialogueMatch {
+  readonly sourceStart: number
+  readonly sourceEnd: number
+  readonly speaker: string
+  readonly dialogue: string
+}
+
+function storyVoiceDialogueMatches(text: string): readonly StoryVoiceDialogueMatch[] {
+  const matches: StoryVoiceDialogueMatch[] = [...text.matchAll(LABELED_DIALOGUE_PATTERN)].flatMap(match => {
+    const sourceStart = match.index
+    if (sourceStart === undefined) return []
+    return [{
+      sourceStart,
+      sourceEnd: sourceStart + match[0].length,
+      speaker: match[1]!.trim(),
+      dialogue: (match[2] ?? match[3] ?? '').trim(),
+    }]
+  })
+  let insideStartBlock = false
+  for (const line of text.matchAll(/^[^\r\n]*$/gmu)) {
+    const sourceStart = line.index
+    if (sourceStart === undefined) continue
+    const value = line[0]
+    if (START_MARKER_PATTERN.test(value.trim())) {
+      insideStartBlock = true
+      continue
+    }
+    if (!insideStartBlock) continue
+    if (value.trim() === '') {
+      insideStartBlock = false
+      continue
+    }
+    const dialogue = START_BLOCK_DIALOGUE_PATTERN.exec(value)
+    if (dialogue === null) continue
+    matches.push({
+      sourceStart,
+      sourceEnd: sourceStart + value.length,
+      speaker: dialogue[1]!.trim(),
+      dialogue: dialogue[2]!.trim(),
+    })
+  }
+  return matches.sort((left, right) => left.sourceStart - right.sourceStart)
+}
 
 /** One speaker-labelled line found in original, translated, or profile dialogue. */
 export interface StoryVoiceEvidenceLine {
@@ -105,9 +151,8 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
   let parallelGroup = 0
   let nextParallelGroup = 1
   let parallelIndex = 0
-  for (const match of text.matchAll(LABELED_DIALOGUE_PATTERN)) {
-    const index = match.index
-    if (index === undefined) continue
+  for (const match of storyVoiceDialogueMatches(text)) {
+    const index = match.sourceStart
     const prose = text.slice(cursor, index)
     noteParts.push(prose)
     for (const marker of prose.matchAll(/(原文|参考译文)\s*[：:]?/gu)) {
@@ -120,9 +165,8 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
       }
       parallelIndex = 0
     }
-    cursor = index + match[0].length
-    const speaker = match[1]!.trim()
-    const dialogue = (match[2] ?? match[3] ?? '').trim()
+    cursor = match.sourceEnd
+    const { speaker, dialogue } = match
     const variant = variantMode === 'translation'
       ? 'translation'
       : variantMode === 'original' || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(dialogue)
@@ -136,7 +180,7 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
       variant,
       ...(parallelKey === undefined ? {} : { parallelKey }),
       sourceStart: index,
-      sourceEnd: index + match[0].length,
+      sourceEnd: match.sourceEnd,
     } as const
     occurrences.push(line)
     const key = `${variant}\u0000${normalizeStoryVoiceSpeakerName(speaker)}\u0000${dialogue}`
@@ -147,6 +191,7 @@ export function parseStoryVoiceDocument(text: string): StoryVoiceDocument {
   noteParts.push(text.slice(cursor))
   const notes = noteParts.join('')
     .replace(/(?:原文|参考译文)\s*[：:]?/gu, '')
+    .replace(/^<START>\s*$/gmu, '')
     .split(/\r?\n/u)
     .map(line => line.trim())
     .filter(line => line !== '')

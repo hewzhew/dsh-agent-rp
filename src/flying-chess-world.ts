@@ -702,17 +702,35 @@ function renderState(
     return `- ${names.get(playerId) ?? playerId}：基地 ${String(base)}，航线 ${track}，到达 ${String(home)}`
   })
   const recent = events.slice(-8).map(item => `- ${item.title}：${item.summary}`).join('\n')
+  const eventBySequence = new Map(events.map(item => [item.sequence, item]))
   const opportunities = characterId === undefined
     ? []
-    : characterOpportunities(state, events, characterId, context).map(opportunity =>
-        `- [${opportunity.id}] ${opportunity.status === 'available' ? '尚未处置' : '已保留'}：${opportunity.instruction}`)
+    : state.opportunities.flatMap(opportunity => {
+        if (opportunity.ownerId !== characterId) return []
+        const source = eventBySequence.get(opportunity.sourceEventSequence)
+        const data = source === undefined ? undefined : eventData(source)
+        if (typeof data?.cueText !== 'string' || source === undefined
+          || narrativeOpportunityUse(source, context) === undefined) {
+          throw new Error('飞行棋叙事机会缺少来源说明')
+        }
+        const status = opportunity.status === 'available'
+          ? '尚未处置'
+          : opportunity.status === 'retained'
+            ? '已保留'
+            : opportunity.status === 'declined'
+              ? '已放弃'
+              : `已使用${opportunity.responderId === undefined
+                ? ''
+                : `，回应者为 ${names.get(opportunity.responderId) ?? opportunity.responderId}`}`
+        return [`- [${opportunity.id}] ${status}：${data.cueText}`]
+      })
   return [
     '执行约束：棋局状态与世界事件只能由场地程序写入。只能描写下列已记录事件及人物反应；禁止自行掷骰、移动棋子、切换回合、决定胜负或声称任何未记录的棋局变化。',
     `当前第 ${String(state.turn)} 回合，轮到 ${names.get(state.currentPlayerId) ?? state.currentPlayerId}。`,
     state.pendingRoll === undefined ? '尚未掷骰。' : `已掷出 ${String(state.pendingRoll.value)}，等待选择合法棋子。`,
     ...lines,
     state.winnerId === undefined ? '' : `胜者：${names.get(state.winnerId) ?? state.winnerId}`,
-    opportunities.length === 0 ? '' : `你拥有的未决世界机会：\n${opportunities.join('\n')}`,
+    opportunities.length === 0 ? '' : `你拥有的世界机会：\n${opportunities.join('\n')}`,
     recent === '' ? '' : `最近世界事件：\n${recent}`,
   ].filter(Boolean).join('\n')
 }

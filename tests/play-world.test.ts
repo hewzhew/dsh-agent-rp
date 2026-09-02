@@ -1274,6 +1274,8 @@ test('keeps narrative opportunities private and durable until their explicit dis
   }, playContext)
   assert.deepEqual(immediate.module.characterOpportunities!(usedImmediately, reimuId, playContext), [])
   assert.equal((usedImmediately.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+  assert.match(immediate.module.projectForCharacter(usedImmediately, reimuId, playContext).text, /已使用，回应者为 雾雨魔理沙/u)
+  assert.doesNotMatch(immediate.module.projectForCharacter(usedImmediately, marisaId, playContext).text, /已使用/u)
 
   const deferred = createLanding()
   const deferredOpportunity = deferred.module.characterOpportunities!(deferred.snapshot, reimuId, playContext)[0]!
@@ -1309,6 +1311,8 @@ test('keeps narrative opportunities private and durable until their explicit dis
   }, playContext)
   assert.equal((declined.state as FlyingChessWorldState).opportunities[0]?.status, 'declined')
   assert.deepEqual(abandoned.module.characterOpportunities!(declined, reimuId, playContext), [])
+  assert.match(abandoned.module.projectForCharacter(declined, reimuId, playContext).text, /已放弃/u)
+  assert.doesNotMatch(abandoned.module.projectForCharacter(declined, marisaId, playContext).text, /已放弃/u)
 
   const legacyContext: PlayWorldContext = {
     ...playContext,
@@ -1400,6 +1404,7 @@ test('does not consume a world opportunity when the public question is rejected'
   })
   session.append('turn/start', { turn: 2 })
   session.append('step/start', { turn: 2, step: 1 })
+  let voiceDraftAttempts = 0
   const fake = {
     sessions: { flush: async () => true },
     llm: {
@@ -1428,7 +1433,7 @@ test('does not consume a world opportunity when the public question is rejected'
           text = body.includes('# 人物：博丽灵梦')
             ? JSON.stringify({
               observation: '折签给了自己一次提问机会。',
-              action: '',
+              action: '把折签沿旧折痕展开，放到两人之间。',
               speech: {
                 respondsTo: '折签允许她向另一位棋手提一个问题。',
                 move: 'question',
@@ -1440,23 +1445,40 @@ test('does not consume a world opportunity when the public question is rejected'
                 disposition: 'use',
                 responderId: marisaId,
               }],
-              insights: [],
+              insights: [{
+                kind: 'knowledge',
+                text: '折签问题已经公开问出，这次机会已经用掉。',
+                futureChoice: '',
+              }],
             })
             : JSON.stringify({
-              observation: '看见折签弹开，但提问尚未发生。',
-              action: '',
-              speech: null,
+              observation: '玩家要求灵梦使用折签提问，但问题还没有公开。',
+              action: '靠向椅背，嘴上接过灵梦的问题。',
+              speech: {
+                respondsTo: '灵梦刚刚把折签问题问出口。',
+                move: 'tease',
+                focus: '用玩笑回避真实计划。',
+                effect: '让灵梦套不出答案。',
+              },
               opportunityDecisions: [],
-              insights: [],
+              insights: [{
+                kind: 'knowledge',
+                text: '灵梦已经把折签问题问出口，折签也已经用掉。',
+                futureChoice: '',
+              }],
             })
         } else if (system.includes('人物自己的对白 Worker')) {
+          voiceDraftAttempts += 1
+          const seedLineIds = voiceDraftAttempts === 1
+            ? targetSeedIds.slice(0, 1).map(id => id.replace(/#seed-\d+$/u, ''))
+            : targetSeedIds.slice(0, 1)
           text = JSON.stringify({ lines: [{
             reference: `speech:${proseId}:1`,
             move: 'question',
-            seedLineIds: targetSeedIds.slice(0, 1),
+            seedLineIds,
             mechanics: '直接发问，把是否作答留给对方。',
             leftImplicit: '提问的原因。',
-            dialogue: '“你来这里以前，最后看见了什么？”',
+            dialogue: '“来这儿以前，你最后碰见的是谁？”',
           }] })
         } else if (system.includes('对白审校 Worker')) {
           text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '' }] })
@@ -1470,7 +1492,15 @@ test('does not consume a world opportunity when the public question is rejected'
         } else if (system.includes('剧情研究 Worker')) {
           text = JSON.stringify({ findings: [], followUps: [] })
         } else if (system.includes('剧情导演 Worker')) {
-          text = JSON.stringify({ sections: [{ sectionId: proseId, beats: [], speech: [{ characterId: reimuId }] }] })
+          text = JSON.stringify({ sections: [{
+            sectionId: proseId,
+            beats: [
+              '灵梦把折签沿旧折痕展开，放到两人之间。',
+              '灵梦真的把折签问题问出口，随后等待魔理沙回答。',
+              '魔理沙靠向椅背，嘴上接过灵梦的问题。',
+            ],
+            speech: [{ characterId: reimuId }, { characterId: marisaId }],
+          }] })
         } else if (system.includes('剧情连续性记录 Worker')) {
           text = JSON.stringify({
             history: { text: '折签在棋子停到第八步时弹开。', sourceSectionIds: [proseId] },
@@ -1504,6 +1534,10 @@ test('does not consume a world opportunity when the public question is rejected'
   })
   assert.equal(result.publicDialogues, undefined)
   assert.equal(result.worldOpportunityResolutions, undefined)
+  assert.equal(result.privateCharacterStates, undefined)
+  assert.match(result.directorBrief, /把折签沿旧折痕展开/u)
+  assert.doesNotMatch(result.directorBrief, /问题问出口|接过灵梦的问题/u)
+  assert.equal(voiceDraftAttempts, 2)
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuBody = JSON.stringify(characterRequests.find(request => request.subjectId === reimuId)?.dispatch.messages)
@@ -1511,6 +1545,11 @@ test('does not consume a world opportunity when the public question is rejected'
   assert.equal(reimuBody.includes(opportunity.id), true)
   assert.equal(marisaBody.includes('<world_opportunities>\\n（无）\\n</world_opportunities>'), true)
   assert.doesNotMatch(marisaBody, /status=open/u)
+  const voiceRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'voice' ? [event.data] : [])
+  assert.equal(voiceRequests.length, 3)
+  assert.match(JSON.stringify(voiceRequests[1]?.dispatch.messages), /voice_draft_retry/u)
+  assert.match(JSON.stringify(voiceRequests[1]?.dispatch.messages), /#seed-N/u)
 
   session.append('assistant/message', {
     turn: 2,
@@ -1548,6 +1587,299 @@ test('does not consume a world opportunity when the public question is rejected'
     webResearch: [],
   })
   assert.equal(module.characterOpportunities!(retainedWorkspace.world!, reimuId, worldContext)[0]?.status, 'retained')
+
+  const approvedSession = Session.create(SessionId('world-opportunity-approved-question'))
+  approvedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  approvedSession.append('turn/start', { turn: 4 })
+  approvedSession.append('step/start', { turn: 4, step: 1 })
+  const approvedQuestion = '“你总把那架机子往前赶，终点外还有什么在等你？”'
+  const approvedCharacterBodies: string[] = []
+  const approvedContext = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: 'off', name: 'Off' }], defaultEffort: 'off' },
+        }
+      },
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        const deferredTurn = body.includes('保持沉默并自行处理是否以后回答')
+        const responseTurn = body.includes('让魔理沙自行决定是否回答') || deferredTurn
+        const fallbackTurn = body.includes('导演失败时')
+        const isReimu = body.includes('# 人物：博丽灵梦')
+        const targetSeedIds = [...new Set([...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)]
+          .map(match => match[1]!))]
+        let text: string
+        if (system.includes('人物参与路由 Worker')) {
+          text = JSON.stringify({ publicCharacterIds: responseTurn ? [marisaId] : [reimuId, marisaId] })
+        } else if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          approvedCharacterBodies.push(body)
+          text = responseTurn
+            ? isReimu
+              ? JSON.stringify({
+                observation: '上一轮的问题已经公开。',
+                action: '',
+                speech: null,
+                opportunityDecisions: [],
+                insights: [{
+                  kind: 'knowledge',
+                  text: '前三回合掷骰结果依次是 2、4、3，双方飞机都还在基地。',
+                  futureChoice: '',
+                }, {
+                  kind: 'decision',
+                  text: '折签仍可留到以后使用。',
+                  futureChoice: '折签提问留到出现规则争议时再使用。',
+                }],
+              })
+              : JSON.stringify({
+                observation: '灵梦刚才公开问过终点以外还有什么在等她。',
+                action: '把骰子翻过来，对着灯看六个面上的刻痕。',
+                speech: deferredTurn
+                  ? null
+                  : {
+                      respondsTo: '灵梦刚才公开问过终点以外还有什么在等她。',
+                      move: 'answer',
+                      focus: '自己若动过手脚，就不会连自己也坑进第四把四里。',
+                      effect: '把话绕回神社身上。',
+                    },
+                opportunityDecisions: [],
+                insights: deferredTurn
+                  ? [{
+                      kind: 'decision',
+                      text: '这轮继续沉默，但以后仍可回答折签问题。',
+                      futureChoice: '若以后回答折签问题，先把话绕回神社身上。',
+                    }]
+                  : [{
+                      kind: 'decision',
+                      text: '回答后把怀疑引回神社。',
+                      futureChoice: '把话绕回神社身上。',
+                    }],
+              })
+            : isReimu
+              ? JSON.stringify({
+                observation: '折签仍由自己保留。',
+                action: '把折签沿旧折痕展开，放到两人之间。',
+                speech: {
+                  respondsTo: '魔理沙一直只推进同一架飞机。',
+                  move: 'question',
+                  focus: '终点以外是否还有事情等着她。',
+                  effect: '把折签允许的问题公开问给魔理沙。',
+                },
+                opportunityDecisions: [{
+                  opportunityId: opportunity.id,
+                  disposition: 'use',
+                  responderId: marisaId,
+                }],
+                insights: [],
+              })
+              : JSON.stringify({
+                observation: '玩家希望灵梦随后提问，但问题尚未公开。',
+                action: '靠向椅背准备接话。',
+                speech: {
+                  respondsTo: '灵梦刚刚公开的问题。',
+                  move: 'tease',
+                  focus: '用玩笑回避答案。',
+                  effect: '不透露自己的计划。',
+                },
+                opportunityDecisions: [],
+                insights: [{
+                  kind: 'knowledge',
+                  text: '灵梦已经公开问出了折签问题。',
+                  futureChoice: '',
+                }],
+              })
+        } else if (system.includes('剧情研究 Worker')) {
+          text = JSON.stringify({ findings: [], followUps: [] })
+        } else if (system.includes('剧情导演 Worker')) {
+          text = fallbackTurn ? '{}' : JSON.stringify({ sections: [{
+            sectionId: proseId,
+            beats: responseTurn
+              ? [
+                  '魔理沙把骰子翻过来，对着灯看六个面上的刻痕。',
+                  '若真是她动的手脚，她不会连自己也坑进第四把四里。',
+                  '魔理沙把话绕了个弯，又抛回神社身上。',
+                ]
+              : ['灵梦展开折签。'],
+            speech: responseTurn
+              ? [{ characterId: marisaId }]
+              : [{ characterId: reimuId }, { characterId: marisaId }],
+          }] })
+        } else if (system.includes('严格对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            dialogue: responseTurn ? '' : approvedQuestion,
+          }] })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            move: responseTurn ? 'answer' : 'question',
+            seedLineIds: targetSeedIds.slice(0, 1),
+            mechanics: '把对方刚才的选择压成一句直接反问。',
+            leftImplicit: '她为何想知道答案。',
+            dialogue: responseTurn
+              ? '“要真是我动的手脚，哪会连自己也坑在第四把四上。”'
+              : approvedQuestion,
+          }] })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = responseTurn
+            ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
+            : `灵梦展开折签，问魔理沙：${approvedQuestion}`
+        } else if (system.includes('最终正文编辑 Worker')) {
+          text = JSON.stringify({ sections: [{
+            sectionId: proseId,
+            text: responseTurn
+              ? '魔理沙把骰子翻过来，对着灯看了看六个面上的刻痕。'
+              : `灵梦展开折签，问魔理沙：${approvedQuestion}`,
+          }] })
+        } else {
+          text = JSON.stringify({ sections: [] })
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const approvedAgent = {
+    id: approvedSession.id,
+    options: { provider: 'fixture', model: 'fixture' },
+    session: approvedSession,
+  } as Agent
+  const approvedResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: retainedWorkspace,
+    turn: 4,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '灵梦现在使用收好的折签向魔理沙提问；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(approvedResult.publicDialogues?.map(dialogue => ({
+    characterId: dialogue.characterId,
+    targetCharacterId: dialogue.targetCharacterId,
+    dialogue: dialogue.dialogue,
+  })), [{ characterId: reimuId, targetCharacterId: marisaId, dialogue: approvedQuestion }])
+  assert.deepEqual(approvedResult.worldOpportunityResolutions, [{
+    opportunityId: opportunity.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+    publicEvidence: approvedQuestion,
+  }])
+  assert.equal(approvedResult.privateCharacterStates, undefined)
+  const responseWorkspace = {
+    ...retainedWorkspace,
+    world: module.resolveCharacterOpportunity!(
+      retainedWorkspace.world!,
+      approvedResult.worldOpportunityResolutions[0]!,
+      worldContext,
+    ),
+  }
+  approvedSession.append('assistant/message', {
+    turn: 4,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: approvedResult.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  approvedSession.append('step/end', { turn: 4, step: 1 })
+  approvedSession.append('turn/start', { turn: 5 })
+  approvedSession.append('step/start', { turn: 5, step: 1 })
+  const responseResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 5,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙自行决定是否回答；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  const responseTurnBodies = approvedCharacterBodies.slice(-2)
+  const responseReimuBody = responseTurnBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
+  const responseMarisaBody = responseTurnBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
+  assert.match(responseMarisaBody, /status=open/u)
+  assert.equal(responseMarisaBody.includes(approvedQuestion), true)
+  assert.match(responseMarisaBody, /publicResponse=allowed/u)
+  assert.match(responseReimuBody, /status=closed/u)
+  assert.match(responseReimuBody, /publicResponse=observe-only/u)
+  assert.match(responseReimuBody, /已使用/u)
+  assert.equal(responseResult.publicDialogues, undefined)
+  assert.equal(responseResult.privateCharacterStates, undefined)
+  assert.match(responseResult.directorBrief, /把骰子翻过来/u)
+  assert.doesNotMatch(responseResult.directorBrief, /不会连自己也坑|绕了个弯|抛回神社/u)
+  assert.match(responseResult.finalDraft, /把骰子翻过来/u)
+  assert.doesNotMatch(responseResult.finalDraft, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
+  assert.doesNotMatch(responseResult.modelContext, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
+
+  approvedSession.append('assistant/message', {
+    turn: 5,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: responseResult.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  approvedSession.append('step/end', { turn: 5, step: 1 })
+  approvedSession.append('turn/start', { turn: 6 })
+  approvedSession.append('step/start', { turn: 6, step: 1 })
+  const fallbackResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 6,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '导演失败时仍让魔理沙自行决定是否回答；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(fallbackResult.publicDialogues, undefined)
+  assert.match(fallbackResult.directorBrief, /把骰子翻过来/u)
+  assert.match(fallbackResult.directorBrief, /获准对白：无/u)
+  assert.doesNotMatch(fallbackResult.directorBrief, /终点以外|不会连自己也坑|回答后|绕回神社/u)
+  assert.doesNotMatch(fallbackResult.finalDraft, /不会连自己也坑|绕了个弯|抛回神社|当面(?:回答|表示)/u)
+
+  approvedSession.append('turn/start', { turn: 7 })
+  approvedSession.append('step/start', { turn: 7, step: 1 })
+  const deferredResult = await runStoryTurnPipeline({
+    ctx: approvedContext,
+    agent: approvedAgent,
+    store,
+    workspace: responseWorkspace,
+    turn: 7,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙保持沉默并自行处理是否以后回答；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(deferredResult.publicDialogues, undefined)
+  assert.equal(deferredResult.privateCharacterStates, undefined)
 
   const failedUseSession = Session.create(SessionId('world-opportunity-subagent-missed-submission'))
   failedUseSession.append('request/header', {
@@ -1626,8 +1958,12 @@ test('does not consume a world opportunity when the public question is rejected'
   })
   assert.equal(failedUseResult.worldOpportunityResolutions, undefined)
   const failedOwnerRequests = failedUseRequests.filter(request => request.label?.includes('博丽灵梦') === true)
+  const failedObserverRequests = failedUseRequests.filter(request => request.label?.includes('雾雨魔理沙') === true)
   assert.equal(failedOwnerRequests.length, 2)
+  assert.equal(failedObserverRequests.length, 1)
   assert.match(failedOwnerRequests[1]!.prompt.map(block => block.text ?? '').join('\n'), /structured_output_retry/u)
+  assert.equal(failedObserverRequests.every(request =>
+    !request.prompt.some(block => block.text?.includes('灵梦现在使用收好的折签向魔理沙提问') === true)), true)
   assert.equal(module.characterOpportunities!(store.get(workspace.id).world!, reimuId, worldContext)[0]?.status, 'retained')
 
   assert.throws(() => store.materializeTurn(workspace.id, {

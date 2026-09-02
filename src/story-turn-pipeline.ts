@@ -1013,6 +1013,19 @@ function renderCharacterDecision(
   ].join('\n')
 }
 
+function renderFallbackCharacterDecision(
+  characterId: string,
+  characterName: string,
+  decision: StoryCharacterDecision,
+): string {
+  return [
+    `## ${characterName}`,
+    `- 人物 ID：${characterId}`,
+    `- 公开行动：${decision.action === '' ? '无' : decision.action}`,
+    '- 获准对白：无',
+  ].join('\n')
+}
+
 const DIRECT_DIALOGUE_PATTERN = /[“”「」『』"]/u
 
 function parseDirectorDecision(
@@ -1235,21 +1248,40 @@ function groundDirectorSpeechPlans(
   }
 }
 
+function stripDirectorSpeechIntentBeats(
+  decision: StoryDirectorDecision,
+  characterDecisions: readonly StoryCharacterDecisionRecord[],
+): StoryDirectorDecision {
+  const speechIntents = characterDecisions.flatMap(record => record.decision.speech === undefined
+    ? []
+    : [record.decision.speech])
+  return {
+    sections: decision.sections.map(section => ({
+      ...section,
+      beats: section.beats.filter(beat =>
+        !speechIntents.some(speech => insightRestatesSpeech(beat, speech))),
+    })),
+  }
+}
+
 function groundWorldDirectorBeats(
   decision: StoryDirectorDecision,
   sections: readonly StoryWorkspaceSnapshot['outputs'][number][],
   characterDecisions: readonly StoryCharacterDecisionRecord[],
   worldNarrative: string,
 ): StoryDirectorDecision {
-  if (worldNarrative === '') return decision
+  const speechFiltered = stripDirectorSpeechIntentBeats(decision, characterDecisions)
+  if (worldNarrative === '') return speechFiltered
   const outputById = new Map(sections.map(section => [section.id, section]))
-  const hasPublicReaction = characterDecisions.some(record => record.decision.action !== '')
+  const hasPublicAction = characterDecisions.some(record => record.decision.action !== '')
   return {
-    sections: decision.sections.map(section => {
+    sections: speechFiltered.sections.map(section => {
       const output = outputById.get(section.sectionId)
-      return output?.kind === 'character' || (output?.kind === 'prose' && !hasPublicReaction)
-        ? { ...section, beats: [] }
-        : section
+      if (output?.kind !== 'prose') return { ...section, beats: [] }
+      return {
+        ...section,
+        beats: hasPublicAction ? section.beats : [],
+      }
     }),
   }
 }
@@ -1519,6 +1551,7 @@ function substantiallyRestatesText(value: string, source: string, minimumLength 
 
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
 const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
+const DEFERRED_SPEECH_INSIGHT_PATTERN = /(?:提问|追问|回答|答复|回话|回应|接话|拒答|拒绝回答|开口|把话)/u
 
 function playerForbidsWorldRecap(playerInput: string): boolean {
   return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
@@ -1604,6 +1637,61 @@ function limitAutomaticWorldSpeech(
       decision,
       text: renderCharacterDecision(record.characterId, characterName, decision),
     }
+  })
+}
+
+function deferWorldOpportunityResponders(
+  records: readonly StoryCharacterDecisionRecord[],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+): readonly StoryCharacterDecisionRecord[] {
+  const initiatingSpeechByResponder = new Map<string, StoryCharacterSpeechIntent[]>()
+  for (const record of records) {
+    if (record.decision.speech === undefined) continue
+    for (const opportunity of record.decision.opportunityDecisions) {
+      if (opportunity.disposition !== 'use' || opportunity.responderId === undefined) continue
+      const existing = initiatingSpeechByResponder.get(opportunity.responderId) ?? []
+      existing.push(record.decision.speech)
+      initiatingSpeechByResponder.set(opportunity.responderId, existing)
+    }
+  }
+  if (initiatingSpeechByResponder.size === 0) return records
+  const characterNames = new Map(characters.map(character => [character.id, character.name]))
+  return records.map(record => {
+    const initiatingSpeech = initiatingSpeechByResponder.get(record.characterId)
+    if (initiatingSpeech === undefined) return record
+    const decision: StoryCharacterDecision = {
+      ...record.decision,
+      action: '',
+      speech: undefined,
+      insights: [],
+    }
+    return {
+      ...record,
+      decision,
+      text: renderCharacterDecision(
+        record.characterId,
+        characterNames.get(record.characterId) ?? record.characterId,
+        decision,
+      ),
+    }
+  })
+}
+
+function materializablePrivateCharacterStates(
+  records: readonly StoryCharacterDecisionRecord[],
+  director: StoryDirectorDecision | undefined,
+  dialogueByReference: ReadonlyMap<string, string>,
+): readonly StoryTurnCharacterPrivateState[] {
+  const approvedCharacters = new Set(director?.sections.flatMap(section => section.speech.flatMap(speech => {
+    const dialogue = dialogueByReference.get(speech.reference)
+    return dialogue === undefined || dialogue === '' ? [] : [speech.characterId]
+  })) ?? [])
+  return records.flatMap(record => {
+    const speech = record.decision.speech
+    const insights = speech === undefined || approvedCharacters.has(record.characterId)
+      ? record.decision.insights
+      : []
+    return insights.length === 0 ? [] : [{ characterId: record.characterId, insights }]
   })
 }
 
@@ -1830,11 +1918,25 @@ function parseCharacterInsights(
 function removeWorldRestatementInsights(
   insights: readonly StoryTurnPrivateInsight[],
   worldOutcome: string,
+  publicWorldState: string,
 ): readonly StoryTurnPrivateInsight[] {
   return insights.filter(insight => {
-    if (worldOutcome !== '' && substantiallyRestatesText(insight.text, worldOutcome, 6)) return false
+    if (insight.kind === 'knowledge' && [worldOutcome, publicWorldState]
+      .some(source => source !== '' && substantiallyRestatesText(insight.text, source, 6))) return false
+    if (insight.kind !== 'knowledge' && DEFERRED_SPEECH_INSIGHT_PATTERN.test(insight.text)) return false
     return insight.kind === 'knowledge' || !CHARACTER_RULE_ACTION_PATTERN.test(insight.text)
   })
+}
+
+function characterReceivedNewPrivateInsightBasis(
+  characterId: string,
+  publicResponseAllowed: boolean,
+  worldOutcome: string,
+  worldNarrative: string,
+  recentExchange: StoryRecentPublicExchange | undefined,
+): boolean {
+  return publicResponseAllowed || worldOutcome !== '' || worldNarrative !== ''
+    || recentExchange?.lines.some(line => line.characterId !== characterId) === true
 }
 
 const SUGGESTION_REF_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/u
@@ -3173,7 +3275,6 @@ async function resolveStoryTurnCast(
   recentExchange: StoryRecentPublicExchange | undefined,
   resultEventSeqs: number[],
 ): Promise<ReadonlySet<string>> {
-  const worldActorIds = new Set(worldActionCharacters.map(character => character.id))
   const pendingResponderIds = recentExchange?.status === 'open'
     ? recentExchange.lines.flatMap(line => line.targetCharacterId === undefined ? [] : [line.targetCharacterId])
     : []
@@ -3183,10 +3284,7 @@ async function resolveStoryTurnCast(
   if (characters.length <= 1) return fallback
   const mentionedCharacters = characters.filter(character =>
     characterReferenceNames(character.name).some(name => playerInput.includes(name)))
-  const needsRouting = worldActionCharacters.length === 0
-    ? mentionedCharacters.length > 0 || CAST_SCOPE_PATTERN.test(playerInput)
-    : mentionedCharacters.some(character => !worldActorIds.has(character.id))
-      || CAST_SCOPE_PATTERN.test(playerInput)
+  const needsRouting = mentionedCharacters.length > 0 || CAST_SCOPE_PATTERN.test(playerInput)
   if (!needsRouting) return fallback
   const characterIds = new Set(characters.map(character => character.id))
   const routed = await runStage(input, 'cast', generateOptions(
@@ -4092,10 +4190,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     input.workspace.pipeline.maxParallel,
     async character => {
       input.signal.throwIfAborted()
-      const context = compileStoryCharacterContext(input.workspace, character.id, {
-        playerInput,
-      })
       const publicResponseAllowed = publicCharacterIds.has(character.id)
+      const context = compileStoryCharacterContext(input.workspace, character.id, {
+        playerInput: publicResponseAllowed ? playerInput : '',
+      })
       const recentExchangeTarget = recentExchange?.lines.at(-1)?.targetCharacterId
       const characterRecentExchange = recentExchange?.status === 'open'
         && recentExchangeTarget !== undefined && recentExchangeTarget !== character.id
@@ -4121,9 +4219,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           characterHasNarrativeCue
             ? '本轮有此人物可回应的现场条件。action 只能是一项已经完成、由该条件直接引起且即使人物不开口也会留下可观察结果的非规则行动；只看向别人、摆出姿态、拿着物品等待发言或等待别人接话时使用空字符串。规则动作仍由 Host 执行。'
             : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串；除非 recent_public_exchange 明确标为尚待回答，speech 也使用 null。规则动作仍由 Host 执行。',
-          'world_opportunities 是此人物当前可以处置的持久世界机会。每项必须在 opportunityDecisions 中原样复制 id，并明确选择 retain、use 或 decline；retain 和 decline 的 responderId 为 null。use 必须选择 responders 中的一人，并把 responderId 写成其 id，同时 speech.move 必须等于 requiredSpeechMove。机会的选择不写进 insights。若声音阶段没有批准并公开这句 speech，Host 不会消耗 use。没有可用机会时 opportunityDecisions 使用空数组。',
+          'world_opportunities 只列出此人物当前可以处置的持久世界机会。每项必须在 opportunityDecisions 中原样复制 id，并明确选择 retain、use 或 decline；retain 和 decline 的 responderId 为 null。use 必须选择 responders 中的一人，并把 responderId 写成其 id，同时 speech.move 必须等于 requiredSpeechMove。机会的选择不写进 insights。若声音阶段没有批准并公开这句 speech，Host 不会消耗 use。没有可用机会时 opportunityDecisions 使用空数组；人物可见世界状态中标为已使用或已放弃的机会已经终结，不能再为它保存未来选择。',
           'speech 用于完成一项当下确有必要的交流动作。respondsTo 指向当前事实或 recent_public_exchange 中尚未收束的最后前提；move 取 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose；focus 只写本句新增的对象、区别、态度或答案；effect 写它当场改变的理解、决定或关系。已经收束的话轮和没有信息增量的结果以 speech=null 延续。声音阶段会另行检索原作证据并写出台词。',
-          'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体选择；规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
+          'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体非语言选择；以后再提问、回答、拒答或采用某种说法仍属于当前 speech 或世界机会，不保存为长期人物事实。规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
           '只返回 JSON：{"observation":"此人能观察到的事实","action":"本轮具体的非规则行动或空字符串","speech":{"respondsTo":"已公开的具体前提","move":"十一种动作之一","focus":"本句新增的一点","effect":"本句当场完成的交流作用"},"opportunityDecisions":[{"opportunityId":"原样 id","disposition":"retain|use|decline","responderId":null}],"insights":[{"kind":"knowledge|intention|decision|world-action","text":"新信息或当轮依据","futureChoice":"需要跨回合保存的一项选择，其他类型为空字符串"}]}。不开口时 speech 为 null；字段中不写逐字台词。',
         ].join('\n'),
         [
@@ -4154,9 +4252,22 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         parseCharacterDecision(decision.text),
         availableWorldOpportunities,
       )
+      const receivedPrivateInsightBasis = characterReceivedNewPrivateInsightBasis(
+        character.id,
+        publicResponseAllowed,
+        worldOutcome,
+        characterWorldNarrativeBrief,
+        characterRecentExchange,
+      )
       const bounded = {
         ...parsed,
-        insights: removeWorldRestatementInsights(parsed.insights, worldOutcome),
+        insights: receivedPrivateInsightBasis
+          ? removeWorldRestatementInsights(
+              parsed.insights,
+              worldOutcome,
+              context.worldContext,
+            )
+          : [],
       }
       const scoped = publicResponseAllowed
         ? bounded
@@ -4178,13 +4289,18 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     },
   )).filter((value): value is StoryCharacterDecisionRecord => value !== undefined)
   const characterDecisions = limitAutomaticWorldSpeech(
-    parallelCharacterDecisions,
+    deferWorldOpportunityResponders(parallelCharacterDecisions, enabledCharacters),
     automaticAdvance,
     worldOutcome,
     worldActionCharacterIds.at(-1),
     enabledCharacters,
   )
   const characterDecisionText = characterDecisions.map(record => record.text)
+  const fallbackCharacterDecisionText = characterDecisions.map(record => renderFallbackCharacterDecision(
+    record.characterId,
+    enabledCharacters.find(character => character.id === record.characterId)?.name ?? record.characterId,
+    record.decision,
+  ))
 
   const enabledSections = expandStoryTurnOutputs(input.workspace, enabledCharacters)
     .filter(section => section.kind !== 'character'
@@ -4216,7 +4332,14 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       )
     : { text: '', citations: [] }
   const researchText = research.text
-  const fallback = directorFallback(input, playerInput, researchText, characterDecisionText, worldOutcome, worldNarrative)
+  const fallback = directorFallback(
+    input,
+    playerInput,
+    researchText,
+    fallbackCharacterDecisionText,
+    worldOutcome,
+    worldNarrative,
+  )
   const maximumSpeeches = worldNarrative !== '' && playerInput === '' ? 1 : Number.POSITIVE_INFINITY
   let directorDecision = hostDirectorAssignment === undefined
     ? undefined
@@ -4373,8 +4496,44 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           return new Map()
         }
       }
-      const approvedCandidates = initialCandidates
-      const approved = await reviewDialogue(approvedCandidates, 'review')
+      let approvedCandidates = initialCandidates
+      let approved = await reviewDialogue(approvedCandidates, 'review')
+      if (![...approved.values()].some(dialogue => dialogue !== '')) {
+        const rejected = new Set([...initialCandidates.values()].flatMap(candidates =>
+          candidates.map(candidate => candidate.dialogue)))
+        const retry = await runStage(input, 'voice', generateOptions(
+          input,
+          reasoning,
+          voiceDraftReasoning,
+          VOICE_DRAFT_SYSTEM,
+          [
+            commonBody,
+            '<voice_draft_retry>',
+            '上一次草稿没有留下可批准的候选。重新生成真正不同的候选；reference 必须逐字复制 required_reference，seedLineIds 必须逐字复制 voice_evidence 中带 #seed-N 后缀的完整 [seed:...] ID。若说话决定本身不成立，仍返回一项空字符串。',
+            '</voice_draft_retry>',
+          ].join('\n'),
+          2_048,
+          0.5,
+        ), resultEventSeqs, `retry-draft:${subject}`)
+        let retryCandidates: ReadonlyMap<string, readonly StoryDialogueCandidate[]> = new Map()
+        if (retry.text !== undefined) {
+          try {
+            retryCandidates = parseDialogueCandidates(
+              retry.text,
+              speechDecision,
+              selectedVoiceEvidence,
+              rejected,
+            )
+          } catch {
+            retryCandidates = new Map()
+          }
+        }
+        const retryApproved = await reviewDialogue(retryCandidates, 'retry-review')
+        if ([...retryApproved.values()].some(dialogue => dialogue !== '')) {
+          approvedCandidates = retryCandidates
+          approved = retryApproved
+        }
+      }
       const approvedDialogue = approved.get(speech.reference)
       if (approvedDialogue !== undefined && approvedDialogue !== '') {
         dialogueByReference.set(speech.reference, approvedDialogue)
@@ -4603,9 +4762,11 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       }]
     }))
   const context = modelContext(finalDraft)
-  const privateCharacterStates = characterDecisions.flatMap(record => record.decision.insights.length === 0
-    ? []
-    : [{ characterId: record.characterId, insights: record.decision.insights }])
+  const privateCharacterStates = materializablePrivateCharacterStates(
+    characterDecisions,
+    directorDecision,
+    dialogueByReference,
+  )
   const deterministicWorldMaterialization = worldOutcome !== ''
     && privateCharacterStates.length === 0
     && characterDecisions.every(record => record.decision.action === '')
