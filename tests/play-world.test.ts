@@ -3082,11 +3082,11 @@ test('lets the current private character Worker complete one world turn exactly 
   assert.equal(bodies.length, 2)
 })
 
-test('writes a manually completed world result before another character acts', async (context) => {
+test('writes a manually completed world result without persisting a character composite public recap', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-manual-world-result-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const worlds = new PlayWorldRegistry()
-  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 6 }))
   const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
   const created = store.create({ format: 2, name: '手动规则结果' })
   const reimuId = createStoryCharacterId()
@@ -3118,14 +3118,21 @@ test('writes a manually completed world result before another character acts', a
   })
   const withoutMap = store.save({ ...editable(installed), graph: { nodes: [], edges: [] } })
   const manualTurn = store.worldTurn(withoutMap.id)
-  const manuallyAdvanced = store.dispatchWorldAction(withoutMap.id, {
+  const rolled = store.dispatchWorldAction(withoutMap.id, {
     format: 0,
     revision: withoutMap.revision,
     cycleId: manualTurn!.cycleId,
     actionId: 'roll',
   })
+  const moveTurn = store.worldTurn(rolled.id)
+  const manuallyAdvanced = store.dispatchWorldAction(rolled.id, {
+    format: 0,
+    revision: rolled.revision,
+    cycleId: moveTurn!.cycleId,
+    actionId: moveTurn!.actions.find(action => action.id.startsWith('move:'))!.id,
+  })
   const stateBeforeWriting = manuallyAdvanced.world?.state as FlyingChessWorldState
-  assert.equal(stateBeforeWriting.currentPlayerId, marisaId)
+  assert.equal(stateBeforeWriting.currentPlayerId, reimuId)
 
   const session = Session.create(SessionId('manual-world-result'))
   session.append('request/header', {
@@ -3156,27 +3163,32 @@ test('writes a manually completed world result before another character acts', a
         const messageBody = JSON.stringify(options.messages ?? [])
         if (system.includes('指定人物认知')) characterBodies.push(messageBody)
         const text = system.includes('指定人物认知')
-          ? JSON.stringify({
-              observation: '看见已结算结果。',
-              action: '把骰盅举在半空，等魔理沙催促自己继续。',
-              speech: {
-                respondsTo: '博丽灵梦本轮掷出 1 点，未达到起飞点数',
-                move: 'tease',
-                focus: '刚发生的本轮结果',
-                effect: '回应本轮已经完成的规则动作',
-              },
-              insights: [],
-            })
+          ? messageBody.includes('# 人物：雾雨魔理沙')
+            ? JSON.stringify({
+                observation: '看见已结算结果。',
+                action: '',
+                speech: null,
+                insights: [{
+                  kind: 'knowledge',
+                  text: '灵梦掷出 6 点，已将 1 号飞机推上航线第 1 步；我的四架飞机仍全在基地，目前只有她还走在航线上。',
+                }],
+              })
+            : JSON.stringify({
+                observation: '看见已结算结果。',
+                action: '',
+                speech: null,
+                insights: [],
+              })
           : system.includes('分区的 prose Worker')
-            ? '骰子沿棋盘滚了半圈，在一点上停住；灵梦的四架飞机仍整齐排在基地里。'
+            ? '骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。'
             : system.includes('最终正文编辑 Worker')
               ? JSON.stringify({ sections: [{
-                sectionId: proseId,
-                text: '骰子沿棋盘滚了半圈，在一点上停住；灵梦的四架飞机仍整齐排在基地里。',
-              }, {
-                sectionId: historyId,
-                text: '错误的模型历史会被 Host 替换。',
-              }] })
+                  sectionId: proseId,
+                  text: '骰子在六点上停住；灵梦把一号飞机移出基地，放在航线第一格。',
+                }, {
+                  sectionId: historyId,
+                  text: '错误的模型历史会被 Host 替换。',
+                }] })
               : JSON.stringify({ sections: [] })
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -3225,28 +3237,45 @@ test('writes a manually completed world result before another character acts', a
     assert.match(dispatch, /此前棋局第 10 回合已经结束/u)
     assert.doesNotMatch(dispatch, /此前棋局第 7 回合已经结束/u)
   }
-  assert.doesNotMatch(proseDispatch, /把骰盅举在半空|刚发生的本轮结果/u)
   const brief = sessionEvents(session).findLast(event => event.type === 'agent-rp/story-turn-brief')
   assert.equal(brief?.data.publicDialogues, undefined)
+  assert.equal(brief?.data.privateCharacterStates, undefined)
   assert.match(characterBodies.join('\n'), /共同经历了此前棋局第 10 回合/u)
   assert.doesNotMatch(characterBodies.join('\n'), /共同经历了此前棋局第 1 回合/u)
   assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
     && request.subjectId === reimuId)?.dispatch), /thisCharacterRole=actor/u)
   assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
     && request.subjectId === marisaId)?.dispatch), /thisCharacterRole=observer/u)
-  assert.deepEqual(result.worldEventSequences, [1, 2, 3])
-  assert.equal(result.finalDraft, '骰子沿棋盘滚了半圈，在一点上停住；灵梦的四架飞机仍整齐排在基地里。')
+  assert.equal(result.finalDraft, '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步。')
   assert.equal(result.hostOwnedWorldDraft, undefined)
-  assert.deepEqual(result.publicWorldEvents?.map(event => event.type), ['game.started', 'die.rolled', 'turn.passed'])
-  assert.deepEqual(manuallyAdvanced.world?.events.at(-1)?.data, {
-    kind: 'turn-passed',
-    reason: 'launch-roll-required',
-    rolled: 1,
-    required: 6,
-    nextPlayerId: marisaId,
-  })
+  assert.deepEqual(result.publicWorldEvents?.slice(0, 3).map(event => event.type), ['game.started', 'die.rolled', 'piece.moved'])
+  assert.equal(manuallyAdvanced.world?.events.findLast(event => event.type === 'piece.moved')?.summary, '飞机前进到航线第 1 步。')
   assert.equal(store.get(manuallyAdvanced.id).revision, manuallyAdvanced.revision)
-  assert.equal((store.get(manuallyAdvanced.id).world?.state as FlyingChessWorldState).currentPlayerId, marisaId)
+  assert.equal((store.get(manuallyAdvanced.id).world?.state as FlyingChessWorldState).currentPlayerId, reimuId)
+
+  session.append('assistant/message', {
+    turn: 2,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: result.finalDraft }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 2, step: 1 })
+  const materialized = await materializeStoryTurn({
+    ctx: fake,
+    agent,
+    store,
+    workspaceId: installed.id,
+    turn: 2,
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(materialized?.changes.facts, [])
+  assert.equal(materialized?.continuityResultEventSeq, undefined)
+  assert.doesNotMatch(
+    compileStoryCharacterContext(store.get(installed.id), marisaId, { playerInput: '继续。' }).privateKnowledge,
+    /灵梦掷出 6 点|我的四架飞机/u,
+  )
 })
 
 test('keeps the exact world outcome while preserving only private-section character state', async (context) => {

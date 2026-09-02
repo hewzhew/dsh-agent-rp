@@ -1924,11 +1924,20 @@ function parseCharacterInsights(
 function removeWorldRestatementInsights(
   insights: readonly StoryTurnPrivateInsight[],
   worldOutcome: string,
+  worldNarrative: string,
   publicWorldState: string,
 ): readonly StoryTurnPrivateInsight[] {
+  const publicWorldFragments = [worldOutcome, worldNarrative, publicWorldState]
+    .flatMap(source => [
+      source,
+      ...source.split(/\r?\n/gu),
+      ...source.split(/[\r\n。！？；;]+/gu),
+    ])
+    .map(source => source.trim())
+    .filter((source, index, sources) => source !== '' && sources.indexOf(source) === index)
   return insights.filter(insight => {
-    if (insight.kind === 'knowledge' && [worldOutcome, publicWorldState]
-      .some(source => source !== '' && substantiallyRestatesText(insight.text, source, 6))) return false
+    if (insight.kind === 'knowledge' && publicWorldFragments
+      .some(source => substantiallyRestatesText(insight.text, source, 6))) return false
     if (insight.kind !== 'knowledge' && DEFERRED_SPEECH_INSIGHT_PATTERN.test(insight.text)) return false
     return insight.kind === 'knowledge' || !CHARACTER_RULE_ACTION_PATTERN.test(insight.text)
   })
@@ -4303,6 +4312,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         insights: removeWorldRestatementInsights(
           parsed.insights,
           worldOutcome,
+          worldNarrative,
           context.worldContext,
         ),
       }
