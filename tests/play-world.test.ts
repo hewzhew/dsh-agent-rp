@@ -2142,7 +2142,7 @@ test('projects first launch, ordinary movement, collision, and finish at their n
   assert.equal((cardEvent.data as { readonly cardId?: unknown }).cardId, 'fixture-two-passes')
   assert.deepEqual((cardEvent.data as { readonly characterIds?: unknown }).characterIds, [reimuId])
 
-  const rolls = [6, 2]
+  const rolls = [6, 2, 6]
   const module = createFlyingChessWorldModule({ rollDie: () => rolls.shift()! })
   let snapshot = module.create(playContext)
 
@@ -2183,6 +2183,20 @@ test('projects first launch, ordinary movement, collision, and finish at their n
   assert.equal(ordinaryMove.cadence, 'transition')
   assert.equal(ordinaryMove.facts.find(fact => fact.eventSequences.length === 2)?.retention, 'compressible')
   assert.deepEqual(ordinaryMove.cues, [])
+
+  turn = module.characterTurn(snapshot, playContext)!
+  const marisaLaunchStart = snapshot.events.length
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  turn = module.characterTurn(snapshot, playContext)!
+  snapshot = module.dispatch(snapshot, turn.actions[0]!.action, playContext)
+  const marisaLaunchSequences = snapshot.events.slice(marisaLaunchStart).map(event => event.sequence)
+  const marisaLaunch = projectPlayWorldNarrative(
+    module.projectNarrative(snapshot, marisaLaunchSequences, playContext),
+    marisaLaunchSequences,
+    playContext,
+  )
+  assert.equal(marisaLaunch.cadence, 'scene')
+  assert.equal(marisaLaunch.facts.find(fact => fact.eventSequences.length === 2)?.retention, 'essential')
 
   const collisionModule = createFlyingChessWorldModule()
   const collisionCreated = collisionModule.create(playContext)

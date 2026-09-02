@@ -508,6 +508,7 @@ function pairedRollNarrative(
 
 function eventNarrativeFacts(
   events: readonly PlayWorldEvent[],
+  allEvents: readonly PlayWorldEvent[],
   context: PlayWorldContext,
 ): readonly PlayWorldNarrativeFact[] {
   const facts: PlayWorldNarrativeFact[] = []
@@ -527,8 +528,9 @@ function eventNarrativeFacts(
       const outcomeData = eventData(outcome!)
       const compressibleMove = outcome!.type === 'piece.moved'
         && outcomeData?.kind === 'piece-moved'
-        && outcomeData.fromStatus === 'track'
-        && outcomeData.toStatus === 'track'
+        && outcomeData.toStatus !== 'home'
+        && !isFirstCharacterLaunchEvent(outcome!, allEvents)
+        && events[index + 2]?.type !== 'piece.captured'
       facts.push({
         eventSequences: [current.sequence, outcome!.sequence],
         retention: outcome!.type === 'turn.passed' || compressibleMove ? 'compressible' : 'essential',
@@ -553,7 +555,7 @@ function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
   return count
 }
 
-function isFirstLaunchEvent(
+function isFirstCharacterLaunchEvent(
   event: PlayWorldEvent,
   allEvents: readonly PlayWorldEvent[],
 ): boolean {
@@ -562,6 +564,7 @@ function isFirstLaunchEvent(
   return allEvents.find(item => {
     const itemData = eventData(item)
     return item.type === 'piece.moved' && itemData?.kind === 'piece-moved' && itemData.fromStatus === 'base'
+      && item.actorId === event.actorId
   })?.sequence === event.sequence
 }
 
@@ -678,7 +681,7 @@ function projectNarrative(
   const cadence = events.some(item => item.type === 'game.finished')
     ? 'resolution'
     : cues.length > 0 || events.some(item => item.type === 'game.started'
-      || isFirstLaunchEvent(item, allEvents)
+      || isFirstCharacterLaunchEvent(item, allEvents)
       || item.type === 'piece.captured'
       || item.type === 'scene.changed'
       || item.type === 'piece.moved' && eventData(item)?.toStatus === 'home')
@@ -686,7 +689,7 @@ function projectNarrative(
       : 'transition'
   return {
     cadence,
-    facts: eventNarrativeFacts(events, context),
+    facts: eventNarrativeFacts(events, allEvents, context),
     cues,
     invariants: FLYING_CHESS_NARRATIVE_INVARIANTS,
   }
