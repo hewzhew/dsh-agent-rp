@@ -2547,6 +2547,7 @@ const narrativeTriggerLabels: Readonly<Record<FlyingChessNarrativeCard['trigger'
   'consecutive-passes': '连续回合无棋可走',
   'piece-launched': '飞机离开基地',
   'piece-landed': '棋子停在指定步数',
+  'piece-crossed-step': '棋子推进到或越过指定步数',
   'piece-captured': '撞回对方棋子',
   'player-home-count': '己方棋子抵达终点',
 }
@@ -2555,7 +2556,7 @@ function narrativeTriggerInvalid(trigger: FlyingChessNarrativeCard['trigger']): 
   if (trigger.kind === 'consecutive-passes') {
     return !Number.isSafeInteger(trigger.count) || trigger.count < 2 || trigger.count > 32
   }
-  if (trigger.kind === 'piece-landed') {
+  if (trigger.kind === 'piece-landed' || trigger.kind === 'piece-crossed-step') {
     return !Number.isSafeInteger(trigger.step) || trigger.step < 1 || trigger.step >= 24
   }
   if (trigger.kind === 'player-home-count') {
@@ -2628,11 +2629,11 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
               ? { kind, count: 4 }
               : kind === 'piece-launched'
                 ? { kind }
-              : kind === 'piece-landed'
-                ? { kind, step: 8 }
-                : kind === 'player-home-count'
-                  ? { kind, count: 1 }
-                  : { kind: 'piece-captured' }
+                : kind === 'piece-landed' || kind === 'piece-crossed-step'
+                  ? { kind, step: 8 }
+                  : kind === 'player-home-count'
+                    ? { kind, count: 1 }
+                    : { kind: 'piece-captured' }
             updateCard(index, current => ({ ...current, trigger }))
           }}>{Object.entries(narrativeTriggerLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>
           {card.trigger.kind === 'consecutive-passes' && <><input className="story-studio-input" aria-label="连续回合数" type="number" min={2} max={32}
@@ -2644,6 +2645,11 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
             value={card.trigger.step} onChange={event => {
               const step = Number(event.currentTarget.value)
               updateCard(index, current => ({ ...current, trigger: { kind: 'piece-landed', step } }))
+            }} /><span>步</span></>}
+          {card.trigger.kind === 'piece-crossed-step' && <><span>第</span><input className="story-studio-input" aria-label="航线检查点" type="number" min={1} max={23}
+            value={card.trigger.step} onChange={event => {
+              const step = Number(event.currentTarget.value)
+              updateCard(index, current => ({ ...current, trigger: { kind: 'piece-crossed-step', step } }))
             }} /><span>步</span></>}
           {card.trigger.kind === 'player-home-count' && <><input className="story-studio-input" aria-label="抵达终点棋子数" type="number" min={1} max={4}
             value={card.trigger.count} onChange={event => {

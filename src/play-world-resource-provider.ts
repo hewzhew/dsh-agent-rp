@@ -47,10 +47,10 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
   }, {
     id: 'question-slip-step-eight',
     afterCardId: 'first-launch-hidden-slip',
-    trigger: { kind: 'piece-landed', step: 8 },
+    trigger: { kind: 'piece-crossed-step', step: 8 },
     event: {
       title: '那张折签被带出棋盘',
-      summary: '一架木机停在航线第 8 步时，底座勾住先前露出的那张折签，将它从棋盘下完整带出；正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
+      summary: '一架木机第一次推进到或越过航线第 8 步时，底座勾住先前露出的那张折签，将它从棋盘下完整带出；正面写着“可以向另一位棋手提一个问题；对方可以拒答”。',
     },
     cue: {
       kind: 'opportunity',

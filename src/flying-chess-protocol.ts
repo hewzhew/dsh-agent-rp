@@ -19,6 +19,12 @@ export interface FlyingChessPieceLandedTrigger {
   readonly step: number
 }
 
+/** Trigger after one track piece reaches or passes a relative route step. */
+export interface FlyingChessPieceCrossedStepTrigger {
+  readonly kind: 'piece-crossed-step'
+  readonly step: number
+}
+
 /** Trigger after one piece leaves its base. */
 export interface FlyingChessPieceLaunchedTrigger {
   readonly kind: 'piece-launched'
@@ -40,6 +46,7 @@ export type FlyingChessNarrativeTrigger =
   | FlyingChessConsecutivePassesTrigger
   | FlyingChessPieceLaunchedTrigger
   | FlyingChessPieceLandedTrigger
+  | FlyingChessPieceCrossedStepTrigger
   | FlyingChessPieceCapturedTrigger
   | FlyingChessPlayerHomeCountTrigger
 

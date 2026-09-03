@@ -73,7 +73,7 @@ function normalizeNarrativeTrigger(value: unknown, label: string): FlyingChessNa
     }
     return { kind: value.kind, count: value.count as number }
   }
-  if (value.kind === 'piece-landed') {
+  if (value.kind === 'piece-landed' || value.kind === 'piece-crossed-step') {
     if (!exactKeys(value, ['kind', 'step']) || !Number.isSafeInteger(value.step)
       || (value.step as number) < 1 || (value.step as number) >= TRACK_LENGTH) {
       throw new Error(`${label}触发条件无效`)
@@ -347,6 +347,15 @@ function eventData(event: PlayWorldEvent): Record<string, JsonValue> | undefined
   return isRecord(event.data) ? event.data as Record<string, JsonValue> : undefined
 }
 
+function eventCrossesTrackStep(event: PlayWorldEvent, step: number): boolean {
+  const data = eventData(event)
+  if (event.type !== 'piece.moved' || data?.kind !== 'piece-moved') return false
+  const fromSteps = data.fromStatus === 'base' ? 0 : data.fromStatus === 'track' ? data.fromSteps : undefined
+  const toSteps = data.toStatus === 'home' ? TRACK_LENGTH : data.toStatus === 'track' ? data.toSteps : undefined
+  return typeof fromSteps === 'number' && typeof toSteps === 'number'
+    && fromSteps < step && toSteps >= step
+}
+
 function narrativeOpportunityUse(
   item: PlayWorldEvent,
   context: PlayWorldContext,
@@ -370,7 +379,7 @@ function narrativeOpportunityUse(
     && exactKeys(data, ['kind', 'cardId', 'cueKind', 'cueText', 'causeSequence', 'characterIds'])
     && data.cueKind === 'relationship' && data.cueText === LEGACY_QUESTION_SLIP.cueText
     && item.title === LEGACY_QUESTION_SLIP.eventTitle && item.summary === LEGACY_QUESTION_SLIP.eventSummary
-    && trigger?.kind === 'piece-landed' && trigger.step === 8
+    && (trigger?.kind === 'piece-landed' || trigger?.kind === 'piece-crossed-step') && trigger.step === 8
     && card?.event.title === LEGACY_QUESTION_SLIP.eventTitle
     && card.event.summary === LEGACY_QUESTION_SLIP.eventSummary
     && card.cue.kind === 'relationship' && card.cue.text === LEGACY_QUESTION_SLIP.cueText
@@ -746,6 +755,8 @@ function appendNarrativeCardEvents(
         return item.type === 'piece.moved' && data?.toStatus === 'track'
           && data.toSteps === trigger.step
       })
+    } else if (trigger.kind === 'piece-crossed-step') {
+      cause = triggerEvents.find(item => eventCrossesTrackStep(item, trigger.step))
     } else if (trigger.kind === 'piece-captured') {
       cause = triggerEvents.find(item => item.type === 'piece.captured')
     } else {

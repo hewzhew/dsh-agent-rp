@@ -1251,6 +1251,56 @@ test('draws authored scene cards from landing, collision, and home-count events'
   assert.deepEqual(homeProjection.cues[0]?.characterIds, [reimuId, marisaId])
 })
 
+test('distinguishes optional landing cards from durable route checkpoints', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const playContext: PlayWorldContext = {
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: {
+      format: 0,
+      ruleset: 'classic-24',
+      narrativeCards: [{
+        id: 'landing-eight',
+        trigger: { kind: 'piece-landed', step: 8 },
+        event: { title: '第八格', summary: '木机恰好停在第八格。' },
+        cue: { kind: 'change', text: '这是可以错过的格面效果。', responders: 'none' },
+        repeat: false,
+      }, {
+        id: 'crossing-eight',
+        trigger: { kind: 'piece-crossed-step', step: 8 },
+        event: { title: '越过第八步', summary: '木机第一次推进到或越过第八步。' },
+        cue: { kind: 'change', text: '这是必须兑现的故事检查点。', responders: 'none' },
+        repeat: false,
+      }],
+    },
+    sourceReferences: [],
+  }
+  const module = createFlyingChessWorldModule()
+  const created = module.create(playContext)
+  const state = created.state as FlyingChessWorldState
+  const piece = state.pieces.find(item => item.ownerId === reimuId)!
+  const advanced = module.dispatch({
+    ...created,
+    state: {
+      ...state,
+      pieces: state.pieces.map(item => item.id === piece.id
+        ? { ...item, status: 'track' as const, steps: 7 }
+        : item),
+      pendingRoll: { playerId: reimuId, value: 4, legalPieceIds: [piece.id] },
+    },
+  }, { type: 'move', actorId: reimuId, pieceId: piece.id }, playContext)
+
+  const firedCardIds = advanced.events.flatMap(item => {
+    const cardId = (item.data as { readonly cardId?: unknown } | undefined)?.cardId
+    return typeof cardId === 'string' ? [cardId] : []
+  })
+  assert.deepEqual(firedCardIds, ['crossing-eight'])
+  const crossingEvent = advanced.events.find(item =>
+    (item.data as { readonly cardId?: unknown } | undefined)?.cardId === 'crossing-eight')!
+  assert.equal((crossingEvent.data as { readonly causeSequence?: unknown }).causeSequence,
+    advanced.events.find(item => item.type === 'piece.moved')?.sequence)
+})
+
 test('unlocks linked scene cards in order and keeps their unresolved fact in world context', () => {
   const reimuId = createStoryCharacterId()
   const marisaId = createStoryCharacterId()
