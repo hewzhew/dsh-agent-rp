@@ -1428,8 +1428,68 @@ test('keeps narrative opportunities private and durable until their explicit dis
   }, playContext)
   assert.deepEqual(immediate.module.characterOpportunities!(usedImmediately, reimuId, playContext), [])
   assert.equal((usedImmediately.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+  assert.equal(usedImmediately.events.length, immediate.snapshot.events.length + 1)
+  assert.deepEqual(usedImmediately.events.at(-1), {
+    id: usedImmediately.events.at(-1)!.id,
+    sequence: immediate.snapshot.events.length + 1,
+    type: 'narrative.opportunity-used',
+    title: '博丽灵梦公开提问',
+    summary: '博丽灵梦向雾雨魔理沙问：“你来这里以前，最后看见了什么？”',
+    actorId: reimuId,
+    data: {
+      kind: 'narrative-opportunity-used',
+      opportunityId: opportunity.id,
+      cardId: 'question-slip-step-eight',
+      sourceEventSequence: opportunity.sourceEventSequences[0],
+      responderId: marisaId,
+      move: 'question',
+      publicEvidence: '“你来这里以前，最后看见了什么？”',
+    },
+  })
   assert.match(immediate.module.projectForCharacter(usedImmediately, reimuId, playContext).text, /已使用，回应者为 雾雨魔理沙/u)
   assert.doesNotMatch(immediate.module.projectForCharacter(usedImmediately, marisaId, playContext).text, /已使用/u)
+  assert.match(immediate.module.projectForCharacter(usedImmediately, marisaId, playContext).text, /博丽灵梦向雾雨魔理沙问/u)
+  const reply = '“刚从香霖堂回来，这就算答案了吧？”'
+  const repliedImmediately = immediate.module.resolveCharacterOpportunityReply!(usedImmediately, {
+    opportunityId: opportunity.id,
+    characterId: marisaId,
+    ownerId: reimuId,
+    move: 'answer',
+    publicEvidence: reply,
+  }, playContext)
+  assert.equal(repliedImmediately.events.length, usedImmediately.events.length + 1)
+  assert.deepEqual(repliedImmediately.events.at(-1), {
+    id: repliedImmediately.events.at(-1)!.id,
+    sequence: usedImmediately.events.length + 1,
+    type: 'narrative.opportunity-replied',
+    title: '雾雨魔理沙作出回应',
+    summary: `雾雨魔理沙回应博丽灵梦：${reply}`,
+    actorId: marisaId,
+    data: {
+      kind: 'narrative-opportunity-replied',
+      opportunityId: opportunity.id,
+      cardId: 'question-slip-step-eight',
+      sourceEventSequence: opportunity.sourceEventSequences[0],
+      useEventSequence: usedImmediately.events.at(-1)!.sequence,
+      ownerId: reimuId,
+      move: 'answer',
+      publicEvidence: reply,
+    },
+  })
+  assert.equal(immediate.module.resolveCharacterOpportunityReply!(repliedImmediately, {
+    opportunityId: opportunity.id,
+    characterId: marisaId,
+    ownerId: reimuId,
+    move: 'answer',
+    publicEvidence: reply,
+  }, playContext).events.length, repliedImmediately.events.length)
+  assert.throws(() => immediate.module.resolveCharacterOpportunityReply!(repliedImmediately, {
+    opportunityId: opportunity.id,
+    characterId: marisaId,
+    ownerId: reimuId,
+    move: 'refuse',
+    publicEvidence: '“不答。”',
+  }, playContext), /已经由另一项公开回应关闭/u)
 
   const deferred = createLanding()
   const deferredOpportunity = deferred.module.characterOpportunities!(deferred.snapshot, reimuId, playContext)[0]!
@@ -1439,6 +1499,7 @@ test('keeps narrative opportunities private and durable until their explicit dis
     disposition: 'retain',
   }, playContext)
   assert.equal(deferred.module.characterOpportunities!(retained, reimuId, playContext)[0]?.status, 'retained')
+  assert.equal(retained.events.length, deferred.snapshot.events.length)
   assert.match(deferred.module.projectForCharacter(retained, reimuId, playContext).text, /已保留/u)
   assert.doesNotMatch(deferred.module.projectForCharacter(retained, marisaId, playContext).text, /已保留/u)
   assert.throws(() => deferred.module.resolveCharacterOpportunity!(retained, {
@@ -1464,6 +1525,7 @@ test('keeps narrative opportunities private and durable until their explicit dis
     disposition: 'decline',
   }, playContext)
   assert.equal((declined.state as FlyingChessWorldState).opportunities[0]?.status, 'declined')
+  assert.equal(declined.events.length, abandoned.snapshot.events.length)
   assert.deepEqual(abandoned.module.characterOpportunities!(declined, reimuId, playContext), [])
   assert.match(abandoned.module.projectForCharacter(declined, reimuId, playContext).text, /已放弃/u)
   assert.doesNotMatch(abandoned.module.projectForCharacter(declined, marisaId, playContext).text, /已放弃/u)
@@ -1850,12 +1912,19 @@ test('does not consume a world opportunity when the public question is rejected'
   const marisaId = createStoryCharacterId()
   const proseId = createStoryOutputId()
   const reimu = character(reimuId, '博丽灵梦')
+  const marisa = character(marisaId, '雾雨魔理沙')
   const configured = store.save({
     ...editable(created),
     characters: [{
       ...reimu,
       profile: { ...reimu.profile, exampleDialogue: '灵梦：“你来这里以前，最后看见了什么？”' },
-    }, character(marisaId, '雾雨魔理沙')],
+    }, {
+      ...marisa,
+      profile: {
+        ...marisa.profile,
+        exampleDialogue: '魔理沙：“香霖堂的话，刚才才去过啊。”',
+      },
+    }],
     outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
   })
   let workspace = store.installWorld(configured.id, {
@@ -2300,13 +2369,25 @@ test('does not consume a world opportunity when the public question is rejected'
     publicEvidence: approvedQuestion,
   }])
   assert.equal(approvedResult.privateCharacterStates, undefined)
-  const responseWorkspace = {
-    ...retainedWorkspace,
-    world: module.resolveCharacterOpportunity!(
+  const responseWorld = module.resolveCharacterOpportunity!(
       retainedWorkspace.world!,
       approvedResult.worldOpportunityResolutions[0]!,
       worldContext,
-    ),
+    )
+  const usedEventSequence = responseWorld.events.at(-1)!.sequence
+  const responseWorkspace = {
+    ...retainedWorkspace,
+    world: responseWorld,
+    events: [...retainedWorkspace.events, {
+      id: createStoryEventId(),
+      key: 'fixture-approved-question',
+      turn: 4,
+      title: '使用折签',
+      summary: '灵梦向魔理沙提问。',
+      evidence: approvedResult.finalDraft,
+      participantIds: [reimuId, marisaId],
+      worldEventSequences: [usedEventSequence],
+    }],
   }
   approvedSession.append('assistant/message', {
     turn: 4,
@@ -2593,6 +2674,166 @@ test('does not consume a world opportunity when the public question is rejected'
     webResearch: [],
   })
   assert.equal((usedWorkspace.world!.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+  const usedWorldEvent = usedWorkspace.world!.events.at(-1)!
+  assert.equal(usedWorldEvent.type, 'narrative.opportunity-used')
+  assert.equal(usedWorldEvent.summary, '博丽灵梦向雾雨魔理沙问：“你来这里以前，最后看见了什么？”')
+  assert.deepEqual(usedWorkspace.events.at(-1)?.worldEventSequences, [usedWorldEvent.sequence])
+  assert.deepEqual(storyPendingWorldEvents(usedWorkspace), [])
+  const crossSession = Session.create(SessionId('world-opportunity-cross-session-reply'))
+  crossSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  crossSession.append('turn/start', { turn: 1 })
+  crossSession.append('step/start', { turn: 1, step: 1 })
+  const crossSessionAnswer = '“香霖堂。你也想去？”'
+  const crossSessionContext = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: 'off', name: 'Off' }], defaultEffort: 'off' },
+        }
+      },
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        const seedId = body.match(/\[seed:([^\]]+)\]\[目标人物\]/u)?.[1] ?? ''
+        let text: string
+        if (system.includes('人物参与路由 Worker')) {
+          text = JSON.stringify({ publicCharacterIds: [marisaId] })
+        } else if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          text = JSON.stringify({
+            observation: '灵梦向自己问了终点以外还有什么在等她。',
+            action: '',
+            speech: {
+              respondsTo: `灵梦问魔理沙：${approvedQuestion}`,
+              move: 'answer',
+              focus: '自己刚从香霖堂回来。',
+              effect: '直接回答灵梦的问题。',
+            },
+            opportunityDecisions: [],
+            insights: [],
+          })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            move: 'answer',
+            seedLineIds: seedId === '' ? [] : [seedId],
+            mechanics: '沿用先给地点、再接一句反问的次序。',
+            leftImplicit: '她刚才的具体行程。',
+            dialogue: crossSessionAnswer,
+          }] })
+        } else if (system.includes('严格对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: crossSessionAnswer }] })
+        } else if (system.includes('剧情导演 Worker')) {
+          text = JSON.stringify({ sections: [{ sectionId: proseId, beats: [], speech: [{ characterId: marisaId }] }] })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = `魔理沙答道：${crossSessionAnswer}`
+        } else if (system.includes('最终正文编辑 Worker')) {
+          text = JSON.stringify({ sections: [{ sectionId: proseId, text: `魔理沙答道：${crossSessionAnswer}` }] })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const crossSessionResult = await runStoryTurnPipeline({
+    ctx: crossSessionContext,
+    agent: {
+      id: crossSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: crossSession,
+    } as Agent,
+    store,
+    workspace: usedWorkspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙回答灵梦刚才的问题；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(crossSessionResult.publicDialogues?.map(dialogue => ({
+    characterId: dialogue.characterId,
+    targetCharacterId: dialogue.targetCharacterId,
+    dialogue: dialogue.dialogue,
+    move: dialogue.move,
+    replyToWorldOpportunityId: dialogue.replyToWorldOpportunityId,
+  })), [{
+    characterId: marisaId,
+    targetCharacterId: reimuId,
+    dialogue: crossSessionAnswer,
+    move: 'answer',
+    replyToWorldOpportunityId: opportunity.id,
+  }])
+  assert.deepEqual(crossSessionResult.worldOpportunityReplies, [{
+    opportunityId: opportunity.id,
+    characterId: marisaId,
+    ownerId: reimuId,
+    move: 'answer',
+    publicEvidence: crossSessionAnswer,
+  }])
+  const replyEvidence = `魔理沙答道：${crossSessionAnswer}`
+  const repliedWorkspace = store.materializeTurn(workspace.id, {
+    key: 'world-opportunity-replied-later',
+    turn: 5,
+    title: '回应折签问题',
+    summary: '魔理沙回答灵梦。',
+    evidence: replyEvidence,
+    participantIds: [reimuId, marisaId],
+    worldOpportunityReplies: [{
+      opportunityId: opportunity.id,
+      characterId: marisaId,
+      ownerId: reimuId,
+      move: 'answer',
+      publicEvidence: crossSessionAnswer,
+    }],
+    changes: noChanges,
+    webResearch: [],
+  })
+  const repliedWorldEvent = repliedWorkspace.world!.events.at(-1)!
+  assert.equal(repliedWorldEvent.type, 'narrative.opportunity-replied')
+  assert.equal(repliedWorldEvent.summary, `雾雨魔理沙回应博丽灵梦：${crossSessionAnswer}`)
+  assert.deepEqual(repliedWorkspace.events.at(-1)?.worldEventSequences, [repliedWorldEvent.sequence])
+  assert.deepEqual(storyPendingWorldEvents(repliedWorkspace), [])
+  const closedSession = Session.create(SessionId('world-opportunity-cross-session-closed'))
+  closedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  closedSession.append('turn/start', { turn: 1 })
+  closedSession.append('step/start', { turn: 1, step: 1 })
+  const closedResult = await runStoryTurnPipeline({
+    ctx: crossSessionContext,
+    agent: {
+      id: closedSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: closedSession,
+    } as Agent,
+    store,
+    workspace: repliedWorkspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '让魔理沙再说一句；棋局状态保持不变。' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(closedResult.worldOpportunityReplies, undefined)
 })
 
 test('projects first launch, ordinary movement, collision, and finish at their narrative cadence', () => {

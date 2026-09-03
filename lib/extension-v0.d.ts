@@ -1383,6 +1383,16 @@ interface PlayWorldCharacterOpportunityResolution {
   /** Exact public utterance required before a speech opportunity can become used. */
   readonly publicEvidence?: string;
 }
+/** Speech acts that may publicly answer a previously used world opportunity. */
+type PlayWorldOpportunityReplyMove = 'answer' | 'assert' | 'challenge' | 'correct' | 'command' | 'question' | 'warn' | 'tease' | 'refuse' | 'inform' | 'propose';
+/** One approved reply to the named public use of a character-owned world opportunity. */
+interface PlayWorldCharacterOpportunityReply {
+  readonly opportunityId: string;
+  readonly characterId: string;
+  readonly ownerId: string;
+  readonly move: PlayWorldOpportunityReplyMove;
+  readonly publicEvidence: string;
+}
 /** How selected world events should occupy the next visible story passage. */
 type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution';
 /** One immutable public fact backed by selected authoritative world events. */
@@ -1559,8 +1569,10 @@ interface PlayWorldModule {
   projectForCharacter(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Return unresolved choices owned by one character without exposing another character's choices. */
   characterOpportunities?(snapshot: PlayWorldSnapshot, characterId: string, context: PlayWorldContext): readonly PlayWorldCharacterOpportunity[];
-  /** Persist one explicit character choice after its required public evidence exists. */
+  /** Persist one explicit character choice after its required public evidence exists; public use may append world events. */
   resolveCharacterOpportunity?(snapshot: PlayWorldSnapshot, resolution: PlayWorldCharacterOpportunityResolution, context: PlayWorldContext): PlayWorldSnapshot;
+  /** Persist one approved public reply to a previously used character opportunity. */
+  resolveCharacterOpportunityReply?(snapshot: PlayWorldSnapshot, reply: PlayWorldCharacterOpportunityReply, context: PlayWorldContext): PlayWorldSnapshot;
   /** Project authoritative state for the director Worker. */
   projectForDirector(snapshot: PlayWorldSnapshot, context: PlayWorldContext): PlayWorldPromptProjection;
   /** Project immutable facts, optional dramatic directions, non-rendered invariants, and presentation cadence. */

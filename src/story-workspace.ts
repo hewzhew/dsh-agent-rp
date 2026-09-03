@@ -2272,6 +2272,7 @@ export class StoryWorkspaceStore {
     if (current.events.some(event => event.key === materialization.key)) return current
     let world = current.world
     const opportunityResolutions = materialization.worldOpportunityResolutions ?? []
+    const resolutionWorldEventSequences: number[] = []
     if (opportunityResolutions.length > 32) throw new Error('世界机会处置过多')
     if (opportunityResolutions.length > 0) {
       if (world === undefined) throw new Error('世界机会处置缺少可执行世界')
@@ -2292,10 +2293,45 @@ export class StoryWorkspaceStore {
         const before = world
         world = module.resolveCharacterOpportunity(before, resolution, context)
         if (world.moduleId !== before.moduleId || world.instanceId !== before.instanceId
-          || world.events.length !== before.events.length
+          || world.events.length < before.events.length
           || before.events.some((event, index) => world?.events[index]?.id !== event.id)) {
           throw new Error('世界机会处置改变了世界所属、实例或既有事件')
         }
+        const appended = world.events.slice(before.events.length)
+        if (resolution.disposition !== 'use' && appended.length > 0) {
+          throw new Error('未公开使用的世界机会不能追加世界事件')
+        }
+        resolutionWorldEventSequences.push(...appended.map(event => event.sequence))
+      }
+    }
+    const opportunityReplies = materialization.worldOpportunityReplies ?? []
+    const replyWorldEventSequences: number[] = []
+    if (opportunityReplies.length > 32) throw new Error('世界机会公开回应过多')
+    if (opportunityReplies.length > 0) {
+      if (world === undefined) throw new Error('世界机会公开回应缺少可执行世界')
+      const module = this.worlds.get(world.moduleId)
+      if (module.resolveCharacterOpportunityReply === undefined) throw new Error('当前游玩世界不支持人物机会公开回应')
+      const context = playWorldContext(
+        current.characters,
+        current.worldBinding ?? normalizeWorldBinding(undefined, world.moduleId),
+      )
+      const repliedOpportunityIds = new Set<string>()
+      for (const reply of opportunityReplies) {
+        if (repliedOpportunityIds.has(reply.opportunityId)) throw new Error('同一世界机会被重复公开回应')
+        repliedOpportunityIds.add(reply.opportunityId)
+        if (!materialization.evidence.includes(reply.publicEvidence)) {
+          throw new Error('世界机会的公开回应证据不在可见正文中')
+        }
+        const before = world
+        world = module.resolveCharacterOpportunityReply(before, reply, context)
+        if (world.moduleId !== before.moduleId || world.instanceId !== before.instanceId
+          || world.events.length < before.events.length
+          || before.events.some((event, index) => world?.events[index]?.id !== event.id)) {
+          throw new Error('世界机会公开回应改变了世界所属、实例或既有事件')
+        }
+        const appended = world.events.slice(before.events.length)
+        if (appended.length === 0) throw new Error('世界机会公开回应没有追加世界事件')
+        replyWorldEventSequences.push(...appended.map(event => event.sequence))
       }
     }
     const characterIds = new Set(current.characters.map(character => character.id))
@@ -2304,12 +2340,17 @@ export class StoryWorkspaceStore {
     }
     const eventId = createStoryEventId()
     const activeNode = current.graph.nodes.find(node => node.id === current.graph.activeNodeId)
-    const worldEventSequences = [...new Set(materialization.worldEventSequences ?? [])]
+    const requestedWorldEventSequences = [
+      ...(materialization.worldEventSequences ?? []),
+      ...resolutionWorldEventSequences,
+      ...replyWorldEventSequences,
+    ]
+    const worldEventSequences = [...new Set(requestedWorldEventSequences)]
     const representedWorldEvents = new Set(current.events.flatMap(event => event.worldEventSequences ?? []))
-    if (worldEventSequences.length !== (materialization.worldEventSequences?.length ?? 0)
+    if (worldEventSequences.length !== requestedWorldEventSequences.length
       || worldEventSequences.length > 64
       || worldEventSequences.some(sequence => !Number.isSafeInteger(sequence)
-        || current.world?.events.some(event => event.sequence === sequence) !== true
+        || world?.events.some(event => event.sequence === sequence) !== true
         || representedWorldEvents.has(sequence))) {
       throw new Error('故事事件引用未知、重复或过多的世界事件')
     }

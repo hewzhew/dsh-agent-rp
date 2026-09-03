@@ -15,6 +15,7 @@ import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
 import { isPlayWorldOpportunitySpeechMove } from './play-world-protocol.ts'
 import type {
   PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityReply,
   PlayWorldCharacterOpportunityResolution,
   PlayWorldEvent,
   PlayWorldNarrativeCue,
@@ -28,6 +29,7 @@ const EVENT_ID_PATTERN = /^world-event-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89a
 const PIECE_ID_PATTERN = /^piece-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const TRACK_LENGTH = 24
 const PIECES_PER_PLAYER = 4
+const EVENT_SUMMARY_MAX_LENGTH = 2_000
 const LEGACY_QUESTION_SLIP = Object.freeze({
   cardId: 'question-slip-step-eight',
   eventTitle: '格子下的折签弹开',
@@ -307,7 +309,7 @@ function normalizeEvent(value: unknown, index: number, players: ReadonlySet<stri
     || typeof value.id !== 'string' || !EVENT_ID_PATTERN.test(value.id)
     || value.sequence !== index + 1 || typeof value.type !== 'string' || value.type.length === 0 || value.type.length > 80
     || typeof value.title !== 'string' || value.title.length === 0 || value.title.length > 120
-    || typeof value.summary !== 'string' || value.summary.length > 2000
+    || typeof value.summary !== 'string' || value.summary.length > EVENT_SUMMARY_MAX_LENGTH
     || (value.actorId !== undefined && (typeof value.actorId !== 'string' || !players.has(value.actorId)))) {
     throw new Error('飞行棋事件无效')
   }
@@ -391,6 +393,81 @@ function narrativeOpportunityUse(
 
 function opportunityId(eventId: string, ownerId: string): string {
   return `opportunity:${eventId}:${ownerId}`
+}
+
+function eventSummary(text: string): string {
+  return text.length <= EVENT_SUMMARY_MAX_LENGTH
+    ? text
+    : `${text.slice(0, EVENT_SUMMARY_MAX_LENGTH - 1)}…`
+}
+
+function usedOpportunityEvent(
+  events: readonly PlayWorldEvent[],
+  opportunity: FlyingChessNarrativeOpportunity,
+  resolution: PlayWorldCharacterOpportunityResolution & {
+    readonly disposition: 'use'
+    readonly responderId: string
+    readonly publicEvidence: string
+  },
+  move: PlayWorldOpportunitySpeechMove,
+  context: PlayWorldContext,
+): PlayWorldEvent {
+  const actor = playerName(context, opportunity.ownerId)
+  const responder = playerName(context, resolution.responderId)
+  const title = move === 'question' ? `${actor}公开提问`
+    : move === 'command' ? `${actor}提出补偿要求` : `${actor}提出加码条件`
+  const statement = move === 'question' ? `${actor}向${responder}问：${resolution.publicEvidence}`
+    : move === 'command' ? `${actor}向${responder}提出要求：${resolution.publicEvidence}`
+      : `${actor}向${responder}提议：${resolution.publicEvidence}`
+  return event(
+    events,
+    'narrative.opportunity-used',
+    title,
+    eventSummary(statement),
+    opportunity.ownerId,
+    {
+      kind: 'narrative-opportunity-used',
+      opportunityId: opportunity.id,
+      cardId: opportunity.cardId,
+      sourceEventSequence: opportunity.sourceEventSequence,
+      responderId: resolution.responderId,
+      move,
+      publicEvidence: resolution.publicEvidence,
+    },
+  )
+}
+
+function opportunityReplyEvent(
+  events: readonly PlayWorldEvent[],
+  opportunity: FlyingChessNarrativeOpportunity,
+  reply: PlayWorldCharacterOpportunityReply,
+  useEventSequence: number,
+  context: PlayWorldContext,
+): PlayWorldEvent {
+  const responder = playerName(context, reply.characterId)
+  const owner = playerName(context, opportunity.ownerId)
+  const title = reply.move === 'refuse' ? `${responder}拒绝回应`
+    : reply.move === 'propose' ? `${responder}另提条件` : `${responder}作出回应`
+  const statement = reply.move === 'refuse' ? `${responder}拒绝了${owner}：${reply.publicEvidence}`
+    : reply.move === 'propose' ? `${responder}向${owner}另提条件：${reply.publicEvidence}`
+      : `${responder}回应${owner}：${reply.publicEvidence}`
+  return event(
+    events,
+    'narrative.opportunity-replied',
+    title,
+    eventSummary(statement),
+    reply.characterId,
+    {
+      kind: 'narrative-opportunity-replied',
+      opportunityId: opportunity.id,
+      cardId: opportunity.cardId,
+      sourceEventSequence: opportunity.sourceEventSequence,
+      useEventSequence,
+      ownerId: opportunity.ownerId,
+      move: reply.move,
+      publicEvidence: reply.publicEvidence,
+    },
+  )
 }
 
 function recoverNarrativeOpportunities(
@@ -1243,7 +1320,8 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         }
       } else {
         const source = normalized.events.find(item => item.sequence === selected.sourceEventSequence)
-        if (source === undefined || narrativeOpportunityUse(source, context) === undefined
+        const use = source === undefined ? undefined : narrativeOpportunityUse(source, context)
+        if (source === undefined || use === undefined
           || resolution.responderId === undefined || !selected.responderIds.includes(resolution.responderId)
           || typeof resolution.publicEvidence !== 'string' || resolution.publicEvidence.trim() === '') {
           throw new Error('使用飞行棋叙事机会缺少有效的公开话语')
@@ -1256,7 +1334,57 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
           : resolution.disposition === 'decline'
             ? { ...item, status: 'declined' as const }
             : { ...item, status: 'used' as const, responderId: resolution.responderId })
-      return this.normalize({ ...normalized, state: { ...state, opportunities } }, context)
+      if (resolution.disposition !== 'use') {
+        return this.normalize({ ...normalized, state: { ...state, opportunities } }, context)
+      }
+      const source = normalized.events.find(item => item.sequence === selected.sourceEventSequence)!
+      const use = narrativeOpportunityUse(source, context)!
+      const used = usedOpportunityEvent(
+        normalized.events,
+        selected,
+        resolution as PlayWorldCharacterOpportunityResolution & {
+          readonly disposition: 'use'
+          readonly responderId: string
+          readonly publicEvidence: string
+        },
+        use.move,
+        context,
+      )
+      return this.normalize({
+        ...normalized,
+        state: { ...state, opportunities },
+        events: [...normalized.events, used],
+      }, context)
+    },
+    resolveCharacterOpportunityReply(snapshot, reply: PlayWorldCharacterOpportunityReply, context) {
+      const normalized = this.normalize(snapshot, context)
+      const state = normalized.state as FlyingChessWorldState
+      const selected = state.opportunities.find(item => item.id === reply.opportunityId)
+      if (selected === undefined || selected.status !== 'used' || selected.responderId !== reply.characterId
+        || selected.ownerId !== reply.ownerId || reply.characterId === reply.ownerId
+        || typeof reply.publicEvidence !== 'string' || reply.publicEvidence.trim() === '') {
+        throw new Error('飞行棋叙事机会回应缺少有效的公开话语或对应关系')
+      }
+      const existingReply = normalized.events.find(item => {
+        const data = eventData(item)
+        return item.type === 'narrative.opportunity-replied'
+          && data?.kind === 'narrative-opportunity-replied' && data.opportunityId === selected.id
+      })
+      if (existingReply !== undefined) {
+        const data = eventData(existingReply)
+        if (existingReply.actorId === reply.characterId && data?.ownerId === reply.ownerId
+          && data.move === reply.move && data.publicEvidence === reply.publicEvidence) return normalized
+        throw new Error('飞行棋叙事机会已经由另一项公开回应关闭')
+      }
+      const useEvent = normalized.events.find(item => {
+        const data = eventData(item)
+        return item.type === 'narrative.opportunity-used'
+          && data?.kind === 'narrative-opportunity-used' && data.opportunityId === selected.id
+          && item.actorId === selected.ownerId && data.responderId === selected.responderId
+      })
+      if (useEvent === undefined) throw new Error('飞行棋叙事机会回应缺少公开使用事件')
+      const replied = opportunityReplyEvent(normalized.events, selected, reply, useEvent.sequence, context)
+      return this.normalize({ ...normalized, events: [...normalized.events, replied] }, context)
     },
     projectForDirector(snapshot, context) {
       const normalized = this.normalize(snapshot, context)

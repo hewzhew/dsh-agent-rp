@@ -2,6 +2,7 @@
 
 import type {
   PlayWorldBinding,
+  PlayWorldCharacterOpportunityReply,
   PlayWorldCharacterOpportunityResolution,
   PlayWorldSnapshot,
 } from './play-world-protocol.ts'
@@ -468,6 +469,8 @@ export interface StoryTurnMaterialization {
   readonly worldEventSequences?: readonly number[]
   /** Character-owned world choices committed atomically with this visible turn. */
   readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
+  /** Approved public replies that close previously used world opportunities. */
+  readonly worldOpportunityReplies?: readonly PlayWorldCharacterOpportunityReply[]
   readonly changes: StoryChangeSet
   /** Local source excerpts used by research or approved dialogue during this turn. */
   readonly citations?: readonly StoryCitationDraft[]

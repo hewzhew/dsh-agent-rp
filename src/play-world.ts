@@ -18,6 +18,7 @@ import { createFlyingChessWorldModule } from './flying-chess-world.ts'
 import { isPlayWorldOpportunitySpeechMove } from './play-world-protocol.ts'
 import type {
   PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityReply,
   PlayWorldCharacterOpportunityResolution,
   PlayWorldModuleDescriptor,
   PlayWorldNarrativeProjection,
@@ -127,10 +128,16 @@ export interface PlayWorldModule {
     characterId: string,
     context: PlayWorldContext,
   ): readonly PlayWorldCharacterOpportunity[]
-  /** Persist one explicit character choice after its required public evidence exists. */
+  /** Persist one explicit character choice after its required public evidence exists; public use may append world events. */
   resolveCharacterOpportunity?(
     snapshot: PlayWorldSnapshot,
     resolution: PlayWorldCharacterOpportunityResolution,
+    context: PlayWorldContext,
+  ): PlayWorldSnapshot
+  /** Persist one approved public reply to a previously used character opportunity. */
+  resolveCharacterOpportunityReply?(
+    snapshot: PlayWorldSnapshot,
+    reply: PlayWorldCharacterOpportunityReply,
     context: PlayWorldContext,
   ): PlayWorldSnapshot
   /** Project authoritative state for the director Worker. */

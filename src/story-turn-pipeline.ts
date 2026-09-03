@@ -30,8 +30,10 @@ import {
 } from './play-world.ts'
 import type {
   PlayWorldCharacterOpportunity,
+  PlayWorldCharacterOpportunityReply,
   PlayWorldCharacterOpportunityResolution,
   PlayWorldNarrativeProjection,
+  PlayWorldOpportunityReplyMove,
 } from './play-world-protocol.ts'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
 import {
@@ -191,6 +193,10 @@ export interface StoryTurnPublicDialogue {
   readonly dialogue: string
   /** Public speech act retained so the next turn can distinguish an open prompt from a completed remark. */
   readonly move?: StoryVoiceMove
+  /** World opportunity whose public use produced this utterance. */
+  readonly worldOpportunityId?: string
+  /** Earlier world opportunity whose open exchange this utterance answers. */
+  readonly replyToWorldOpportunityId?: string
   /** Local source windows containing the target-character seeds used for this utterance. */
   readonly voiceCitations?: readonly StoryCitationDraft[]
 }
@@ -233,6 +239,8 @@ export interface StoryTurnBriefRecord {
   readonly publicWorldEvents?: readonly StoryTurnPublicWorldEvent[]
   /** Explicit world-opportunity choices whose public preconditions survived final rendering. */
   readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
+  /** Approved replies that close an earlier public world-opportunity exchange. */
+  readonly worldOpportunityReplies?: readonly PlayWorldCharacterOpportunityReply[]
   readonly directorBrief: string
   /** Exact local excerpts exposed to the director through the research stage. */
   readonly researchCitations?: readonly StoryCitationDraft[]
@@ -265,6 +273,7 @@ export interface StoryTurnMaterializedRecord {
   readonly eventSummary: string
   readonly changes: StoryChangeSet
   readonly worldOpportunityResolutions?: readonly PlayWorldCharacterOpportunityResolution[]
+  readonly worldOpportunityReplies?: readonly PlayWorldCharacterOpportunityReply[]
   readonly researchCitations?: readonly StoryCitationDraft[]
   readonly voiceCitations?: readonly StoryCitationDraft[]
   /** Public receipt rendered after the visible reply. */
@@ -446,6 +455,7 @@ interface StoryRecentPublicExchangeLine {
   readonly characterName: string
   readonly dialogue: string
   readonly move?: StoryVoiceMove
+  readonly worldOpportunityId?: string
 }
 
 interface StoryRecentPublicExchange {
@@ -484,7 +494,7 @@ interface StoryDirectorDecision {
   readonly sections: readonly StoryDirectorSectionPlan[]
 }
 
-type StoryVoiceMove = 'answer' | 'assert' | 'challenge' | 'correct' | 'command' | 'question' | 'warn' | 'tease' | 'refuse' | 'inform' | 'propose'
+type StoryVoiceMove = PlayWorldOpportunityReplyMove
 
 const STORY_VOICE_MOVES = [
   'answer', 'assert', 'challenge', 'correct', 'command', 'question', 'warn', 'tease', 'refuse', 'inform', 'propose',
@@ -687,16 +697,17 @@ function visibleReplyText(events: readonly SessionEvent[], turn: number): string
 }
 
 const REPLY_SEEKING_VOICE_MOVES = new Set<StoryVoiceMove>(['command', 'question', 'propose'])
+const EXPLICIT_REPLY_VOICE_MOVES = new Set<StoryVoiceMove>(['answer', 'refuse'])
 
 function recentPublicExchange(
   events: readonly SessionEvent[],
   turn: number,
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  workspace: StoryWorkspaceSnapshot,
 ): StoryRecentPublicExchange | undefined {
   const previous = events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
     event.type === 'agent-rp/story-turn-brief' && event.data.format === 1 && event.data.turn < turn)
   const dialogues = previous?.data.publicDialogues ?? []
-  if (previous === undefined || dialogues.length === 0) return undefined
   const characterNameById = new Map(characters.map(character => [character.id, character.name]))
   const lines = dialogues.flatMap(dialogue => {
     const characterName = characterNameById.get(dialogue.characterId)
@@ -706,15 +717,61 @@ function recentPublicExchange(
       characterName,
       dialogue: dialogue.dialogue,
       ...(dialogue.move === undefined ? {} : { move: dialogue.move }),
+      ...(dialogue.worldOpportunityId === undefined ? {} : { worldOpportunityId: dialogue.worldOpportunityId }),
     }]
   })
-  if (lines.length === 0) return undefined
-  const last = lines.at(-1)!
-  const status = previous.data.turn === turn - 1
-    && last.move !== undefined && REPLY_SEEKING_VOICE_MOVES.has(last.move)
-    ? 'open'
-    : 'closed'
-  return { turn: previous.data.turn, status, lines }
+  const last = lines.at(-1)
+  const sessionExchange = previous === undefined || last === undefined
+    ? undefined
+    : {
+        turn: previous.data.turn,
+        status: previous.data.turn === turn - 1
+          && last.move !== undefined && REPLY_SEEKING_VOICE_MOVES.has(last.move)
+          ? 'open' as const
+          : 'closed' as const,
+        lines,
+      }
+  if (sessionExchange?.status === 'open') return sessionExchange
+  const characterNameByWorldId = new Map(characters.map(character => [character.id, character.name]))
+  const repliedOpportunityIds = new Set(workspace.world?.events.flatMap(item => {
+    const data = typeof item.data === 'object' && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown> : undefined
+    return item.type === 'narrative.opportunity-replied'
+      && data?.kind === 'narrative-opportunity-replied' && typeof data.opportunityId === 'string'
+      ? [data.opportunityId] : []
+  }) ?? [])
+  const pendingUse = workspace.world?.events.findLast(item => {
+    const data = typeof item.data === 'object' && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown> : undefined
+    return item.type === 'narrative.opportunity-used'
+      && data?.kind === 'narrative-opportunity-used' && typeof data.opportunityId === 'string'
+      && !repliedOpportunityIds.has(data.opportunityId)
+  })
+  const data = pendingUse !== undefined && typeof pendingUse.data === 'object'
+    && pendingUse.data !== null && !Array.isArray(pendingUse.data)
+    ? pendingUse.data as Record<string, unknown> : undefined
+  const storyEvent = pendingUse === undefined ? undefined : workspace.events.findLast(item =>
+    item.worldEventSequences?.includes(pendingUse.sequence) === true)
+  const characterName = pendingUse?.actorId === undefined ? undefined : characterNameByWorldId.get(pendingUse.actorId)
+  if (pendingUse?.actorId !== undefined && characterName !== undefined && storyEvent !== undefined
+    && typeof data?.responderId === 'string' && characterNameByWorldId.has(data.responderId)
+    && typeof data.move === 'string' && REPLY_SEEKING_VOICE_MOVES.has(data.move as StoryVoiceMove)
+    && typeof data.publicEvidence === 'string' && data.publicEvidence.trim() !== ''
+    && typeof data.opportunityId === 'string') {
+    return {
+      turn: storyEvent.turn,
+      status: 'open',
+      lines: [{
+        characterId: pendingUse.actorId,
+        targetCharacterId: data.responderId,
+        characterName,
+        dialogue: data.publicEvidence,
+        move: data.move as StoryVoiceMove,
+        worldOpportunityId: data.opportunityId,
+      }],
+    }
+  }
+  return sessionExchange
 }
 
 function renderRecentPublicExchange(exchange: StoryRecentPublicExchange | undefined): string {
@@ -4763,7 +4820,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     input.workspace,
     worldActionCharacterIds,
   )
-  const recentExchange = recentPublicExchange(sessionEvents(input.agent.session), input.turn, enabledCharacters)
+  const recentExchange = recentPublicExchange(
+    sessionEvents(input.agent.session),
+    input.turn,
+    enabledCharacters,
+    input.workspace,
+  )
   const characterReasoningMode: StoryStageReasoningMode = automaticAdvance
     && worldOutcome !== '' && recentExchange?.status !== 'open'
     ? 'routine'
@@ -5512,13 +5574,32 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
-    const opportunityUse = characterDecisions.find(record => record.characterId === speech.characterId)
+    const opportunityUseCandidate = characterDecisions.find(record => record.characterId === speech.characterId)
       ?.decision.opportunityDecisions.find(item => item.disposition === 'use')
+    const opportunityUse = opportunityUseCandidate?.responderId !== undefined
+      && worldOpportunityById.get(opportunityUseCandidate.opportunityId)?.use.move === speech.intent.move
+      ? opportunityUseCandidate
+      : undefined
+    const openExchangeLine = recentExchange?.status === 'open' ? recentExchange.lines.at(-1) : undefined
+    const repliesToOpenWorldOpportunity = openExchangeLine?.worldOpportunityId !== undefined
+      && openExchangeLine.targetCharacterId === speech.characterId
+      && (EXPLICIT_REPLY_VOICE_MOVES.has(speech.intent.move)
+        || substantiallyRestatesText(
+          speech.intent.respondsTo,
+          `${openExchangeLine.characterName}${openExchangeLine.dialogue}`,
+          5,
+        ))
+    const targetCharacterId = opportunityUse?.responderId
+      ?? (repliesToOpenWorldOpportunity ? openExchangeLine.characterId : undefined)
     return dialogue === undefined || dialogue === '' ? [] : [{
       characterId: speech.characterId,
-      ...(opportunityUse?.responderId === undefined ? {} : { targetCharacterId: opportunityUse.responderId }),
+      ...(targetCharacterId === undefined ? {} : { targetCharacterId }),
       dialogue,
       move: speech.intent.move,
+      ...(opportunityUse === undefined ? {} : { worldOpportunityId: opportunityUse.opportunityId }),
+      ...(repliesToOpenWorldOpportunity
+        ? { replyToWorldOpportunityId: openExchangeLine.worldOpportunityId }
+        : {}),
       ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     }]
   })) ?? []
@@ -5544,6 +5625,18 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         publicEvidence: publicEvidence.dialogue,
       }]
     }))
+  const openWorldExchangeLine = recentExchange?.status === 'open'
+    ? recentExchange.lines.findLast(line => line.worldOpportunityId !== undefined)
+    : undefined
+  const worldOpportunityReplies: readonly PlayWorldCharacterOpportunityReply[] = publicDialogues.flatMap(dialogue =>
+    dialogue.replyToWorldOpportunityId === undefined || dialogue.move === undefined
+      || openWorldExchangeLine?.worldOpportunityId !== dialogue.replyToWorldOpportunityId ? [] : [{
+          opportunityId: dialogue.replyToWorldOpportunityId,
+          characterId: dialogue.characterId,
+          ownerId: openWorldExchangeLine.characterId,
+          move: dialogue.move,
+          publicEvidence: dialogue.dialogue,
+        }])
   const context = modelContext(finalDraft)
   const privateCharacterStates = materializablePrivateCharacterStates(
     characterDecisions,
@@ -5567,6 +5660,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       ? {}
       : { publicWorldEvents: storyTurnPublicWorldEvents(input.workspace, worldEventSequences) }),
     ...(worldOpportunityResolutions.length === 0 ? {} : { worldOpportunityResolutions }),
+    ...(worldOpportunityReplies.length === 0 ? {} : { worldOpportunityReplies }),
     directorBrief,
     ...(research.citations.length === 0 ? {} : { researchCitations: research.citations }),
     finalSections,
@@ -5803,6 +5897,9 @@ export async function materializeStoryTurn(input: {
     ...(briefEvent.data.worldOpportunityResolutions === undefined
       ? {}
       : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
+    ...(briefEvent.data.worldOpportunityReplies === undefined
+      ? {}
+      : { worldOpportunityReplies: briefEvent.data.worldOpportunityReplies }),
     changes: update.changes,
     citations: uniqueCitationDrafts([
       ...(briefEvent.data.researchCitations ?? []),
@@ -5828,6 +5925,9 @@ export async function materializeStoryTurn(input: {
     ...(briefEvent.data.worldOpportunityResolutions === undefined
       ? {}
       : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
+    ...(briefEvent.data.worldOpportunityReplies === undefined
+      ? {}
+      : { worldOpportunityReplies: briefEvent.data.worldOpportunityReplies }),
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
     ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     publicTrace: {

@@ -195,6 +195,29 @@ export interface PlayWorldCharacterOpportunityResolution {
   readonly publicEvidence?: string
 }
 
+/** Speech acts that may publicly answer a previously used world opportunity. */
+export type PlayWorldOpportunityReplyMove =
+  | 'answer'
+  | 'assert'
+  | 'challenge'
+  | 'correct'
+  | 'command'
+  | 'question'
+  | 'warn'
+  | 'tease'
+  | 'refuse'
+  | 'inform'
+  | 'propose'
+
+/** One approved reply to the named public use of a character-owned world opportunity. */
+export interface PlayWorldCharacterOpportunityReply {
+  readonly opportunityId: string
+  readonly characterId: string
+  readonly ownerId: string
+  readonly move: PlayWorldOpportunityReplyMove
+  readonly publicEvidence: string
+}
+
 /** How selected world events should occupy the next visible story passage. */
 export type PlayWorldNarrativeCadence = 'transition' | 'scene' | 'resolution'
 
