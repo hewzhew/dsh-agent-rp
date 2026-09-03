@@ -1090,7 +1090,7 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
 
   const scene = workspace.world?.events.at(-1)
   assert.equal(scene?.type, 'scene.changed')
-  assert.match(scene?.summary ?? '', /一阵风掀起棋盘一角/u)
+  assert.match(scene?.summary ?? '', /一阵风忽然掀起棋盘一角/u)
   const eventSequences = workspace.world!.events.map(event => event.sequence)
   const playContext = resolveStoryPlayWorldContext(workspace)
   const projection = projectPlayWorldNarrative(
@@ -1101,8 +1101,8 @@ test('turns a stalled flying-chess opening into a recorded scene pressure', (con
     playContext,
   )
   assert.equal(projection.cadence, 'scene')
-  assert.equal(projection.facts.filter(fact => fact.retention === 'compressible').length, 5)
-  assert.match(projection.facts.find(fact => fact.retention === 'essential')?.text ?? '', /棋盘被风掀动/u)
+  assert.equal(projection.facts.filter(fact => fact.retention === 'compressible').length, 2)
+  assert.match(projection.facts.find(fact => fact.retention === 'essential')?.text ?? '', /一阵风忽然掀起棋盘一角/u)
   assert.deepEqual(projection.invariants, [{
     id: 'single-board',
     text: '场景中只有一张棋盘。',
@@ -2410,10 +2410,12 @@ test('shows recorded facts to every character but only offers a cue to its named
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
   })
-  const sceneText = '几轮骰声过去，两边的飞机都没能离开基地。风忽然掀起棋盘一角，灵梦伸手压住翻卷的边沿，木机的晃动才停下来。'
+  const sceneText = [
+    '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。几轮过去，博丽灵梦与雾雨魔理沙的飞机都没有移动。一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
+    '博丽灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住。',
+  ].join('\n\n')
   const characterBodies: string[] = []
   let directorBody = ''
-  let sectionBody = ''
   const fake = {
     sessions: { flush: async () => true },
     llm: {
@@ -2422,14 +2424,13 @@ test('shows recorded facts to every character but only offers a cue to its named
         const body = JSON.stringify(options.messages ?? [])
         if (system.includes('指定人物认知')) characterBodies.push(body)
         if (system.includes('剧情导演 Worker')) directorBody = body
-        if (system.includes('分区的 prose Worker')) sectionBody = body
         const text = system.includes('单个人物的历史检索 Worker')
           ? JSON.stringify({ references: [] })
           : system.includes('指定人物认知')
             ? body.includes('# 人物：博丽灵梦')
               ? JSON.stringify({
                   observation: '风掀起棋盘一角，基地里的木机正在晃动。',
-                  action: '灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住。',
+                  action: '灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住，顺手拂去落在棋盘边沿的一片落叶。',
                   speech: null,
                   insights: [],
                 })
@@ -2437,7 +2438,11 @@ test('shows recorded facts to every character but only offers a cue to its named
                   observation: '风掀起棋盘一角，灵梦已经伸手压住棋盘。',
                   action: '魔理沙把手按到棋盘另一角。',
                   speech: null,
-                  insights: [],
+                  insights: [{
+                    kind: 'intention',
+                    text: '魔理沙打算在风再次掀动棋盘时先按住自己一侧。',
+                    futureChoice: '棋盘再次被风掀动时，先按住自己一侧。',
+                  }],
                 })
             : system.includes('剧情导演 Worker')
               ? JSON.stringify({ sections: [{
@@ -2445,11 +2450,7 @@ test('shows recorded facts to every character but only offers a cue to its named
                   beats: ['灵梦压住被风掀起的棋盘边沿，木机重新稳住。'],
                   speech: [],
                 }] })
-              : system.includes('分区的 prose Worker')
-                ? sceneText
-                : system.includes('最终正文编辑 Worker')
-                  ? JSON.stringify({ sections: [{ sectionId: proseId, text: sceneText }] })
-                  : (() => { throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`) })()
+              : (() => { throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`) })()
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
           yield { type: 'text-delta', index: 0, text }
@@ -2474,7 +2475,7 @@ test('shows recorded facts to every character but only offers a cue to its named
   })
 
   assert.equal(result.finalDraft, sceneText)
-  assert.match(result.finalDraft, /几轮骰声过去/u)
+  assert.match(result.finalDraft, /几轮过去/u)
   assert.doesNotMatch(result.finalDraft, /掷出 1|第 \d+ 回合/u)
   const reimuBody = characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
   const marisaBody = characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
@@ -2483,8 +2484,9 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.match(reimuBody, /棋盘需要先被重新压稳/u)
   assert.doesNotMatch(marisaBody, /棋盘需要先被重新压稳/u)
   assert.equal(directorBody, '')
-  assert.match(sectionBody, /博丽灵梦：灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住/u)
-  assert.doesNotMatch(sectionBody, /雾雨魔理沙：魔理沙把手按到棋盘另一角/u)
+  assert.match(result.finalDraft, /博丽灵梦伸手压住翻卷的棋盘边沿，让木机重新稳住/u)
+  assert.doesNotMatch(result.finalDraft, /落叶/u)
+  assert.doesNotMatch(result.finalDraft, /魔理沙把手按到棋盘另一角/u)
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   assert.equal(characterRequests.length, 2)
@@ -2492,10 +2494,20 @@ test('shows recorded facts to every character but only offers a cue to its named
     && event.data.stage === 'research'), false)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'director'), false)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
+    && (event.data.stage === 'section' || event.data.stage === 'editor')), false)
+  assert.equal(result.hostOwnedWorldDraft, true)
+  assert.deepEqual(result.privateCharacterStates, [{
+    characterId: marisaId,
+    insights: [{
+      kind: 'intention',
+      text: '棋盘再次被风掀动时，先按住自己一侧。',
+    }],
+  }])
   assert.equal(result.publicWorldEvents?.at(-1)?.type, 'scene.changed')
 })
 
-test('gives prose and editor Workers exact world events, invariants, and public-action authority', async (context) => {
+test('renders a simple event-card scene without prose or editor inventions', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-narrative-authority-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const rolls = [3, 4, 4, 4]
@@ -2541,10 +2553,6 @@ test('gives prose and editor Workers exact world events, invariants, and public-
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
   })
-  const invalidDraft = '两张棋盘之间没有动静。四只骰子落出相同的白点，灵梦抬眼看向风口。雾雨魔理沙伸手按住翻起的棋盘角。'
-  const correctedDraft = '同一枚骰子依次落出三点、四点、四点和四点，两边的木机仍停在基地。风掀起棋盘一角，雾雨魔理沙伸手按住翻起的棋盘角，木机随之稳住。'
-  let sectionBody = ''
-  let editorBody = ''
   const fake = {
     sessions: { flush: async () => true },
     llm: {
@@ -2556,24 +2564,25 @@ test('gives prose and editor Workers exact world events, invariants, and public-
           text = JSON.stringify({ references: [] })
         } else if (system.includes('指定人物认知')) {
           text = body.includes('# 人物：雾雨魔理沙')
-            ? JSON.stringify({
-                observation: '风掀起棋盘一角，基地里的木机正在晃动。',
-                action: '雾雨魔理沙伸手按住翻起的棋盘角。',
-                speech: null,
-                insights: [],
-              })
+              ? JSON.stringify({
+                  observation: '风掀起棋盘一角，基地里的木机正在晃动。',
+                  action: '雾雨魔理沙伸手按住翻起的棋盘角，又从桌边拿来一块石子压在棋盘角上。',
+                  speech: {
+                    respondsTo: '一阵风掀起棋盘一角，基地里的木机随之晃动。',
+                    move: 'inform',
+                    focus: '先把棋盘压稳。',
+                    effect: '先压稳棋盘，再继续对局。',
+                  },
+                  insights: [],
+                })
             : JSON.stringify({
                 observation: '风掀起棋盘一角。',
                 action: '灵梦抬眼看向风口。',
                 speech: null,
                 insights: [],
               })
-        } else if (system.includes('分区的 prose Worker')) {
-          sectionBody = body
-          text = invalidDraft
-        } else if (system.includes('最终正文编辑 Worker')) {
-          editorBody = body
-          text = JSON.stringify({ sections: [{ sectionId: proseId, text: correctedDraft }] })
+        } else if (system.includes('对白')) {
+          text = JSON.stringify({ lines: [] })
         } else {
           throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
         }
@@ -2600,16 +2609,14 @@ test('gives prose and editor Workers exact world events, invariants, and public-
     signal: new AbortController().signal,
   })
 
-  for (const body of [sectionBody, editorBody]) {
-    assert.match(body, /narrative_authority/u)
-    assert.match(body, /single-board/u)
-    assert.match(body, /shared-die/u)
-    assert.match(body, /3 点[\s\S]*4 点[\s\S]*4 点[\s\S]*4 点/u)
-    assert.match(body, /allowedPublicActions[\s\S]*雾雨魔理沙伸手按住翻起的棋盘角/u)
-    assert.match(body, /charactersWithoutAdditionalActions[\s\S]*博丽灵梦/u)
-  }
-  assert.equal(result.finalDraft, correctedDraft)
-  assert.doesNotMatch(result.finalDraft, /两张棋盘|四只骰子|相同的白点|灵梦抬眼/u)
+  assert.equal(result.finalDraft, [
+    '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。几轮过去，博丽灵梦与雾雨魔理沙的飞机都没有移动。一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
+    '雾雨魔理沙伸手按住翻起的棋盘角。',
+  ].join('\n\n'))
+  assert.equal(result.hostOwnedWorldDraft, true)
+  assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
+    && (event.data.stage === 'section' || event.data.stage === 'editor')), false)
+  assert.doesNotMatch(result.finalDraft, /两张棋盘|四只骰子|相同的白点|灵梦抬眼|石子/u)
 })
 
 test('restores the causal roll when generated prose jumps straight to a first launch', async (context) => {
@@ -3830,7 +3837,11 @@ test('keeps the exact world outcome while preserving only private-section charac
     graph: {
       ...installed.graph,
       nodes: installed.graph.nodes.map(node => node.id === installed.graph.activeNodeId
-        ? { ...node, participantIds: [marisaId, sanaeId] }
+        ? {
+            ...node,
+            content: '按照大纲完整呈现这次无法起飞以及人物对结果的留意。',
+            participantIds: [marisaId, sanaeId],
+          }
         : node),
     },
   })

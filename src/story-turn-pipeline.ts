@@ -1569,6 +1569,8 @@ function substantiallyRestatesText(
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
 const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
 const DEFERRED_SPEECH_INSIGHT_PATTERN = /(?:提问|追问|回答|答复|回话|回应|接话|拒答|拒绝回答|开口|把话)/u
+const ACQUIRED_OBJECT_PATTERN = /(?:拿|取|捡|找|搬|掏|抽|端)(?:来|出|起|回|到)?(?:了)?(?:一|两|几|半|那|这)?(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇)?([\p{Script=Han}]{1,8}?)(?=(?:压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|[，。；！？!?]|$))/gu
+const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|滚|翻|停|落|滑|晃|[，。；！？!?]|$))/gu
 
 function playerForbidsWorldRecap(playerInput: string): boolean {
   return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
@@ -2390,28 +2392,70 @@ function attributePublicAction(characterName: string, action: string): string {
   const text = action.trim()
   if (text.startsWith(characterName)) return completeNarrativeSentence(text)
   if (/^[她他]/u.test(text)) return completeNarrativeSentence(`${characterName}${text.slice(1)}`)
+  const nameCharacters = [...characterName]
+  const shortName = Array.from({ length: Math.max(0, nameCharacters.length - 1) }, (_value, index) =>
+    nameCharacters.slice(index + 1).join(''))
+    .find(candidate => /^[\p{Script=Han}]{2,4}$/u.test(candidate) && text.startsWith(candidate))
+  if (shortName !== undefined) {
+    return completeNarrativeSentence(`${characterName}${text.slice(shortName.length)}`)
+  }
   return completeNarrativeSentence(`${characterName}${text}`)
 }
 
-function renderHostOwnedWorldTransitionSections(
+function groundedHostOwnedAction(action: string, authority: string): string {
+  const normalizedAuthority = normalizedComparableText(authority)
+  const clauses = action.match(/[^，。；！？!?]+[，。；！？!?]?/gu) ?? []
+  const retained: string[] = []
+  for (const clause of clauses) {
+    ACQUIRED_OBJECT_PATTERN.lastIndex = 0
+    COUNTED_OBJECT_PATTERN.lastIndex = 0
+    const mentionedObjects = [
+      ...[...clause.matchAll(ACQUIRED_OBJECT_PATTERN)].map(match => match[1]!),
+      ...[...clause.matchAll(COUNTED_OBJECT_PATTERN)].map(match => match[1]!),
+    ]
+    if (mentionedObjects.some(object => !normalizedAuthority.includes(normalizedComparableText(object)))) break
+    retained.push(clause)
+  }
+  return retained.join('').replace(/[，；]+$/u, '').trim()
+}
+
+function renderHostOwnedWorldSections(
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   projection: PlayWorldNarrativeProjection | undefined,
+  worldEvents: readonly { readonly sequence: number; readonly type: string }[],
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
   characterDecisions: readonly StoryCharacterDecisionRecord[],
   director: StoryDirectorDecision | undefined,
   dialogueByReference: ReadonlyMap<string, string>,
 ): readonly StorySectionDraft[] | undefined {
-  if (projection?.cadence !== 'transition' || projection.cues.length > 0
-    || projection.facts.some(fact => fact.retention !== 'compressible')) return undefined
+  if (projection === undefined) return undefined
+  const worldEventTypes = new Map(worldEvents.map(event => [event.sequence, event.type]))
+  const directTransition = projection.cadence === 'transition'
+    && projection.cues.length === 0
+    && projection.facts.every(fact => fact.retention === 'compressible')
+  const essentialEventTypes = projection.facts
+    .filter(fact => fact.retention === 'essential')
+    .flatMap(fact => fact.eventSequences.map(sequence => worldEventTypes.get(sequence)))
+  const directSceneCard = projection.cadence === 'scene'
+    && essentialEventTypes.length > 0
+    && essentialEventTypes.every(type => type === 'scene.changed')
+  if (!directTransition && !directSceneCard) return undefined
   const prose = outputs.filter(output => output.enabled && output.kind === 'prose')
   if (prose.length !== 1) return undefined
   const plan = director?.sections.find(section => section.sectionId === prose[0]!.id)
   if (plan === undefined) return undefined
   const names = new Map(characters.map(character => [character.id, character.name]))
+  const actionAuthority = [
+    ...projection.facts.map(fact => fact.text),
+    ...projection.cues.map(cue => cue.text),
+  ].join('\n')
   const actions = characterDecisions.flatMap(record => {
     const action = record.decision.action
     if (action === '' || !plan.beats.some(beat => substantiallyRestatesText(beat, action, 5))) return []
-    return [attributePublicAction(names.get(record.characterId) ?? record.characterId, action)]
+    const grounded = groundedHostOwnedAction(action, actionAuthority)
+    return grounded === ''
+      ? []
+      : [attributePublicAction(names.get(record.characterId) ?? record.characterId, grounded)]
   })
   const dialogue = plan.speech.flatMap(speech => {
     const line = dialogueByReference.get(speech.reference)
@@ -2455,7 +2499,6 @@ function resolveHostDirectorAssignment(
 ): StoryDirectorAssignment | undefined {
   if ((worldNarrative === '') !== (worldOutcome === '')
     || storyMap.trim() !== '' || foreshadowing.trim() !== '' || hasResearchSources) return undefined
-  if (characterDecisions.some(record => record.decision.insights.length > 0)) return undefined
   const actionCount = characterDecisions.filter(record => record.decision.action !== '').length
   const speechCount = characterDecisions.filter(record => record.decision.speech !== undefined).length
   if (actionCount > 1 || speechCount > 1) return undefined
@@ -4383,6 +4426,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             ? '本轮有此人物可回应的现场条件。action 只能是一项已经完成、由该条件直接引起且即使人物不开口也会留下可观察结果的非规则行动；只看向别人、摆出姿态、拿着物品等待发言或等待别人接话时使用空字符串。规则动作仍由 Host 执行。'
             : '本轮没有此人物可回应的现场条件。自动世界推进时 action 使用空字符串；除非 recent_public_exchange 明确标为尚待回答，speech 也使用 null。规则动作仍由 Host 执行。',
           'action 只写外部可观察的动作与落定结果，不用比喻、象征、语气效果或人物目的解释动作；不得把 recent_public_exchange 或 retrieved_history 中已经发生的说话和动作改成未发生。',
+          'action 只能操作 character context、current_world_outcome 或 world_narrative 已经明确存在的物件；不能通过拿取、寻找或搬来东西引入场景里没有记录的新道具。',
           'world_opportunities 只列出此人物当前可以处置的持久世界机会。每项必须在 opportunityDecisions 中原样复制 id，并明确选择 retain、use 或 decline；retain 和 decline 的 responderId 为 null。use 必须选择 responders 中的一人，并把 responderId 写成其 id，同时 speech.move 必须等于 requiredSpeechMove。机会的选择不写进 insights。若声音阶段没有批准并公开这句 speech，Host 不会消耗 use。没有可用机会时 opportunityDecisions 使用空数组；人物可见世界状态中标为已使用或已放弃的机会已经终结，不能再为它保存未来选择。',
           'speech 用于完成一项当下确有必要的交流动作。respondsTo 指向当前事实或 recent_public_exchange 中尚未收束的最后前提；move 取 answer、assert、challenge、correct、command、question、warn、tease、refuse、inform 或 propose；focus 只写本句新增的对象、区别、态度或答案；effect 写它当场改变的理解、决定或关系。已经收束的话轮和没有信息增量的结果以 speech=null 延续。声音阶段会另行检索原作证据并写出台词。',
           'insights 只保存此人物新获得的私有 knowledge，或跨规则回合仍会改变选择的 intention/decision。后两者在 futureChoice 中写一项可独立复用的具体非语言选择；以后再提问、回答、拒答或采用某种说法仍属于当前 speech 或世界机会，不保存为长期人物事实。规则动作标为 world-action，由 Host 丢弃。没有持久私有变化时使用空数组。',
@@ -4497,12 +4541,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const maximumSpeeches = worldNarrative !== '' && playerInput === '' ? 1 : Number.POSITIVE_INFINITY
   let directorDecision = hostDirectorAssignment === undefined
     ? undefined
-    : groundWorldDirectorBeats(
-        groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions, maximumSpeeches),
-        enabledSections,
-        characterDecisions,
-        worldNarrative,
-      )
+    : groundDirectorSpeechPlans(hostDirectorAssignment, enabledSections, characterDecisions, maximumSpeeches)
   if (hostDirectorAssignment === undefined) {
     const directorReasoningMode: StoryStageReasoningMode = worldNarrative !== ''
       && characterDecisions.every(record => record.decision.action === '' && record.decision.insights.length === 0)
@@ -4742,11 +4781,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorDecision,
     dialogueByReference,
   )
-  const hostOwnedWorldTransitionSections = hostDirectorAssignment === undefined
+  const hostOwnedWorldSections = hostDirectorAssignment === undefined
     ? undefined
-    : renderHostOwnedWorldTransitionSections(
+    : renderHostOwnedWorldSections(
         enabledSections,
         worldNarrativeProjection,
+        input.workspace.world?.events ?? [],
         enabledCharacters,
         characterDecisions,
         directorDecision,
@@ -4755,8 +4795,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0 || omittedPublicTurn) {
     sectionDrafts = []
-  } else if (hostOwnedWorldTransitionSections !== undefined) {
-    sectionDrafts = hostOwnedWorldTransitionSections
+  } else if (hostOwnedWorldSections !== undefined) {
+    sectionDrafts = hostOwnedWorldSections
   } else {
     sectionDrafts = (await mapStoryPeers(
       enabledSections,
@@ -4868,7 +4908,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
-  const compactDraftReady = hostOwnedWorldTransitionSections !== undefined
+  const compactDraftReady = hostOwnedWorldSections !== undefined
     || compactProseTurn && sectionDrafts.length === 1
       && (compactWorldTransition
         ? compactWorldTransitionWithinBudget(sectionDrafts[0]!.text)
@@ -4945,8 +4985,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
-  const hostOwnedWorldDraft = hostOwnedWorldTransitionSections !== undefined
-    && finalDraft === renderSectionDrafts(hostOwnedWorldTransitionSections).trim()
+  const hostOwnedWorldDraft = hostOwnedWorldSections !== undefined
+    && finalDraft === renderSectionDrafts(hostOwnedWorldSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []

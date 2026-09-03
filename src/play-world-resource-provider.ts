@@ -36,7 +36,7 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
     trigger: { kind: 'consecutive-passes', count: 4 },
     event: {
       title: '棋盘被风掀动',
-      summary: '接连几轮都没有飞机起飞时，一阵风掀起棋盘一角，基地里的木机随之晃动。',
+      summary: '一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
     },
     cue: {
       kind: 'pressure',

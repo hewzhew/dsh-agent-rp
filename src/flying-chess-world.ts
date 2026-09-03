@@ -495,6 +495,7 @@ function eventNarrative(event: PlayWorldEvent, context: PlayWorldContext): strin
   if (event.type === 'game.finished' && actor !== undefined) {
     return `${actor}的四架飞机全部抵达终点，赢得棋局。`
   }
+  if (event.type === 'scene.changed') return event.summary
   return `${event.title}：${event.summary}`
 }
 
@@ -637,6 +638,40 @@ function compactTransitionNarrativeFacts(
       ? `${actors[0]}这一轮没有飞机移动。`
       : `几轮过去，${actors.join('与')}的飞机都没有移动。`,
   }]
+}
+
+function compactRoutineNarrativeFacts(
+  events: readonly PlayWorldEvent[],
+  allEvents: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+): readonly PlayWorldNarrativeFact[] {
+  const facts = eventNarrativeFacts(events, allEvents, context)
+  const eventsBySequence = new Map(events.map(item => [item.sequence, item]))
+  const output: PlayWorldNarrativeFact[] = []
+  let routine: PlayWorldEvent[] = []
+  const flush = (): void => {
+    if (routine.length === 0) return
+    output.push(...compactTransitionNarrativeFacts(routine, allEvents, context))
+    routine = []
+  }
+  for (const fact of facts) {
+    const sourceEvents = fact.eventSequences.flatMap(sequence => {
+      const item = eventsBySequence.get(sequence)
+      return item === undefined ? [] : [item]
+    })
+    const compressibleRoutine = fact.retention === 'compressible'
+      && sourceEvents.length === fact.eventSequences.length
+      && sourceEvents.every(item => item.type === 'die.rolled'
+        || item.type === 'turn.passed' || item.type === 'piece.moved')
+    if (compressibleRoutine) {
+      routine.push(...sourceEvents)
+      continue
+    }
+    flush()
+    output.push(fact)
+  }
+  flush()
+  return output
 }
 
 function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
@@ -835,9 +870,7 @@ function projectNarrative(
       : 'transition'
   return {
     cadence,
-    facts: cadence === 'transition'
-      ? compactTransitionNarrativeFacts(events, allEvents, context)
-      : eventNarrativeFacts(events, allEvents, context),
+    facts: compactRoutineNarrativeFacts(events, allEvents, context),
     cues,
     invariants: [...FLYING_CHESS_NARRATIVE_INVARIANTS, ...unresolvedInvariants],
   }
