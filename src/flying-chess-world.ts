@@ -562,6 +562,83 @@ function eventNarrativeFacts(
   return facts
 }
 
+function compactTransitionNarrativeFacts(
+  events: readonly PlayWorldEvent[],
+  allEvents: readonly PlayWorldEvent[],
+  context: PlayWorldContext,
+): readonly PlayWorldNarrativeFact[] {
+  if (events.some(item => item.type !== 'die.rolled'
+    && item.type !== 'turn.passed' && item.type !== 'piece.moved')) {
+    return eventNarrativeFacts(events, allEvents, context)
+  }
+  const moves = new Map<string, {
+    readonly actor: string
+    readonly pieceNumber: number
+    readonly fromStatus: string
+    readonly fromSteps?: number
+    toStatus: string
+    toSteps: number | undefined
+  }>()
+  for (const item of events) {
+    if (item.type !== 'piece.moved') continue
+    const data = eventData(item)
+    const actor = eventActor(item, context)
+    if (data?.kind !== 'piece-moved' || typeof data.pieceId !== 'string'
+      || typeof data.pieceNumber !== 'number' || typeof data.fromStatus !== 'string'
+      || typeof data.toStatus !== 'string' || actor === undefined
+      || data.fromSteps !== undefined && typeof data.fromSteps !== 'number'
+      || data.toSteps !== undefined && typeof data.toSteps !== 'number') {
+      return eventNarrativeFacts(events, allEvents, context)
+    }
+    const key = `${item.actorId ?? actor}:${data.pieceId}`
+    const previous = moves.get(key)
+    if (previous === undefined) {
+      moves.set(key, {
+        actor,
+        pieceNumber: data.pieceNumber,
+        fromStatus: data.fromStatus,
+        ...(data.fromSteps === undefined ? {} : { fromSteps: data.fromSteps }),
+        toStatus: data.toStatus,
+        toSteps: data.toSteps,
+      })
+    } else {
+      previous.toStatus = data.toStatus
+      previous.toSteps = data.toSteps
+    }
+  }
+  const clauses = [...moves.values()].flatMap(move => {
+    if (move.toStatus !== 'track' || move.toSteps === undefined) return []
+    if (move.fromStatus === 'base') {
+      return [`${move.actor}的 ${String(move.pieceNumber)} 号飞机离开基地，推进到航线第 ${String(move.toSteps)} 步`]
+    }
+    if (move.fromStatus === 'track' && move.fromSteps !== undefined) {
+      return [`${move.actor}的 ${String(move.pieceNumber)} 号飞机从航线第 ${String(move.fromSteps)} 步推进到第 ${String(move.toSteps)} 步`]
+    }
+    return []
+  })
+  const eventSequences = events.map(item => item.sequence)
+  if (clauses.length > 0) {
+    const severalTurns = events.filter(item => item.type === 'die.rolled').length > 1
+    return [{
+      eventSequences,
+      retention: 'compressible',
+      text: `${severalTurns ? '几轮下来，' : ''}${clauses.join('；')}。`,
+    }]
+  }
+  const actors = [...new Set(events.flatMap(item => {
+    const actor = eventActor(item, context)
+    return actor === undefined ? [] : [actor]
+  }))]
+  if (actors.length === 0) return eventNarrativeFacts(events, allEvents, context)
+  return [{
+    eventSequences,
+    retention: 'compressible',
+    text: actors.length === 1 && events.filter(item => item.type === 'die.rolled').length <= 1
+      ? `${actors[0]}这一轮没有飞机移动。`
+      : `几轮过去，${actors.join('与')}的飞机都没有移动。`,
+  }]
+}
+
 function consecutivePassedTurns(events: readonly PlayWorldEvent[]): number {
   let count = 0
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -758,7 +835,9 @@ function projectNarrative(
       : 'transition'
   return {
     cadence,
-    facts: eventNarrativeFacts(events, allEvents, context),
+    facts: cadence === 'transition'
+      ? compactTransitionNarrativeFacts(events, allEvents, context)
+      : eventNarrativeFacts(events, allEvents, context),
     cues,
     invariants: [...FLYING_CHESS_NARRATIVE_INVARIANTS, ...unresolvedInvariants],
   }

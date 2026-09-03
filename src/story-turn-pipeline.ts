@@ -2381,6 +2381,53 @@ function preserveEditedPublicMaterials(
   })
 }
 
+function completeNarrativeSentence(value: string): string {
+  const text = value.trim()
+  return text === '' || /[。！？!?]$/u.test(text) ? text : `${text}。`
+}
+
+function attributePublicAction(characterName: string, action: string): string {
+  const text = action.trim()
+  if (text.startsWith(characterName)) return completeNarrativeSentence(text)
+  if (/^[她他]/u.test(text)) return completeNarrativeSentence(`${characterName}${text.slice(1)}`)
+  return completeNarrativeSentence(`${characterName}${text}`)
+}
+
+function renderHostOwnedWorldTransitionSections(
+  outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  projection: PlayWorldNarrativeProjection | undefined,
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  characterDecisions: readonly StoryCharacterDecisionRecord[],
+  director: StoryDirectorDecision | undefined,
+  dialogueByReference: ReadonlyMap<string, string>,
+): readonly StorySectionDraft[] | undefined {
+  if (projection?.cadence !== 'transition' || projection.cues.length > 0
+    || projection.facts.some(fact => fact.retention !== 'compressible')) return undefined
+  const prose = outputs.filter(output => output.enabled && output.kind === 'prose')
+  if (prose.length !== 1) return undefined
+  const plan = director?.sections.find(section => section.sectionId === prose[0]!.id)
+  if (plan === undefined) return undefined
+  const names = new Map(characters.map(character => [character.id, character.name]))
+  const actions = characterDecisions.flatMap(record => {
+    const action = record.decision.action
+    if (action === '' || !plan.beats.some(beat => substantiallyRestatesText(beat, action, 5))) return []
+    return [attributePublicAction(names.get(record.characterId) ?? record.characterId, action)]
+  })
+  const dialogue = plan.speech.flatMap(speech => {
+    const line = dialogueByReference.get(speech.reference)
+    if (line === undefined || line === '') return []
+    return [`${names.get(speech.characterId) ?? speech.characterId}说：${line}`]
+  })
+  const world = projection.facts.map(fact => completeNarrativeSentence(fact.text)).join('')
+  const text = [world, ...actions, ...dialogue].filter(value => value !== '').join('\n\n')
+  return text === '' ? undefined : [{
+    sectionId: prose[0]!.id,
+    name: prose[0]!.name,
+    kind: 'prose',
+    text,
+  }]
+}
+
 function renderHostOnlyWorldSections(
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   worldNarrative: string,
@@ -4198,11 +4245,11 @@ function directorFallback(
 
 function modelContext(finalDraft: string): string {
   return [
-    '故事引擎已经依据人物私有认知分别推演，并完成导演规划、分区写作与编辑。',
-    '<edited_draft>',
+    '故事引擎已经依据本轮人物认知与权威世界状态完成可见正文。',
+    '<final_draft>',
     finalDraft,
-    '</edited_draft>',
-    '请原样返回 edited_draft 作为本轮可见正文；不得增删、改写或重新安排其中的叙事、对白、标题和分区，也不得解释故事流水线。',
+    '</final_draft>',
+    '请原样返回 final_draft 作为本轮可见正文；不得增删、改写或重新安排其中的叙事、对白、标题和分区，也不得解释故事流水线。',
   ].join('\n')
 }
 
@@ -4695,9 +4742,21 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorDecision,
     dialogueByReference,
   )
+  const hostOwnedWorldTransitionSections = hostDirectorAssignment === undefined
+    ? undefined
+    : renderHostOwnedWorldTransitionSections(
+        enabledSections,
+        worldNarrativeProjection,
+        enabledCharacters,
+        characterDecisions,
+        directorDecision,
+        dialogueByReference,
+      )
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0 || omittedPublicTurn) {
     sectionDrafts = []
+  } else if (hostOwnedWorldTransitionSections !== undefined) {
+    sectionDrafts = hostOwnedWorldTransitionSections
   } else {
     sectionDrafts = (await mapStoryPeers(
       enabledSections,
@@ -4809,15 +4868,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
-  const compactDraftReady = compactProseTurn && sectionDrafts.length === 1
-    && (compactWorldTransition
-      ? compactWorldTransitionWithinBudget(sectionDrafts[0]!.text)
-      : compactProseWithinBudget(sectionDrafts[0]!.text))
-    && (compactWorldTransition || compactProseRetainsPlan(
-        sectionDrafts[0]!,
-        directorDecision?.sections.find(section => section.sectionId === sectionDrafts[0]!.sectionId),
-        approvedDialogue,
-      ))
+  const compactDraftReady = hostOwnedWorldTransitionSections !== undefined
+    || compactProseTurn && sectionDrafts.length === 1
+      && (compactWorldTransition
+        ? compactWorldTransitionWithinBudget(sectionDrafts[0]!.text)
+        : compactProseWithinBudget(sectionDrafts[0]!.text))
+      && (compactWorldTransition || compactProseRetainsPlan(
+          sectionDrafts[0]!,
+          directorDecision?.sections.find(section => section.sectionId === sectionDrafts[0]!.sectionId),
+          approvedDialogue,
+        ))
   if (sectionDrafts.length > 0 && !compactDraftReady) {
     const edited = await runStage(input, 'editor', generateOptions(
       input,
@@ -4885,6 +4945,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
+  const hostOwnedWorldDraft = hostOwnedWorldTransitionSections !== undefined
+    && finalDraft === renderSectionDrafts(hostOwnedWorldTransitionSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
@@ -4949,6 +5011,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     modelContext: context,
     ...(publicDialogues.length === 0 ? {} : { publicDialogues }),
     ...(hostOnlyWorldDraft ? { hostOnlyWorldDraft: true as const } : {}),
+    ...(hostOwnedWorldDraft ? { hostOwnedWorldDraft: true as const } : {}),
     ...(deterministicWorldMaterialization ? { deterministicWorldMaterialization: true as const } : {}),
   }
   appendAgentRpSessionEvent(input.agent.session, 'agent-rp/story-turn-brief', record)

@@ -1339,7 +1339,7 @@ test('runs logged story stages while keeping each character request privately sc
   assert.equal(result.privateCharacterStates, undefined)
   assert.doesNotMatch(result.finalDraft, /自己的旧站记忆/u)
   assert.match(result.modelContext, /阿梨把徽章转向窗光/u)
-  assert.match(result.modelContext, /原样返回 edited_draft/u)
+  assert.match(result.modelContext, /原样返回 final_draft/u)
   assert.doesNotMatch(result.modelContext, /导演方案|下一幕会停电|第三幕打开/u)
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-turn-start'
     ? [{ workspaceId: event.data.workspaceId, turn: event.data.turn, step: event.data.step }]

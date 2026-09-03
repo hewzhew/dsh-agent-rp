@@ -2721,7 +2721,7 @@ test('restores the causal roll when generated prose jumps straight to a first la
   assert.match(result.finalDraft, /雾雨魔理沙掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
 })
 
-test('compacts routine world transitions and removes incomplete die values', async (context) => {
+test('renders routine world transitions from authoritative facts without prose stages', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-compact-world-transition-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const rolls = [1, 1, 1, 1, 2, 5, 1, 1]
@@ -2732,10 +2732,11 @@ test('compacts routine world transitions and removes incomplete die values', asy
   const marisaId = createStoryCharacterId()
   const proseId = createStoryOutputId()
   const created = store.create({ format: 2, name: '紧凑规则过渡' })
+  const reimu = character(reimuId, '博丽灵梦', '博丽神社的巫女。')
   const configured = store.save({
     ...editable(created),
     characters: [
-      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      { ...reimu, profile: { ...reimu.profile, exampleDialogue: '博丽灵梦：“这还用问？”' } },
       character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
     ],
     outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
@@ -2787,6 +2788,10 @@ test('compacts routine world transitions and removes incomplete die values', asy
   assert.equal(projection.cadence, 'transition')
   assert.equal(projection.cues.length, 0)
   assert.equal(projection.facts.every(fact => fact.retention === 'compressible'), true)
+  assert.deepEqual(projection.facts.map(fact => fact.text), [
+    '几轮过去，博丽灵梦与雾雨魔理沙的飞机都没有移动。',
+  ])
+  const hostDraft = projection.facts.map(fact => fact.text).join('')
 
   const verboseDraft = [
     '骰子先回到灵梦手里。她拢在掌心里停了一阵，才让它滚过棋盘。点数是—。基地里的木机没有动。',
@@ -2854,12 +2859,89 @@ test('compacts routine world transitions and removes incomplete die values', asy
     : [])
   const sectionRequest = stageRequests.find(request => request.stage === 'section')
   const editorRequest = stageRequests.find(request => request.stage === 'editor')
-  assert.equal(sectionRequest?.dispatch.maxTokens, 768)
-  assert.match(sectionRequest?.dispatch.system ?? '', /没有现场变化、人物额外行动或获准对白/u)
-  assert.equal(editorRequest?.dispatch.maxTokens, 1_024)
-  assert.match(editorRequest?.dispatch.system ?? '', /不能留下破折号、省略号或其他占位符/u)
-  assert.equal(result.finalDraft, compactDraft)
+  assert.equal(sectionRequest, undefined)
+  assert.equal(editorRequest, undefined)
+  assert.equal(result.finalDraft, hostDraft)
+  assert.equal(result.hostOwnedWorldDraft, true)
+  assert.match(result.modelContext, /<final_draft>/u)
+  assert.doesNotMatch(result.modelContext, /分区写作与编辑/u)
   assert.doesNotMatch(result.finalDraft, /点数是—|\n\s*\n/u)
+
+  const dialogueSession = Session.create(SessionId('host-owned-world-transition-dialogue'))
+  dialogueSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const dialogueContext = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        const seedId = body.match(/\[seed:([^\]]+)\]\[目标人物\]/u)?.[1] ?? ''
+        let text: string
+        if (system.includes('人物参与路由 Worker')) {
+          text = JSON.stringify({ publicCharacterIds: [reimuId] })
+        } else if (system.includes('指定人物认知')) {
+          text = body.includes('# 人物：博丽灵梦')
+            ? JSON.stringify({
+                observation: '几轮过去，棋局仍在继续。',
+                action: '',
+                speech: {
+                  respondsTo: '玩家问是否还要继续等。',
+                  move: 'answer',
+                  focus: '现在就继续。',
+                  effect: '回答玩家并结束等待。',
+                },
+                opportunityDecisions: [],
+                insights: [],
+              })
+            : JSON.stringify({ observation: '棋局仍在继续。', action: '', speech: null, opportunityDecisions: [], insights: [] })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference: `speech:${proseId}:1`,
+            move: 'answer',
+            seedLineIds: [seedId],
+            mechanics: '省略已知前提，直接反问',
+            leftImplicit: '玩家刚才提出的等待选项。',
+            dialogue: '“这还用等？”',
+          }] })
+        } else if (system.includes('对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: '这还用等？' }] })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const dialogueResult = await runStoryTurnPipeline({
+    ctx: dialogueContext,
+    agent: {
+      id: dialogueSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: dialogueSession,
+    } as Agent,
+    store,
+    workspace,
+    turn: 6,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: '请灵梦回答：还要继续等吗？' }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(dialogueResult.finalDraft, `${hostDraft}\n\n博丽灵梦说：“这还用等？”`)
+  assert.equal(dialogueResult.hostOwnedWorldDraft, true)
+  assert.equal(sessionEvents(dialogueSession).some(event => event.type === 'agent-rp/story-stage-request'
+    && (event.data.stage === 'section' || event.data.stage === 'editor')), false)
+  assert.doesNotMatch(dialogueResult.finalDraft, /接过骰子|没人接话|折签仍|没有人动/u)
 
   const fragmentedSession = Session.create(SessionId('compact-world-transition-fragmented'))
   fragmentedSession.append('request/header', {
@@ -2884,9 +2966,9 @@ test('compacts routine world transitions and removes incomplete die values', asy
     })],
     signal: new AbortController().signal,
   })
-  assert.equal(fragmentedResult.finalDraft, compactDraft)
+  assert.equal(fragmentedResult.finalDraft, hostDraft)
   assert.equal(sessionEvents(fragmentedSession).some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'editor'), true)
+    && (event.data.stage === 'section' || event.data.stage === 'editor')), false)
 
   const wrongHandoffSession = Session.create(SessionId('compact-world-transition-wrong-handoff'))
   wrongHandoffSession.append('request/header', {
@@ -2912,7 +2994,7 @@ test('compacts routine world transitions and removes incomplete die values', asy
     })],
     signal: new AbortController().signal,
   })
-  assert.equal(wrongHandoffResult.finalDraft, correctedHandoff)
+  assert.equal(wrongHandoffResult.finalDraft, hostDraft)
   assert.doesNotMatch(wrongHandoffResult.finalDraft, /轮到她再掷/u)
 
   const unownedDetailSession = Session.create(SessionId('compact-world-transition-unowned-detail'))
@@ -2939,9 +3021,9 @@ test('compacts routine world transitions and removes incomplete die values', asy
     })],
     signal: new AbortController().signal,
   })
-  assert.equal(unownedDetailResult.finalDraft, correctedUnownedDetail)
+  assert.equal(unownedDetailResult.finalDraft, hostDraft)
   assert.equal(sessionEvents(unownedDetailSession).some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'editor'), true)
+    && (event.data.stage === 'section' || event.data.stage === 'editor')), false)
   assert.doesNotMatch(unownedDetailResult.finalDraft, /接过骰子|盯着|轻轻叩|折签又挪/u)
 
   const rejectedSession = Session.create(SessionId('compact-world-transition-rejected-editor'))
@@ -2968,6 +3050,76 @@ test('compacts routine world transitions and removes incomplete die values', asy
   })
   assert.equal(rejectedResult.finalDraft, projection.facts.map(fact => fact.text).join(''))
   assert.doesNotMatch(rejectedResult.finalDraft, /点数是—|\n\s*\n/u)
+})
+
+test('compacts repeated routine moves to their first and final authoritative positions', (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-compact-world-moves-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const rolls = [6, 2, 1, 3]
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => rolls.shift()! }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const created = store.create({ format: 2, name: '连续移动压缩' })
+  const configured = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+  })
+  let workspace = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  for (let action = 0; action < 2; action += 1) {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: available.actions[0]!.id,
+    })
+  }
+  workspace = store.save({
+    ...editable(workspace),
+    events: [{
+      id: createStoryEventId(),
+      key: 'turn:1',
+      turn: 1,
+      title: '第一架飞机起飞',
+      summary: '此前的起飞场景已经写完。',
+      evidence: '此前的起飞场景已经写完。',
+      participantIds: [reimuId, marisaId],
+      worldEventSequences: workspace.world!.events.map(event => event.sequence),
+    }],
+  })
+  while (rolls.length > 0 || store.worldTurn(workspace.id)?.actions[0]?.id !== 'roll') {
+    const available = store.worldTurn(workspace.id)!
+    workspace = store.dispatchWorldAction(workspace.id, {
+      format: 0,
+      revision: workspace.revision,
+      cycleId: available.cycleId,
+      actionId: available.actions[0]!.id,
+    })
+  }
+  const pendingSequences = storyPendingWorldEvents(workspace).map(event => event.sequence)
+  const projection = worlds.get(FLYING_CHESS_WORLD_MODULE_ID).projectNarrative(
+    workspace.world!,
+    pendingSequences,
+    resolveStoryPlayWorldContext(workspace),
+  )
+
+  assert.equal(projection.cadence, 'transition')
+  assert.equal(projection.cues.length, 0)
+  assert.deepEqual(projection.facts, [{
+    eventSequences: pendingSequences,
+    retention: 'compressible',
+    text: '几轮下来，博丽灵梦的 1 号飞机从航线第 1 步推进到第 6 步。',
+  }])
 })
 
 test('scaffolds fresh world authoring surfaces without replacing authored work', (context) => {
