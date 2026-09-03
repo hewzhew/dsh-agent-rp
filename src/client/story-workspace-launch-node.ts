@@ -4,11 +4,15 @@ import type {
   ConversationNodeDefinition,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
-import { STORY_WORKSPACES_PATH } from '../story-workspace-protocol.ts'
+import {
+  STORY_WORKSPACES_PATH,
+  type StoryWorkspaceSessionContinuity,
+} from '../story-workspace-protocol.ts'
 
 /** Stable payload rendered by the play-space launch Chat card. */
 export interface StoryWorkspaceLaunchChatData {
   readonly workspaceId: string
+  readonly continuity?: StoryWorkspaceSessionContinuity
 }
 
 /** Current display facts fetched from the authoritative play space. */
@@ -27,6 +31,7 @@ declare module '@deepseek-ai/dsh-client-ui-chat/client' {
 
 interface StoryWorkspaceLaunchState {
   readonly workspaceId?: string
+  readonly continuity?: StoryWorkspaceSessionContinuity
 }
 
 interface StoryWorkspaceReadResponse {
@@ -40,8 +45,25 @@ interface StoryWorkspaceReadResponse {
 }
 
 type StoryWorkspaceSelection =
-  | { readonly kind: 'launch'; readonly workspaceId: string }
+  | { readonly kind: 'launch'; readonly workspaceId: string; readonly continuity?: StoryWorkspaceSessionContinuity }
   | { readonly kind: 'change'; readonly workspaceId?: string }
+
+function launchContinuity(value: unknown): StoryWorkspaceSessionContinuity | undefined | null {
+  if (value === undefined) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (!Number.isSafeInteger(record.turn) || Number(record.turn) <= 0
+    || typeof record.title !== 'string' || record.title.trim() === ''
+    || typeof record.text !== 'string' || record.text.trim() === '' || record.text.length > 6_000
+    || !(record.truncatedStart === undefined || record.truncatedStart === true)
+    || Object.keys(record).some(key => !['turn', 'title', 'text', 'truncatedStart'].includes(key))) return null
+  return {
+    turn: Number(record.turn),
+    title: record.title,
+    text: record.text,
+    ...(record.truncatedStart === true ? { truncatedStart: true } : {}),
+  }
+}
 
 function storyWorkspaceSelectionFromEvent(event: {
   readonly type: string
@@ -54,11 +76,17 @@ function storyWorkspaceSelectionFromEvent(event: {
   if (data.format !== 0 || !(data.workspaceId === undefined
     || (typeof data.workspaceId === 'string' && data.workspaceId !== ''))) return undefined
   if (data.source === 'launch') {
+    const continuity = launchContinuity(data.continuity)
     return event.seq === 0 && data.sourceEventSeq === undefined && typeof data.workspaceId === 'string'
-      ? { kind: 'launch', workspaceId: data.workspaceId }
+      && continuity !== null
+      ? {
+          kind: 'launch',
+          workspaceId: data.workspaceId,
+          ...(continuity === undefined ? {} : { continuity }),
+        }
       : undefined
   }
-  if (data.source !== undefined || !Number.isSafeInteger(data.sourceEventSeq)
+  if (data.source !== undefined || data.continuity !== undefined || !Number.isSafeInteger(data.sourceEventSeq)
     || Number(data.sourceEventSeq) < 0 || Number(data.sourceEventSeq) >= event.seq) return undefined
   return {
     kind: 'change',
@@ -112,7 +140,10 @@ export const storyWorkspaceLaunchDefinition: ConversationNodeDefinition<StoryWor
   start: (_context, match) => {
     const selection = storyWorkspaceSelectionFromEvent(match.event)
     if (selection?.kind !== 'launch') throw new Error('游玩场地启动节点无效')
-    return { workspaceId: selection.workspaceId }
+    return {
+      workspaceId: selection.workspaceId,
+      ...(selection.continuity === undefined ? {} : { continuity: selection.continuity }),
+    }
   },
   update: (context, match) => {
     const selection = storyWorkspaceSelectionFromEvent(match.event)
@@ -129,7 +160,10 @@ export const storyWorkspaceLaunchDefinition: ConversationNodeDefinition<StoryWor
       anchorSeq: context.start.event.seq,
       location: context.start.location,
       visibility: 'visible',
-      data: { workspaceId: context.state.workspaceId },
+      data: {
+        workspaceId: context.state.workspaceId,
+        ...(context.state.continuity === undefined ? {} : { continuity: context.state.continuity }),
+      },
     }
   },
 }

@@ -28,6 +28,7 @@ type SummaryState =
 
 function StoryWorkspaceSessionCard({ node, openStoryWorkspace }: StoryWorkspaceSessionCardProps) {
   const workspaceId = node.data.workspaceId
+  const continuity = node.data.continuity
   const [state, setState] = useState<SummaryState>({ status: 'loading' })
   useEffect(() => {
     let active = true
@@ -46,14 +47,23 @@ function StoryWorkspaceSessionCard({ node, openStoryWorkspace }: StoryWorkspaceS
 
   const name = state.status === 'ready' ? state.summary.name : '已连接的游玩场地'
   return <article className="agent-rp-story-launch-card" data-agent-rp-story-workspace-launch={workspaceId}
+    data-agent-rp-story-resume={continuity === undefined ? undefined : 'true'}
     style={{ '--story-launch-accent': '#d5a64c' } as CSSProperties}>
     <div className="agent-rp-story-launch-heading">
       <span className="agent-rp-story-launch-mark" aria-hidden="true">✦</span>
-      <span className="agent-rp-story-launch-title"><small>游玩场地已连接</small><strong>{name}</strong></span>
+      <span className="agent-rp-story-launch-title"><small>{continuity === undefined
+        ? '游玩场地已连接'
+        : '接续前情'}</small><strong>{name}</strong></span>
     </div>
-    <p className="agent-rp-story-launch-copy">
-      世界规则、人物认知、故事地图与生成流水线会在这个场地里持续更新；聊天只记录实际发生的游玩过程。
-    </p>
+    {continuity === undefined
+      ? <p className="agent-rp-story-launch-copy">
+          世界规则、人物认知、故事地图与生成流水线会在这个场地里持续更新；聊天只记录实际发生的游玩过程。
+        </p>
+      : <section className="agent-rp-story-launch-continuity" aria-label="接续前情">
+          <strong>{continuity.title}</strong>
+          {continuity.truncatedStart === true && <small>较早文字已省略，从上一段末尾接续</small>}
+          <p>{continuity.text}</p>
+        </section>}
     <div className="agent-rp-story-launch-facts" aria-label="场地概况">
       {state.status === 'loading' && <span className="agent-rp-story-launch-fact">正在读取场地…</span>}
       {state.status === 'ready' && <>

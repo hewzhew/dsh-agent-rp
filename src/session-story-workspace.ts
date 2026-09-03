@@ -4,7 +4,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { appendAgentRpSessionEvent } from './session-event-append.ts'
-import type { StoryWorkspaceSnapshot } from './story-workspace-protocol.ts'
+import type {
+  StoryWorkspaceSessionContinuity,
+  StoryWorkspaceSnapshot,
+} from './story-workspace-protocol.ts'
 import { StoryWorkspaceStore } from './story-workspace.ts'
 import { sessionEvents } from './session-events.ts'
 
@@ -15,6 +18,8 @@ export interface SessionStoryWorkspaceSelectionRecord {
   /** Command source for interactive changes; absent only on a launch seed at seq 0. */
   readonly sourceEventSeq?: number
   readonly source?: 'launch'
+  /** Public context shown before the first player input in a newly launched Session. */
+  readonly continuity?: StoryWorkspaceSessionContinuity
 }
 
 declare module '@deepseek-ai/dsh-session' {
@@ -51,6 +56,33 @@ function assertStoryWorkspaceOutputReady(workspace: StoryWorkspaceSnapshot): voi
   }
 }
 
+const STORY_SESSION_CONTINUITY_LIMIT = 6_000
+
+function validContinuity(value: unknown): value is StoryWorkspaceSessionContinuity | undefined {
+  if (value === undefined) return true
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return Number.isSafeInteger(record.turn) && Number(record.turn) > 0
+    && typeof record.title === 'string' && record.title.trim() !== ''
+    && typeof record.text === 'string' && record.text.trim() !== ''
+    && record.text.length <= STORY_SESSION_CONTINUITY_LIMIT
+    && (record.truncatedStart === undefined || record.truncatedStart === true)
+    && Object.keys(record).every(key => ['turn', 'title', 'text', 'truncatedStart'].includes(key))
+}
+
+function storySessionContinuity(workspace: StoryWorkspaceSnapshot): StoryWorkspaceSessionContinuity | undefined {
+  const event = workspace.events.findLast(candidate => candidate.turn > 0 && candidate.evidence.trim() !== '')
+  if (event === undefined) return undefined
+  const evidence = event.evidence.trim()
+  const truncatedStart = evidence.length > STORY_SESSION_CONTINUITY_LIMIT
+  return {
+    turn: event.turn,
+    title: event.title,
+    text: truncatedStart ? evidence.slice(-STORY_SESSION_CONTINUITY_LIMIT) : evidence,
+    ...(truncatedStart ? { truncatedStart: true as const } : {}),
+  }
+}
+
 /** Return the latest explicitly selected story workspace, including a later clear. */
 export function readSessionStoryWorkspaceId(events: readonly SessionEvent[]): string | undefined {
   let active: string | undefined
@@ -63,9 +95,11 @@ export function readSessionStoryWorkspaceId(events: readonly SessionEvent[]): st
       if (event.seq !== 0 || event.data.sourceEventSeq !== undefined || event.data.workspaceId === undefined) {
         throw new Error('游玩场地启动事件无效')
       }
+      if (!validContinuity(event.data.continuity)) throw new Error('游玩场地接续前情无效')
       active = event.data.workspaceId
       continue
     }
+    if (event.data.continuity !== undefined) throw new Error('交互式游玩场地选择不能携带接续前情')
     const sourceEventSeq = event.data.sourceEventSeq
     if (!Number.isSafeInteger(sourceEventSeq)
       || sourceEventSeq! < 0 || sourceEventSeq! >= event.seq) {
@@ -91,6 +125,7 @@ export function createStoryWorkspaceSessionSeed(
   if (workspace.characters.length === 0) throw new Error('游玩场地至少需要一位人物')
   assertStoryWorkspaceOutputReady(workspace)
   const time = Date.now()
+  const continuity = storySessionContinuity(workspace)
   return {
     title: workspace.name,
     seed: [
@@ -99,7 +134,12 @@ export function createStoryWorkspaceSessionSeed(
         seq: SessionSeq(0),
         time,
         ignorable: true,
-        data: { format: 0, workspaceId: workspace.id, source: 'launch' },
+        data: {
+          format: 0,
+          workspaceId: workspace.id,
+          source: 'launch',
+          ...(continuity === undefined ? {} : { continuity }),
+        },
       },
       { type: 'turn/start', seq: SessionSeq(1), time, data: { turn: 1 } },
       { type: 'turn/end', seq: SessionSeq(2), time, data: { turn: 1, reason: { kind: 'completed' } } },

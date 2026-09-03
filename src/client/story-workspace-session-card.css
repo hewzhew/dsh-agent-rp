@@ -67,6 +67,35 @@
   opacity: .72;
 }
 
+.agent-rp-story-launch-continuity {
+  background: color-mix(in srgb, var(--dsw-alias-bg-layer-2, #292a2e) 72%, transparent);
+  border: 1px solid var(--dsw-alias-border-l2, #3d3e43);
+  border-radius: 13px;
+  display: grid;
+  gap: 8px;
+  padding: 13px 14px;
+}
+
+.agent-rp-story-launch-continuity > strong {
+  font-size: 12px;
+  font-weight: 650;
+  opacity: .76;
+}
+
+.agent-rp-story-launch-continuity > small {
+  font-size: 11px;
+  opacity: .5;
+}
+
+.agent-rp-story-launch-continuity > p {
+  font-size: 13px;
+  line-height: 1.75;
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 .agent-rp-story-launch-facts {
   display: flex;
   flex-wrap: wrap;

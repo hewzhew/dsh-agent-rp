@@ -83,6 +83,21 @@ test('projects a launch selection into one visible session-level play-space card
   assert.equal(storyWorkspaceLaunchUrl('workspace / one'), '/api/agent-rp/story-workspaces/workspace%20%2F%20one')
 })
 
+test('projects bounded frozen continuity from the launch event', () => {
+  const continuity = {
+    turn: 7,
+    title: '折签露出',
+    text: '灵梦把第一架木机推进航线。',
+    truncatedStart: true,
+  }
+  assert.deepEqual(projectLaunch(event(0, 'agent-rp/story-workspace-selection', {
+    format: 0,
+    workspaceId: 'ongoing-workspace',
+    source: 'launch',
+    continuity,
+  }))?.data, { workspaceId: 'ongoing-workspace', continuity })
+})
+
 test('classifies interactive changes as updates and rejects malformed launch records', () => {
   assert.deepEqual(storyWorkspaceLaunchDefinition.match(event(2, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'ordinary', sourceEventSeq: 1,
@@ -93,11 +108,26 @@ test('classifies interactive changes as updates and rejects malformed launch rec
   assert.equal(projectLaunch(event(1, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'late', source: 'launch',
   })), null)
+  assert.equal(projectLaunch(event(0, 'agent-rp/story-workspace-selection', {
+    format: 0,
+    workspaceId: 'invalid-continuity',
+    source: 'launch',
+    continuity: { turn: 1, title: '正文', text: '过长'.repeat(3_001) },
+  })), null)
+  assert.equal(storyWorkspaceLaunchDefinition.match(event(2, 'agent-rp/story-workspace-selection', {
+    format: 0,
+    workspaceId: 'ordinary',
+    sourceEventSeq: 1,
+    continuity: { turn: 1, title: '正文', text: '不能随切换事件传递。' },
+  })), null)
 })
 
-test('keeps the launch card on the Session current play space', () => {
+test('keeps the launch card on the Session current play space without leaking launch continuity', () => {
   const launch = event(0, 'agent-rp/story-workspace-selection', {
-    format: 0, workspaceId: 'workspace-one', source: 'launch',
+    format: 0,
+    workspaceId: 'workspace-one',
+    source: 'launch',
+    continuity: { turn: 2, title: '旧场地前情', text: '只属于第一个场地。' },
   })
   const switched = event(4, 'agent-rp/story-workspace-selection', {
     format: 0, workspaceId: 'workspace-two', sourceEventSeq: 3,

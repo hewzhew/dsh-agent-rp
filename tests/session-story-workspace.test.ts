@@ -93,3 +93,18 @@ test('rejects a story workspace without an enabled prose output', (context) => {
   }, /启用至少一个正文分区/u)
   assert.equal(readSessionStoryWorkspaceId(sessionEvents(session)), undefined)
 })
+
+test('rejects malformed frozen continuity in durable Session events', () => {
+  assert.throws(() => readSessionStoryWorkspaceId([{
+    type: 'agent-rp/story-workspace-selection',
+    seq: 0,
+    time: 1,
+    ignorable: true,
+    data: {
+      format: 0,
+      workspaceId: 'workspace',
+      source: 'launch',
+      continuity: { turn: 1, title: '正文', text: '正文', unexpected: true },
+    },
+  } as never]), /接续前情无效/u)
+})

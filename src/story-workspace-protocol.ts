@@ -13,6 +13,14 @@ export const STORY_WORKSPACES_PATH = '/api/agent-rp/story-workspaces'
 /** Internal non-prose input used when the director leaves the next turn unconstrained. */
 export const STORY_AUTO_ADVANCE_INPUT = '🎬 自由推进下一回合'
 
+/** Bounded public story context frozen when a new Session joins an ongoing play space. */
+export interface StoryWorkspaceSessionContinuity {
+  readonly turn: number
+  readonly title: string
+  readonly text: string
+  readonly truncatedStart?: true
+}
+
 /** Editable role assigned to one ordered output section. */
 export type StoryOutputKind = 'prose' | 'character' | 'history'
 

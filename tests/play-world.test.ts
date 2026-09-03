@@ -3244,20 +3244,70 @@ test('keeps executable world state out of whole-workspace edits', async (context
     workspaceId: installed.id,
   })
   assert.equal(launch.kind, 'story-workspace')
-  const prepared = createStoryWorkspaceSessionSeed(store, installed.id)
+  const freshPrepared = createStoryWorkspaceSessionSeed(store, installed.id)
+  const freshLaunchEvent = freshPrepared.seed[0]
+  assert.equal(freshLaunchEvent?.type, 'agent-rp/story-workspace-selection')
+  if (freshLaunchEvent?.type !== 'agent-rp/story-workspace-selection') {
+    throw new Error('expected fresh story workspace launch')
+  }
+  assert.equal(freshLaunchEvent.data.continuity, undefined)
+  const earlier = '不会被选中的较早正文。'
+  const latest = `开头应被截掉：${'后续正文'.repeat(1_500)}`
+  const launchReady = store.save({
+    ...editable(installed),
+    events: [
+      {
+        id: createStoryEventId(),
+        key: 'migration-history',
+        turn: 0,
+        title: '迁移前历史',
+        summary: earlier,
+        evidence: earlier,
+        participantIds: [first, second],
+      },
+      {
+        id: createStoryEventId(),
+        key: 'completed-turn',
+        turn: 4,
+        title: '上一幕末尾',
+        summary: '上一回合已经完成。',
+        evidence: latest,
+        participantIds: [first, second],
+      },
+      {
+        id: createStoryEventId(),
+        key: 'empty-later-turn',
+        turn: 5,
+        title: '尚无公开正文',
+        summary: '',
+        evidence: '',
+        participantIds: [first, second],
+      },
+    ],
+  })
+  const prepared = createStoryWorkspaceSessionSeed(store, launchReady.id)
   assert.equal(prepared.title, '场地')
-  assert.equal(readSessionStoryWorkspaceId(prepared.seed), installed.id)
+  assert.equal(readSessionStoryWorkspaceId(prepared.seed), launchReady.id)
   assert.deepEqual(prepared.seed.map(event => event.type), [
     'agent-rp/story-workspace-selection',
     'turn/start',
     'turn/end',
   ])
   assert.equal(prepared.seed[0]?.ignorable, true)
+  const launchEvent = prepared.seed[0]
+  assert.equal(launchEvent?.type, 'agent-rp/story-workspace-selection')
+  if (launchEvent?.type !== 'agent-rp/story-workspace-selection') throw new Error('expected story workspace launch')
+  assert.deepEqual(launchEvent.data.continuity, {
+    turn: 4,
+    title: '上一幕末尾',
+    text: latest.slice(-6_000),
+    truncatedStart: true,
+  })
   const launched = Session.create(SessionId('play-world-launch'), prepared.seed)
   assert.deepEqual(launched.deriveMessages(), [])
   assert.equal(sessionEvents(launched).findLast(event => event.type === 'turn/end')?.data.turn, 1)
-  const renamed = store.save({ ...editable(installed), name: '新名称' })
-  assert.deepEqual(renamed.world, installed.world)
+  const renamed = store.save({ ...editable(launchReady), name: '新名称' })
+  assert.deepEqual(renamed.world, launchReady.world)
   const boundResult = store.bindCharacterActor(renamed.id, {
     format: 0,
     revision: renamed.revision,

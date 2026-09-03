@@ -11588,6 +11588,17 @@ function roleplayComposerDockComponent(
     const hidden = new Map<HTMLElement, { readonly display: string; readonly priority: string }>()
     const refresh = (): void => {
       for (const item of scroll.querySelectorAll<HTMLElement>('[data-chat-flow-kind="agent-rp-story-workspace-launch"]')) {
+        const carriesContinuity = item.matches('[data-agent-rp-story-resume="true"]')
+          || item.querySelector('[data-agent-rp-story-resume="true"]') !== null
+        if (carriesContinuity) {
+          const previous = hidden.get(item)
+          if (previous !== undefined) {
+            if (previous.display === '') item.style.removeProperty('display')
+            else item.style.setProperty('display', previous.display, previous.priority)
+            hidden.delete(item)
+          }
+          continue
+        }
         if (!hidden.has(item)) {
           hidden.set(item, {
             display: item.style.getPropertyValue('display'),
@@ -11599,7 +11610,7 @@ function roleplayComposerDockComponent(
     }
     refresh()
     const observer = new MutationObserver(refresh)
-    observer.observe(scroll, { childList: true, subtree: true })
+    observer.observe(scroll, { attributes: true, childList: true, subtree: true })
     return () => {
       observer.disconnect()
       for (const [item, previous] of hidden) {
