@@ -565,6 +565,8 @@ interface StoryNarrativeSource {
   readonly id: string
   readonly kind: 'world-fact' | 'public-action' | 'approved-dialogue'
   readonly text: string
+  /** Character whose first-person action is rendered through the public narrator. */
+  readonly characterName?: string
   readonly objectNames: readonly string[]
   readonly required: boolean
 }
@@ -2465,7 +2467,13 @@ function parseSourcePassages(
       }
       return source
     })
-    const passage = boundedString(record.text, `${subject} passage[${String(index)}].text`, 8_192).trim()
+    const rawPassage = boundedString(record.text, `${subject} passage[${String(index)}].text`, 8_192).trim()
+    const publicActionSource = passageSources.length === 1 && passageSources[0]?.kind === 'public-action'
+      ? passageSources[0]
+      : undefined
+    const passage = publicActionSource?.characterName === undefined || !rawPassage.startsWith('我')
+      ? rawPassage
+      : attributePublicAction(publicActionSource.characterName, rawPassage)
     if (passage === '' || /^##\s+/mu.test(passage)) throw new Error(`${subject} passage[${String(index)}] 正文无效`)
     const sourceFailures = passageSources.flatMap(source => {
       const failure = narrativeSourceFailure(source, passage)
@@ -2530,6 +2538,59 @@ function parseSourceBoundSection(
   if (Object.keys(record).some(key => key !== 'passages')) throw new Error(`${subject}字段无效`)
   const sourcePassages = parseSourcePassages(record.passages, subject, sources, approvedDialogue)
   return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
+}
+
+function recoverValidSourcePassages(
+  text: string,
+  subject: string,
+  sources: readonly StoryNarrativeSource[],
+  approvedDialogue: ReadonlySet<string>,
+): Pick<StorySectionDraft, 'sourcePassages' | 'text'> | undefined {
+  let record: Record<string, unknown>
+  try {
+    record = jsonObject(text, subject)
+  } catch {
+    return undefined
+  }
+  if (Object.keys(record).some(key => key !== 'passages') || !Array.isArray(record.passages)) return undefined
+  const sourceById = new Map(sources.map(source => [source.id, source]))
+  const usedSourceIds = new Set<string>()
+  const retained: StoryTurnSourcePassage[] = []
+  for (const [index, value] of record.passages.entries()) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const passage = value as Record<string, unknown>
+    if (!Array.isArray(passage.sourceIds) || passage.sourceIds.length === 0
+      || passage.sourceIds.some(sourceId => typeof sourceId !== 'string')) continue
+    const sourceIds = passage.sourceIds as readonly string[]
+    if (new Set(sourceIds).size !== sourceIds.length || sourceIds.some(sourceId => usedSourceIds.has(sourceId))) continue
+    const passageSources = sourceIds.flatMap(sourceId => {
+      const source = sourceById.get(sourceId)
+      return source === undefined ? [] : [{ ...source, required: true }]
+    })
+    if (passageSources.length !== sourceIds.length) continue
+    try {
+      const parsed = parseSourcePassages(
+        [passage],
+        `${subject}恢复段落[${String(index)}]`,
+        passageSources,
+        approvedDialogue,
+      )[0]
+      if (parsed === undefined) continue
+      retained.push(parsed)
+      sourceIds.forEach(sourceId => usedSourceIds.add(sourceId))
+    } catch {
+      // One invalid passage cannot authorize any of its text or source ids.
+    }
+  }
+  if (retained.length === 0 || sources.some(source => source.required && !usedSourceIds.has(source.id))) {
+    return undefined
+  }
+  try {
+    const sourcePassages = parseSourcePassages(retained, subject, sources, approvedDialogue)
+    return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
+  } catch {
+    return undefined
+  }
 }
 
 function parseEditedSections(
@@ -2627,6 +2688,7 @@ function completeNarrativeSentence(value: string): string {
 function attributePublicAction(characterName: string, action: string): string {
   const text = action.trim()
   if (text.startsWith(characterName)) return completeNarrativeSentence(text)
+  if (text.startsWith('我')) return completeNarrativeSentence(`${characterName}${text.slice(1)}`)
   if (/^[她他]/u.test(text)) return completeNarrativeSentence(`${characterName}${text.slice(1)}`)
   const nameCharacters = [...characterName]
   const shortName = Array.from({ length: Math.max(0, nameCharacters.length - 1) }, (_value, index) =>
@@ -3976,7 +4038,8 @@ function renderNarrativeAuthority(
     ...allowedPublicActions.map(action => ({
       id: action.sourceId,
       kind: 'public-action' as const,
-      text: action.action,
+      text: attributePublicAction(action.characterName, action.action),
+      characterName: action.characterName,
       objectNames: [],
       required: true,
     })),
@@ -5275,7 +5338,18 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             try {
               return parseDraft(retry.text)
             } catch {
-              return deterministicWorldSection
+              const recovered = recoverValidSourcePassages(
+                retry.text,
+                `${section.name}分区正文`,
+                narrativeAuthority.sources,
+                approvedDialogue,
+              )
+              return recovered === undefined ? deterministicWorldSection : {
+                sectionId: section.id,
+                name: section.name,
+                kind: section.kind,
+                ...recovered,
+              }
             }
           }
         }

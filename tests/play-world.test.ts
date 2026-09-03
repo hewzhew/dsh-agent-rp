@@ -2817,7 +2817,27 @@ test('shows recorded facts to every character but only offers a cue to its named
     sourceIds: [`action:${reimuId}`],
     text: '博丽灵梦捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
   }]
-  const sceneText = scenePassages.map(passage => passage.text).join('\n\n')
+  const compressibleSourceIds = projection.facts
+    .filter(fact => fact.retention === 'compressible')
+    .map(fact => `world:${fact.eventSequences.join('.')}`)
+  const essentialSourceIds = projection.facts
+    .filter(fact => fact.retention === 'essential')
+    .map(fact => `world:${fact.eventSequences.join('.')}`)
+  const recoveredPassages = [{
+    sourceIds: essentialSourceIds,
+    text: '一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
+  }, {
+    sourceIds: [`action:${reimuId}`],
+    text: '博丽灵梦捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
+  }]
+  const recoveryAttemptPassages = [{
+    sourceIds: compressibleSourceIds,
+    text: '几轮过去，一枚骰子在两人之间滚了又停，博丽灵梦与雾雨魔理沙的飞机都没有移动。博丽灵梦没有说话。',
+  }, recoveredPassages[0]!, {
+    sourceIds: [`action:${reimuId}`],
+    text: '我捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
+  }]
+  const recoveredText = recoveredPassages.map(passage => passage.text).join('\n\n')
   const characterBodies: string[] = []
   let directorBody = ''
   let sectionBody = ''
@@ -2872,7 +2892,7 @@ test('shows recorded facts to every character but only offers a cue to its named
                       : scenePassages })
                     return sectionAttempts === 1
                       ? serialized.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/gu, '“$1”').replace(/”:/gu, '”：')
-                      : serialized
+                      : JSON.stringify({ passages: recoveryAttemptPassages })
                   })()
                 : system.includes('最终正文编辑 Worker')
                   ? JSON.stringify({ sections: [{ sectionId: proseId, passages: scenePassages.slice().reverse() }] })
@@ -2900,10 +2920,10 @@ test('shows recorded facts to every character but only offers a cue to its named
     signal: new AbortController().signal,
   })
 
-  assert.equal(result.finalDraft, sceneText)
-  assert.match(result.finalDraft, /几轮过去/u)
-  assert.match(result.finalDraft, /一枚骰子/u)
+  assert.equal(result.finalDraft, recoveredText)
+  assert.match(result.finalDraft, /一阵风忽然掀起棋盘一角/u)
   assert.doesNotMatch(result.finalDraft, /掷出 1|第 \d+ 回合/u)
+  assert.doesNotMatch(result.finalDraft, /没有说话/u)
   const reimuBody = characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
   const marisaBody = characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
   assert.match(reimuBody, /棋盘被风掀动/u)
@@ -2935,7 +2955,7 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.match(sectionBody, /校验失败不是把小说场景缩成事件摘要的理由/u)
   assert.equal(sectionAttempts, 2)
   assert.match(editorBody, /带 sourcePassages 的 prose/u)
-  assert.deepEqual(result.finalSections[0]?.sourcePassages, scenePassages)
+  assert.deepEqual(result.finalSections[0]?.sourcePassages, recoveredPassages)
   assert.equal(result.hostOwnedWorldDraft, undefined)
   assert.deepEqual(result.privateCharacterStates, [{
     characterId: marisaId,
