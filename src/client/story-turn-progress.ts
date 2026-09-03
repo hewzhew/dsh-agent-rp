@@ -3,6 +3,13 @@
 import type { AgentRpStoryTurnProgress, AgentRpStoryTurnStage } from '../projection-types.ts'
 import type { StoryWorkspaceSnapshot } from '../story-workspace-protocol.ts'
 
+/** Public aggregate used to name one native DSH Turn-process disclosure. */
+export interface StoryTurnProcessSummary {
+  readonly status: 'running' | 'succeeded' | 'failed' | 'aborted'
+  readonly stageCount: number
+  readonly completedStageCount: number
+}
+
 /** Human labels for the durable story Worker stages. */
 export const storyTurnStageLabels: Readonly<Record<AgentRpStoryTurnStage, string>> = {
   'world-action': '推进场地规则',
@@ -69,4 +76,14 @@ export function storyTurnDuration(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60)
   const remainder = seconds % 60
   return remainder === 0 ? `${String(minutes)} 分钟` : `${String(minutes)} 分 ${String(remainder)} 秒`
+}
+
+/** Name the native Turn-process row without exposing Worker prompts or outputs. */
+export function storyTurnProcessLabel(summary: StoryTurnProcessSummary): string {
+  const stages = summary.stageCount === 0 ? '' : ` · ${String(summary.stageCount)} 个阶段`
+  if (summary.status === 'succeeded') return `故事回合${stages}`
+  if (summary.status === 'aborted') return `故事回合已中止${stages}`
+  if (summary.status === 'failed') return `故事回合未完成${stages}`
+  if (summary.stageCount === 0) return '正在准备故事回合'
+  return `执行故事回合 · ${String(summary.completedStageCount)}/${String(summary.stageCount)} 个阶段`
 }

@@ -1,8 +1,12 @@
 /** Native Chat projections for story Workers and executable-world evidence. */
 
-import type { ConversationNodeDefinition } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {
+  ConversationLocationData,
+  ConversationNodeDefinition,
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { AgentRpStoryTurnStage } from '../projection-types.ts'
+import type { StoryTurnProcessSummary } from './story-turn-progress.ts'
 
 /** Privacy-safe state for one Worker request in the native timeline. */
 export interface StoryWorkspaceStageChatData {
@@ -38,12 +42,29 @@ export interface StoryWorkspaceWorldEvidenceChatData {
   readonly events: readonly StoryWorkspaceWorldEvidenceEvent[]
 }
 
+/** Privacy-safe story-pipeline aggregate attached to one native DSH Turn. */
+export interface StoryWorkspaceProcessTurnData extends StoryTurnProcessSummary {
+  readonly sessionId: string
+  readonly workspaceId: string
+  readonly workspaceRevision: number
+  readonly turn: number
+  readonly stepCount: number
+  readonly failedStageCount: number
+}
+
 declare module '@deepseek-ai/dsh-client-ui-chat/client' {
   interface ChatNodeDataMap {
     /** One privacy-safe Worker request projected beside native DSH process rows. */
     'agent-rp-story-stage': StoryWorkspaceStageChatData
     /** Folded authoritative rule evidence for one visible story reply. */
     'agent-rp-story-world-evidence': StoryWorkspaceWorldEvidenceChatData
+  }
+}
+
+declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
+  interface ConversationTurnDataMap {
+    /** Story-pipeline summary used by the native Turn-process disclosure. */
+    'agent-rp-story-process': StoryWorkspaceProcessTurnData
   }
 }
 
@@ -57,6 +78,18 @@ interface StoryTurnIdentity {
   readonly workspaceRevision: number
   readonly turn: number
   readonly step: number
+}
+
+type StoryWorkspaceProcessStatus = StoryWorkspaceProcessTurnData['status']
+
+interface StoryWorkspaceProcessState {
+  readonly turn: number
+  readonly sessionId?: string
+  readonly workspaceId?: string
+  readonly workspaceRevision?: number
+  readonly steps: ReadonlySet<number>
+  readonly stages: ReadonlyMap<string, 'running' | 'succeeded' | 'failed'>
+  readonly status: 'idle' | StoryWorkspaceProcessStatus
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -79,6 +112,107 @@ function identityFromData(value: unknown): StoryTurnIdentity | undefined {
     turn: Number(data.turn),
     step: Number(data.step),
   }
+}
+
+function storyProcessIdentity(event: { readonly type: string; readonly data: unknown }): StoryTurnIdentity | undefined {
+  const data = record(event.data)
+  const expectedFormat = event.type === 'agent-rp/story-turn-brief' ? 1 : 0
+  if (data?.format !== expectedFormat) return undefined
+  return identityFromData(data)
+}
+
+function sameStoryProcess(
+  state: StoryWorkspaceProcessState,
+  identity: StoryTurnIdentity,
+): boolean {
+  return state.turn === identity.turn
+    && (state.sessionId === undefined || state.sessionId === identity.sessionId)
+    && (state.workspaceId === undefined || state.workspaceId === identity.workspaceId)
+}
+
+function beginStoryProcess(
+  state: StoryWorkspaceProcessState,
+  identity: StoryTurnIdentity,
+): StoryWorkspaceProcessState {
+  if (!sameStoryProcess(state, identity)) return state
+  const steps = new Set(state.steps)
+  steps.add(identity.step)
+  return {
+    ...state,
+    sessionId: identity.sessionId,
+    workspaceId: identity.workspaceId,
+    workspaceRevision: Math.max(state.workspaceRevision ?? 0, identity.workspaceRevision),
+    steps,
+    status: 'running',
+  }
+}
+
+function updateStoryProcess(
+  state: StoryWorkspaceProcessState,
+  event: { readonly type: string; readonly data: unknown },
+): StoryWorkspaceProcessState {
+  const identity = storyProcessIdentity(event)
+  if (identity === undefined || !sameStoryProcess(state, identity)) return state
+  let current = state.sessionId === undefined ? beginStoryProcess(state, identity) : state
+  if (event.type === 'agent-rp/story-turn-start') return beginStoryProcess(current, identity)
+  current = {
+    ...current,
+    workspaceRevision: Math.max(current.workspaceRevision ?? 0, identity.workspaceRevision),
+  }
+  if (event.type === 'agent-rp/story-stage-request') {
+    const request = requestFromEvent({ ...event, time: 0 })
+    if (request === undefined || current.stages.has(request.requestId)) return current
+    const stages = new Map(current.stages)
+    stages.set(request.requestId, 'running')
+    return { ...current, stages }
+  }
+  if (event.type === 'agent-rp/story-stage-result') {
+    const result = resultFromEvent({ ...event, time: 0 })
+    if (result === undefined || !current.stages.has(result.requestId)) return current
+    const stages = new Map(current.stages)
+    stages.set(result.requestId, result.status === 'failed' ? 'failed' : 'succeeded')
+    return { ...current, stages }
+  }
+  if (event.type === 'agent-rp/story-turn-brief') return { ...current, status: 'succeeded' }
+  if (event.type === 'agent-rp/story-turn-stopped') {
+    const data = record(event.data)
+    if (data?.outcome === 'aborted' || data?.outcome === 'failed') {
+      return { ...current, status: data.outcome }
+    }
+  }
+  return current
+}
+
+function storyProcessData(state: StoryWorkspaceProcessState): StoryWorkspaceProcessTurnData | undefined {
+  if (state.status === 'idle' || state.sessionId === undefined || state.workspaceId === undefined
+    || state.workspaceRevision === undefined) return undefined
+  const statuses = [...state.stages.values()]
+  return {
+    sessionId: state.sessionId,
+    workspaceId: state.workspaceId,
+    workspaceRevision: state.workspaceRevision,
+    turn: state.turn,
+    stepCount: state.steps.size,
+    stageCount: statuses.length,
+    completedStageCount: statuses.filter(status => status !== 'running').length,
+    failedStageCount: statuses.filter(status => status === 'failed').length,
+    status: state.status,
+  }
+}
+
+function sameStoryProcessData(
+  left: StoryWorkspaceProcessTurnData,
+  right: StoryWorkspaceProcessTurnData,
+): boolean {
+  return left.sessionId === right.sessionId
+    && left.workspaceId === right.workspaceId
+    && left.workspaceRevision === right.workspaceRevision
+    && left.turn === right.turn
+    && left.stepCount === right.stepCount
+    && left.stageCount === right.stageCount
+    && left.completedStageCount === right.completedStageCount
+    && left.failedStageCount === right.failedStageCount
+    && left.status === right.status
 }
 
 function stageNodeId(data: Pick<StoryWorkspaceStageChatData, 'sessionId' | 'requestId'>): string {
@@ -230,6 +364,51 @@ export const storyWorkspaceWorldEvidenceDefinition: ConversationNodeDefinition<S
       location: context.start.location,
       visibility: 'visible',
       data: context.state,
+    }
+  },
+}
+
+/** Publish one story-pipeline summary onto the enclosing native DSH Turn. */
+export const storyWorkspaceProcessDefinition: ConversationNodeDefinition<StoryWorkspaceProcessState> = {
+  kind: 'agent-rp-story-process',
+  match: (event) => {
+    const type: string = event.type
+    if (type === 'turn/start') {
+      const data = record(event.data)
+      return Number.isSafeInteger(data?.turn) && Number(data?.turn) >= 0
+        ? { id: String(data?.turn), role: 'start' }
+        : null
+    }
+    if (type !== 'agent-rp/story-turn-start'
+      && type !== 'agent-rp/story-stage-request'
+      && type !== 'agent-rp/story-stage-result'
+      && type !== 'agent-rp/story-turn-brief'
+      && type !== 'agent-rp/story-turn-stopped') return null
+    const identity = storyProcessIdentity(event)
+    return identity === undefined ? null : { id: String(identity.turn), role: 'update' }
+  },
+  start: (_context, match) => {
+    if (match.event.type !== 'turn/start') throw new Error('故事回合过程必须由 turn/start 开始')
+    return {
+      turn: match.event.data.turn,
+      steps: new Set(),
+      stages: new Map(),
+      status: 'idle',
+    }
+  },
+  update: (context, match) => updateStoryProcess(context.state, match.event),
+  publication: () => 'immediate',
+  buildLocationData: (context, scope, previous): ConversationLocationData | null => {
+    if (scope !== 'turn' || context.state === undefined) return null
+    const value = storyProcessData(context.state)
+    if (value === undefined) return null
+    if (previous?.kind === 'turn' && previous.key === 'agent-rp-story-process'
+      && sameStoryProcessData(previous.value, value)) return previous
+    return {
+      kind: 'turn',
+      turn: context.state.turn,
+      key: 'agent-rp-story-process',
+      value,
     }
   },
 }

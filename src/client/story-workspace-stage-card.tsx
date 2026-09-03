@@ -1,13 +1,23 @@
 /** Native Chat rows for story Workers and authoritative world evidence. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { DisclosureRow, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import {
+  DisclosureRow,
+  IconChevronDownOutline14,
+  StateDot,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { useEffect, useState } from 'react'
 import { STORY_WORKSPACES_PATH } from '../story-workspace-protocol.ts'
-import { storyTurnDuration, storyTurnStageLabel } from './story-turn-progress.ts'
 import {
+  storyTurnDuration,
+  storyTurnProcessLabel,
+  storyTurnStageLabel,
+} from './story-turn-progress.ts'
+import {
+  storyWorkspaceProcessDefinition,
   storyWorkspaceStageDefinition,
   storyWorkspaceWorldEvidenceDefinition,
   type StoryWorkspaceStageChatData,
@@ -16,6 +26,52 @@ import css from './story-workspace-stage-card.css?raw'
 
 type StoryWorkspaceStageProps = PropsRuntime<'conversation.chat.node', 'agent-rp-story-stage'>
 type StoryWorkspaceWorldEvidenceProps = PropsRuntime<'conversation.chat.node', 'agent-rp-story-world-evidence'>
+
+function nativeTurnProcessLabel(
+  node: ChatNodeViewProps<'turn-process'>['node'],
+  t: ChatNodeViewProps<'turn-process'>['t'],
+): string {
+  const labels: string[] = []
+  if (node.data.toolCallCount > 0) {
+    labels.push(t(node.data.toolCallCount === 1
+      ? 'message.turnProcess.toolCalls.one'
+      : 'message.turnProcess.toolCalls.other', { count: node.data.toolCallCount }))
+  }
+  if (node.data.messageCount > 0) {
+    labels.push(t(node.data.messageCount === 1
+      ? 'message.turnProcess.messages.one'
+      : 'message.turnProcess.messages.other', { count: node.data.messageCount }))
+  }
+  if (node.data.subagentCount > 0) {
+    labels.push(t(node.data.subagentCount === 1
+      ? 'message.turnProcess.subagents.one'
+      : 'message.turnProcess.subagents.other', { count: node.data.subagentCount }))
+  }
+  return labels.length === 0
+    ? t('message.turnProcess.thoughtForAWhile')
+    : labels.join(t('message.turnProcess.separator'))
+}
+
+function StoryWorkspaceTurnProcess({
+  node, turnProcess, useTurnData, t,
+}: ChatNodeViewProps<'turn-process'>) {
+  if (turnProcess === undefined) throw new Error('turn-process 节点缺少所属过程')
+  if (!turnProcess.foldable) return null
+  const story = useTurnData('agent-rp-story-process')
+  const open = turnProcess.open
+  const label = story === undefined ? nativeTurnProcessLabel(node, t) : storyTurnProcessLabel(story)
+  return <button type="button" className="agent-rp-story-turn-process"
+      data-open={open || undefined} data-agent-rp-story-turn-process={story === undefined ? undefined : story.status}
+      data-turn-process={node.data.turn} data-turn-process-messages={node.data.messageCount}
+      data-turn-process-tool-calls={node.data.toolCallCount} data-turn-process-subagents={node.data.subagentCount}
+      aria-expanded={open} onClick={(event) => {
+        event.currentTarget.focus()
+        turnProcess.setOpen(!open)
+      }}>
+    <span className="agent-rp-story-turn-process-label">{label}</span>
+    <IconChevronDownOutline14 className="agent-rp-story-turn-process-chevron" />
+  </button>
+}
 
 async function readWorkspaceLabels(workspaceId: string, signal: AbortSignal): Promise<Readonly<Record<string, string>>> {
   const response = await fetch(`${STORY_WORKSPACES_PATH}/${encodeURIComponent(workspaceId)}`, {
@@ -103,6 +159,10 @@ function StoryWorkspaceWorldEvidence({ node }: StoryWorkspaceWorldEvidenceProps)
 /** Register the story-stage projections, renderers, and apply-lifetime styles. */
 export function installStoryWorkspaceStageCard(ctx: Context): void {
   ctx.effect(
+    () => ctx.uiConversation.events.register(storyWorkspaceProcessDefinition),
+    'agent-rp: summarize story Turn process',
+  )
+  ctx.effect(
     () => ctx.uiConversation.events.register(storyWorkspaceStageDefinition),
     'agent-rp: project story Worker stage',
   )
@@ -125,4 +185,10 @@ export function installStoryWorkspaceStageCard(ctx: Context): void {
     name: 'conversation.chat.node',
     key: 'agent-rp-story-world-evidence',
   }, StoryWorkspaceWorldEvidence))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node',
+    key: 'turn-process',
+    locale: 'chat',
+    priority: -10,
+  }, StoryWorkspaceTurnProcess))
 }

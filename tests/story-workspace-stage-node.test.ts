@@ -7,10 +7,16 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { storyTurnProgressText, storyTurnStageLabel } from '../src/client/story-turn-progress.ts'
 import {
+  storyTurnProcessLabel,
+  storyTurnProgressText,
+  storyTurnStageLabel,
+} from '../src/client/story-turn-progress.ts'
+import {
+  storyWorkspaceProcessDefinition,
   storyWorkspaceStageDefinition,
   storyWorkspaceWorldEvidenceDefinition,
+  type StoryWorkspaceProcessTurnData,
   type StoryWorkspaceStageChatData,
   type StoryWorkspaceWorldEvidenceChatData,
 } from '../src/client/story-workspace-stage-node.ts'
@@ -57,6 +63,42 @@ function project<State>(
     state = definition.update({ ...base, matches, state }, match)
   }
   return definition.buildViewNode?.({ ...base, matches, state }) as ChatConversationViewNode | null
+}
+
+function projectStoryProcess(values: readonly ProjectEvent[]): StoryWorkspaceProcessTurnData | undefined {
+  const [first, ...rest] = values
+  if (first === undefined) throw new Error('turn start required')
+  const firstResult = storyWorkspaceProcessDefinition.match(first)
+  if (firstResult?.role !== 'start') throw new Error('first event must start the process')
+  const start: ConversationStartMatch = {
+    event: first as SessionEvent,
+    role: 'start',
+    location: { kind: 'session' },
+  }
+  const matches: ConversationMatch[] = [start]
+  const base = {
+    key: `agent-rp-story-process:${firstResult.id}`,
+    kind: storyWorkspaceProcessDefinition.kind,
+    id: firstResult.id,
+    matches,
+    start,
+    current: new Map(),
+  }
+  let state = storyWorkspaceProcessDefinition.start({ ...base, state: undefined }, start, { previous: () => undefined })
+  for (const value of rest) {
+    const result = storyWorkspaceProcessDefinition.match(value)
+    if (result?.role !== 'update' || result.id !== firstResult.id) throw new Error('event must update the same process')
+    const match: ConversationMatch = {
+      event: value as SessionEvent,
+      role: 'update',
+      location: { kind: 'session' },
+    }
+    matches.push(match)
+    state = storyWorkspaceProcessDefinition.update({ ...base, matches, state }, match)
+  }
+  const value = storyWorkspaceProcessDefinition
+    .buildLocationData?.({ ...base, matches, state }, 'turn', null)?.value
+  return value as StoryWorkspaceProcessTurnData | undefined
 }
 
 const identity = {
@@ -180,4 +222,62 @@ test('names each dialogue pass by its actual responsibility', () => {
   assert.equal(storyTurnStageLabel('voice', 'review:reimu:1'), '审校人物对白')
   assert.equal(storyTurnStageLabel('voice', 'retry-draft:reimu:1'), '重写对白候选')
   assert.equal(storyTurnStageLabel('voice', 'retry-review:reimu:1'), '复核人物对白')
+})
+
+test('summarizes story stages on the enclosing native Turn process', () => {
+  const data = projectStoryProcess([
+    event(1, 10, 'turn/start', { turn: identity.turn }),
+    event(2, 20, 'agent-rp/story-turn-start', { format: 0, ...identity }),
+    event(3, 30, 'agent-rp/story-stage-request', {
+      format: 0, ...identity, requestId: 'character-reimu', stage: 'character', subjectId: 'reimu', dispatch: {},
+    }),
+    event(4, 40, 'agent-rp/story-stage-request', {
+      format: 0, ...identity, requestId: 'section-main', stage: 'section', subjectId: 'main', dispatch: {},
+    }),
+    event(5, 50, 'agent-rp/story-stage-result', {
+      format: 0, ...identity, requestId: 'section-main', requestSeq: 4, stage: 'section', subjectId: 'main',
+      result: { kind: 'success', text: 'private output' },
+    }),
+    event(6, 60, 'agent-rp/story-stage-result', {
+      format: 0, ...identity, requestId: 'character-reimu', requestSeq: 3, stage: 'character', subjectId: 'reimu',
+      result: { kind: 'failure', failure: 'provider', detail: { code: 'BUSY', message: '稍后重试' } },
+    }),
+    event(7, 70, 'agent-rp/story-turn-brief', { format: 1, ...identity }),
+  ])
+  assert.deepEqual(data, {
+    sessionId: identity.sessionId,
+    workspaceId: identity.workspaceId,
+    workspaceRevision: identity.workspaceRevision,
+    turn: identity.turn,
+    stepCount: 1,
+    stageCount: 2,
+    completedStageCount: 2,
+    failedStageCount: 1,
+    status: 'succeeded',
+  })
+  assert.equal(data === undefined ? undefined : storyTurnProcessLabel(data), '故事回合 · 2 个阶段')
+})
+
+test('does not count a stage result without its public request row', () => {
+  const data = projectStoryProcess([
+    event(1, 10, 'turn/start', { turn: identity.turn }),
+    event(2, 20, 'agent-rp/story-turn-start', { format: 0, ...identity }),
+    event(3, 30, 'agent-rp/story-stage-result', {
+      format: 0, ...identity, requestId: 'unknown', requestSeq: 99, stage: 'editor',
+      result: { kind: 'success', text: 'hidden' },
+    }),
+    event(4, 40, 'agent-rp/story-turn-stopped', { format: 0, ...identity, outcome: 'aborted' }),
+  ])
+  assert.deepEqual(data, {
+    sessionId: identity.sessionId,
+    workspaceId: identity.workspaceId,
+    workspaceRevision: identity.workspaceRevision,
+    turn: identity.turn,
+    stepCount: 1,
+    stageCount: 0,
+    completedStageCount: 0,
+    failedStageCount: 0,
+    status: 'aborted',
+  })
+  assert.equal(data === undefined ? undefined : storyTurnProcessLabel(data), '故事回合已中止')
 })
