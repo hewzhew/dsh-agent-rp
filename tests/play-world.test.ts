@@ -1328,6 +1328,16 @@ test('rejects missing and cyclic scene-card prerequisites', () => {
     { ...baseCard, id: 'first', afterCardId: 'second' },
     { ...baseCard, id: 'second', afterCardId: 'first' },
   ])), /形成了循环/u)
+  assert.throws(() => module.create(contextWith([{
+    ...baseCard,
+    id: 'unaddressed-opportunity',
+    cue: {
+      kind: 'opportunity',
+      text: '这项机会没有可以回应的人物。',
+      responders: 'none',
+      opportunity: { kind: 'speech', move: 'propose', targets: 'opponents' },
+    },
+  }])), /事件牌 1无效/u)
 })
 
 test('keeps narrative opportunities private and durable until their explicit disposition', () => {
@@ -1386,7 +1396,7 @@ test('keeps narrative opportunities private and durable until their explicit dis
     characterId: reimuId,
     disposition: 'use',
     responderId: marisaId,
-  }, playContext), /缺少有效的公开提问/u)
+  }, playContext), /缺少有效的公开话语/u)
   const usedLater = deferred.module.resolveCharacterOpportunity!(retained, {
     opportunityId: deferredOpportunity.id,
     characterId: reimuId,
@@ -1443,6 +1453,339 @@ test('keeps narrative opportunities private and durable until their explicit dis
   assert.equal((legacyEvent.data as { readonly opportunityKind?: unknown }).opportunityKind, undefined)
   assert.equal(legacyModule.characterOpportunities!(legacySnapshot, reimuId, legacyContext)[0]?.status, 'available')
   assert.deepEqual(legacyModule.characterOpportunities!(legacySnapshot, marisaId, legacyContext), [])
+})
+
+test('projects and restores command and proposal opportunities from default scene cards', () => {
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const playContext: PlayWorldContext = {
+    characters: [character(reimuId, '博丽灵梦'), character(marisaId, '雾雨魔理沙')],
+    configuration: FLYING_CHESS_WORLD_CONFIGURATION,
+    sourceReferences: [],
+  }
+  const module = createFlyingChessWorldModule()
+
+  const collisionCreated = module.create(playContext)
+  const collisionState = collisionCreated.state as FlyingChessWorldState
+  const reimuPiece = collisionState.pieces.find(piece => piece.ownerId === reimuId)!
+  const marisaPiece = collisionState.pieces.find(piece => piece.ownerId === marisaId)!
+  const collided = module.dispatch({
+    ...collisionCreated,
+    state: {
+      ...collisionState,
+      pieces: collisionState.pieces.map(piece => piece.id === reimuPiece.id
+        ? { ...piece, status: 'track' as const, steps: 12 }
+        : piece.id === marisaPiece.id
+          ? { ...piece, status: 'track' as const, steps: 1 }
+          : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [reimuPiece.id] },
+    },
+  }, { type: 'move', actorId: reimuId, pieceId: reimuPiece.id }, playContext)
+  const collisionEvent = collided.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId
+    === 'first-collision-reckoning')!
+  assert.equal((collisionEvent.data as { readonly opportunityMove?: unknown }).opportunityMove, 'command')
+  const command = module.characterOpportunities!(collided, marisaId, playContext)[0]!
+  assert.equal(command.use.move, 'command')
+  assert.deepEqual(command.responderIds, [reimuId])
+  assert.deepEqual(module.characterOpportunities!(collided, reimuId, playContext), [])
+  const retainedCommand = module.resolveCharacterOpportunity!(collided, {
+    opportunityId: command.id,
+    characterId: marisaId,
+    disposition: 'retain',
+  }, playContext)
+  const reloadedCommand = module.normalize(JSON.parse(JSON.stringify(retainedCommand)), playContext)
+  assert.equal(module.characterOpportunities!(reloadedCommand, marisaId, playContext)[0]?.status, 'retained')
+  assert.equal(module.characterOpportunities!(reloadedCommand, marisaId, playContext)[0]?.use.move, 'command')
+  assert.throws(() => module.resolveCharacterOpportunity!(reloadedCommand, {
+    opportunityId: command.id,
+    characterId: marisaId,
+    disposition: 'use',
+    responderId: reimuId,
+  }, playContext), /缺少有效的公开话语/u)
+  const usedCommand = module.resolveCharacterOpportunity!(reloadedCommand, {
+    opportunityId: command.id,
+    characterId: marisaId,
+    disposition: 'use',
+    responderId: reimuId,
+    publicEvidence: '“这回你得把茶点拿出来。”',
+  }, playContext)
+  assert.equal((usedCommand.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+
+  const homeCreated = module.create(playContext)
+  const homeState = homeCreated.state as FlyingChessWorldState
+  const homePiece = homeState.pieces.find(piece => piece.ownerId === reimuId)!
+  const arrived = module.dispatch({
+    ...homeCreated,
+    state: {
+      ...homeState,
+      pieces: homeState.pieces.map(piece => piece.id === homePiece.id
+        ? { ...piece, status: 'track' as const, steps: 23 }
+        : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [homePiece.id] },
+    },
+  }, { type: 'move', actorId: reimuId, pieceId: homePiece.id }, playContext)
+  const homeEvent = arrived.events.find(item => (item.data as { readonly cardId?: unknown } | undefined)?.cardId
+    === 'first-home-next-round-stake')!
+  assert.equal((homeEvent.data as { readonly opportunityMove?: unknown }).opportunityMove, 'propose')
+  const proposal = module.characterOpportunities!(arrived, reimuId, playContext)[0]!
+  assert.equal(proposal.use.move, 'propose')
+  assert.deepEqual(proposal.responderIds, [marisaId])
+  const retainedProposal = module.resolveCharacterOpportunity!(arrived, {
+    opportunityId: proposal.id,
+    characterId: reimuId,
+    disposition: 'retain',
+  }, playContext)
+  const reloadedProposal = module.normalize(JSON.parse(JSON.stringify(retainedProposal)), playContext)
+  assert.equal(module.characterOpportunities!(reloadedProposal, reimuId, playContext)[0]?.status, 'retained')
+  assert.equal(module.characterOpportunities!(reloadedProposal, reimuId, playContext)[0]?.use.move, 'propose')
+  const usedProposal = module.resolveCharacterOpportunity!(reloadedProposal, {
+    opportunityId: proposal.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+    publicEvidence: '“下一局把先手让给我，怎么样？”',
+  }, playContext)
+  assert.equal((usedProposal.state as FlyingChessWorldState).opportunities[0]?.status, 'used')
+})
+
+test('consumes a durable speech opportunity only after the approved move targets its responder', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-world-opportunity-moves-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const worlds = new PlayWorldRegistry()
+  const module = createFlyingChessWorldModule()
+  worlds.register(module)
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const created = store.create({ format: 2, name: '对白机会动作' })
+  const configured = store.save({
+    ...editable(created),
+    characters: [{
+      ...character(reimuId, '博丽灵梦'),
+      profile: {
+        ...character(reimuId, '博丽灵梦').profile,
+        exampleDialogue: '<START>\n博丽灵梦: 下一局可得换个规矩。',
+      },
+    }, {
+      ...character(marisaId, '雾雨魔理沙'),
+      profile: {
+        ...character(marisaId, '雾雨魔理沙').profile,
+        exampleDialogue: '<START>\n雾雨魔理沙: 这回你可得赔我。',
+      },
+    }],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  const installed = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  const worldContext = resolveStoryPlayWorldContext(installed)
+  const createdWorld = module.create(worldContext)
+  const initialState = createdWorld.state as FlyingChessWorldState
+  const reimuPiece = initialState.pieces.find(piece => piece.ownerId === reimuId)!
+  const marisaPiece = initialState.pieces.find(piece => piece.ownerId === marisaId)!
+  const collisionWorld = module.dispatch({
+    ...createdWorld,
+    state: {
+      ...initialState,
+      pieces: initialState.pieces.map(piece => piece.id === reimuPiece.id
+        ? { ...piece, status: 'track' as const, steps: 12 }
+        : piece.id === marisaPiece.id
+          ? { ...piece, status: 'track' as const, steps: 1 }
+          : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [reimuPiece.id] },
+    },
+  }, { type: 'move', actorId: reimuId, pieceId: reimuPiece.id }, worldContext)
+  const collisionOpportunity = module.characterOpportunities!(collisionWorld, marisaId, worldContext)[0]!
+
+  const secondWorld = module.create(worldContext)
+  const secondState = secondWorld.state as FlyingChessWorldState
+  const secondReimuPiece = secondState.pieces.find(piece => piece.ownerId === reimuId)!
+  const homeWorld = module.dispatch({
+    ...secondWorld,
+    state: {
+      ...secondState,
+      pieces: secondState.pieces.map(piece => piece.id === secondReimuPiece.id
+        ? { ...piece, status: 'track' as const, steps: 23 }
+        : piece),
+      pendingRoll: { playerId: reimuId, value: 1, legalPieceIds: [secondReimuPiece.id] },
+    },
+  }, { type: 'move', actorId: reimuId, pieceId: secondReimuPiece.id }, worldContext)
+  const proposalOpportunity = module.characterOpportunities!(homeWorld, reimuId, worldContext)[0]!
+
+  const workspaceWithProcessedWorld = (
+    world: typeof collisionWorld,
+    title: string,
+  ): StoryWorkspaceSnapshot => ({
+    ...installed,
+    world,
+    events: [...installed.events, {
+      id: createStoryEventId(),
+      key: `fixture-${title}`,
+      turn: 0,
+      title,
+      summary: '',
+      evidence: '',
+      participantIds: [reimuId, marisaId],
+      worldEventSequences: world.events.map(item => item.sequence),
+    }],
+  })
+  const run = async (options: {
+    readonly key: string
+    readonly workspace: StoryWorkspaceSnapshot
+    readonly ownerId: string
+    readonly opportunityId: string
+    readonly requiredMove: 'command' | 'propose'
+    readonly submittedMove: 'command' | 'propose' | 'question'
+    readonly submittedResponderId: string
+  }) => {
+    const session = Session.create(SessionId(`world-opportunity-${options.key}`))
+    session.append('request/header', {
+      reason: 'initial',
+      header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+    })
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    const approvedLine = options.requiredMove === 'command'
+      ? '“这回你得把茶点拿出来。”'
+      : '“下一局把先手让给我，怎么样？”'
+    const fake = {
+      sessions: { flush: async () => true },
+      llm: {
+        async resolveModelInfo(provider: string, model: string) {
+          return {
+            provider,
+            id: model,
+            name: model,
+            reasoning: { efforts: [{ id: 'off', name: 'Off' }], defaultEffort: 'off' },
+          }
+        },
+        stream(request: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+          const system = request.system ?? ''
+          const body = JSON.stringify(request.messages ?? [])
+          const targetSeedId = [...body.matchAll(/\[seed:([^\]]+)\]\[目标人物\]/gu)][0]?.[1]
+          let text: string
+          if (system.includes('人物参与路由 Worker')) {
+            text = JSON.stringify({ publicCharacterIds: [options.ownerId] })
+          } else if (system.includes('单个人物的历史检索 Worker')) {
+            text = JSON.stringify({ references: [] })
+          } else if (system.includes('指定人物认知')) {
+            text = JSON.stringify({
+              observation: '世界事件为自己保留了一次公开说话机会。',
+              action: '',
+              speech: {
+                respondsTo: '这项仍未处置的世界机会。',
+                move: options.submittedMove,
+                focus: '把事件留下的选择公开交给对方。',
+                effect: '让对方决定如何回应。',
+              },
+              opportunityDecisions: [{
+                opportunityId: options.opportunityId,
+                disposition: 'use',
+                responderId: options.submittedResponderId,
+              }],
+              insights: [],
+            })
+          } else if (system.includes('人物自己的对白 Worker')) {
+            text = JSON.stringify({ lines: [{
+              reference: `speech:${proseId}:1`,
+              move: options.submittedMove,
+              seedLineIds: targetSeedId === undefined ? [] : [targetSeedId],
+              mechanics: '直接说出要求或提议，把是否回应留给对方。',
+              leftImplicit: '人物没有解释自己的动机。',
+              dialogue: approvedLine,
+            }] })
+          } else if (system.includes('严格对白审校 Worker')) {
+            text = JSON.stringify({ lines: [{ reference: `speech:${proseId}:1`, dialogue: approvedLine }] })
+          } else if (system.includes('分区的 prose Worker')) {
+            text = approvedLine
+          } else if (system.includes('最终正文编辑 Worker')) {
+            text = JSON.stringify({ sections: [{ sectionId: proseId, text: approvedLine }] })
+          } else {
+            text = JSON.stringify({ sections: [] })
+          }
+          return (async function* () {
+            yield { type: 'block-start', index: 0, blockType: 'text' }
+            yield { type: 'text-delta', index: 0, text }
+            yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          })()
+        },
+      },
+    } as unknown as Context
+    return runStoryTurnPipeline({
+      ctx: fake,
+      agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+      store,
+      workspace: options.workspace,
+      turn: 1,
+      step: 1,
+      messages: [createUserMessage({
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: '使用世界事件留下的机会；规则状态保持不变。' }],
+      })],
+      signal: new AbortController().signal,
+    })
+  }
+
+  const commandResult = await run({
+    key: 'command',
+    workspace: workspaceWithProcessedWorld(collisionWorld, '碰撞已经结算'),
+    ownerId: marisaId,
+    opportunityId: collisionOpportunity.id,
+    requiredMove: 'command',
+    submittedMove: 'command',
+    submittedResponderId: reimuId,
+  })
+  assert.deepEqual(commandResult.worldOpportunityResolutions, [{
+    opportunityId: collisionOpportunity.id,
+    characterId: marisaId,
+    disposition: 'use',
+    responderId: reimuId,
+    publicEvidence: '“这回你得把茶点拿出来。”',
+  }])
+
+  const proposalResult = await run({
+    key: 'propose',
+    workspace: workspaceWithProcessedWorld(homeWorld, '首架飞机已经到达'),
+    ownerId: reimuId,
+    opportunityId: proposalOpportunity.id,
+    requiredMove: 'propose',
+    submittedMove: 'propose',
+    submittedResponderId: marisaId,
+  })
+  assert.deepEqual(proposalResult.worldOpportunityResolutions, [{
+    opportunityId: proposalOpportunity.id,
+    characterId: reimuId,
+    disposition: 'use',
+    responderId: marisaId,
+    publicEvidence: '“下一局把先手让给我，怎么样？”',
+  }])
+
+  const wrongMove = await run({
+    key: 'wrong-move',
+    workspace: workspaceWithProcessedWorld(collisionWorld, '碰撞已经结算'),
+    ownerId: marisaId,
+    opportunityId: collisionOpportunity.id,
+    requiredMove: 'command',
+    submittedMove: 'question',
+    submittedResponderId: reimuId,
+  })
+  assert.equal(wrongMove.worldOpportunityResolutions, undefined)
+
+  const wrongTarget = await run({
+    key: 'wrong-target',
+    workspace: workspaceWithProcessedWorld(collisionWorld, '碰撞已经结算'),
+    ownerId: marisaId,
+    opportunityId: collisionOpportunity.id,
+    requiredMove: 'command',
+    submittedMove: 'command',
+    submittedResponderId: marisaId,
+  })
+  assert.equal(wrongTarget.worldOpportunityResolutions, undefined)
 })
 
 test('does not consume a world opportunity when the public question is rejected', async (context) => {

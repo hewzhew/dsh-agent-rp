@@ -1359,6 +1359,8 @@ interface PlayWorldPromptProjection {
   readonly title: string;
   readonly text: string;
 }
+/** Speech-act kinds that an authoritative world event may reserve for later use. */
+type PlayWorldOpportunitySpeechMove = 'command' | 'question' | 'propose';
 /** One durable, character-owned choice opened by an authoritative world event. */
 interface PlayWorldCharacterOpportunity {
   readonly id: string;
@@ -1369,7 +1371,7 @@ interface PlayWorldCharacterOpportunity {
   readonly instruction: string;
   readonly use: {
     readonly kind: 'speech';
-    readonly move: 'question';
+    readonly move: PlayWorldOpportunitySpeechMove;
   };
 }
 /** One character's explicit decision about a durable world opportunity. */

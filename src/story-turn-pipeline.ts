@@ -3807,7 +3807,9 @@ function bindCharacterOpportunityDecisions(
     return {
       ...decision,
       opportunityDecisions: [],
-      ...(decision.speech?.move === 'question' ? { speech: undefined } : {}),
+      ...(decision.speech !== undefined && opportunities.some(item => item.use.move === decision.speech?.move)
+        ? { speech: undefined }
+        : {}),
     }
   }
 }
@@ -4716,6 +4718,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       ),
     ] as const,
   ))
+  const worldOpportunityById = new Map<string, PlayWorldCharacterOpportunity>()
   const parallelCharacterDecisions = (await mapStoryPeers(
     characterInputs,
     input.workspace.pipeline.maxParallel,
@@ -4728,6 +4731,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
       const availableWorldOpportunities = publicResponseAllowed
         ? projectCharacterWorldOpportunities(input, character.id)
         : []
+      for (const opportunity of availableWorldOpportunities) {
+        if (worldOpportunityById.has(opportunity.id)) throw new Error('世界机会 id 重复')
+        worldOpportunityById.set(opportunity.id, opportunity)
+      }
       const characterHasNarrativeCue = (worldNarrativeProjection?.cues.some(cue =>
         cue.characterIds.includes(character.id)) ?? false) || availableWorldOpportunities.length > 0
       const decision = await runStage(input, 'character', generateOptions(
@@ -5420,14 +5427,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         }]
       }
       if (decision.responderId === undefined) return []
-      const publicQuestion = publicDialogues.find(dialogue => dialogue.characterId === record.characterId
-        && dialogue.targetCharacterId === decision.responderId && dialogue.move === 'question')
-      return publicQuestion === undefined ? [] : [{
+      const requiredMove = worldOpportunityById.get(decision.opportunityId)?.use.move
+      if (requiredMove === undefined) return []
+      const publicEvidence = publicDialogues.find(dialogue => dialogue.characterId === record.characterId
+        && dialogue.targetCharacterId === decision.responderId && dialogue.move === requiredMove)
+      return publicEvidence === undefined ? [] : [{
         opportunityId: decision.opportunityId,
         characterId: record.characterId,
         disposition: 'use' as const,
         responderId: decision.responderId,
-        publicEvidence: publicQuestion.dialogue,
+        publicEvidence: publicEvidence.dialogue,
       }]
     }))
   const context = modelContext(finalDraft)

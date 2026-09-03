@@ -15,6 +15,7 @@ import type {
   StoryOutputKind,
 } from './story-workspace-protocol.ts'
 import { createFlyingChessWorldModule } from './flying-chess-world.ts'
+import { isPlayWorldOpportunitySpeechMove } from './play-world-protocol.ts'
 import type {
   PlayWorldCharacterOpportunity,
   PlayWorldCharacterOpportunityResolution,
@@ -170,7 +171,7 @@ export function projectPlayWorldCharacterOpportunities(
       || !Array.isArray(opportunity.responderIds) || opportunity.responderIds.length === 0
       || new Set(opportunity.responderIds).size !== opportunity.responderIds.length
       || opportunity.responderIds.some((id: string) => id === characterId || !characterIds.has(id))
-      || opportunity.use.kind !== 'speech' || opportunity.use.move !== 'question') {
+      || opportunity.use.kind !== 'speech' || !isPlayWorldOpportunitySpeechMove(opportunity.use.move)) {
       throw new Error(`游玩世界人物机会 ${String(index + 1)}无效`)
     }
     return Object.freeze({
@@ -180,7 +181,7 @@ export function projectPlayWorldCharacterOpportunities(
       responderIds: Object.freeze([...opportunity.responderIds]),
       status: opportunity.status,
       instruction: requiredProjectionText(opportunity.instruction, `游玩世界人物机会 ${String(index + 1)}说明`, 2_000),
-      use: Object.freeze({ kind: 'speech' as const, move: 'question' as const }),
+      use: Object.freeze({ kind: 'speech' as const, move: opportunity.use.move }),
     })
   }))
 }

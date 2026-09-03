@@ -2534,6 +2534,15 @@ const narrativeResponderLabels: Readonly<Record<FlyingChessNarrativeCard['cue'][
   all: '所有在场人物',
 }
 
+const narrativeOpportunityMoveLabels: Readonly<Record<
+  NonNullable<FlyingChessNarrativeCard['cue']['opportunity']>['move'],
+  string
+>> = {
+  command: '提出一项要求',
+  question: '提出一个问题',
+  propose: '提出一项提议',
+}
+
 const narrativeTriggerLabels: Readonly<Record<FlyingChessNarrativeCard['trigger']['kind'], string>> = {
   'consecutive-passes': '连续回合无棋可走',
   'piece-launched': '飞机离开基地',
@@ -2594,7 +2603,8 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
     setCards(current => current.map((card, cardIndex) => cardIndex === index ? transform(card) : card))
   }
   const invalid = cards.some(card => card.event.title.trim() === '' || card.event.summary.trim() === ''
-    || card.cue.text.trim() === '' || narrativeTriggerInvalid(card.trigger))
+    || card.cue.text.trim() === '' || narrativeTriggerInvalid(card.trigger)
+    || card.cue.opportunity !== undefined && card.cue.responders === 'none')
     || narrativeCardRelationsInvalid(cards)
   const save = (): void => {
     if (invalid || busy) return
@@ -2667,8 +2677,32 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
         }} />
         <div className="story-world-narrative-card-foot"><label>回应范围：<select className="story-studio-input" value={card.cue.responders} onChange={event => {
           const responders = event.currentTarget.value as FlyingChessNarrativeCard['cue']['responders']
-          updateCard(index, current => ({ ...current, cue: { ...current.cue, responders } }))
-        }}>{Object.entries(narrativeResponderLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="story-studio-check"><input type="checkbox" checked={card.repeat} onChange={event => {
+          updateCard(index, current => {
+            if (responders !== 'none' || current.cue.opportunity === undefined) {
+              return { ...current, cue: { ...current.cue, responders } }
+            }
+            const { opportunity: _opportunity, ...cue } = current.cue
+            return { ...current, cue: { ...cue, responders } }
+          })
+        }}>{Object.entries(narrativeResponderLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="story-studio-check"><input type="checkbox" disabled={card.cue.responders === 'none'} checked={card.cue.opportunity !== undefined} onChange={event => {
+          const enabled = event.currentTarget.checked
+          updateCard(index, current => {
+            if (enabled) return { ...current, cue: { ...current.cue, opportunity: {
+              kind: 'speech', move: 'question', targets: 'opponents',
+            } } }
+            const { opportunity: _opportunity, ...cue } = current.cue
+            return { ...current, cue }
+          })
+        }} />允许人物保留这次对白机会</label>
+        {card.cue.opportunity !== undefined && <label>使用方式：<select className="story-studio-input"
+          value={card.cue.opportunity.move} onChange={event => {
+            const move = event.currentTarget.value as NonNullable<FlyingChessNarrativeCard['cue']['opportunity']>['move']
+            updateCard(index, current => ({ ...current, cue: { ...current.cue, opportunity: {
+              kind: 'speech', move, targets: 'opponents',
+            } } }))
+          }}>{Object.entries(narrativeOpportunityMoveLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
+        <label className="story-studio-check"><input type="checkbox" checked={card.repeat} onChange={event => {
           const repeat = event.currentTarget.checked
           updateCard(index, current => ({ ...current, repeat }))
         }} />条件再次满足时可重复触发</label></div>
@@ -2683,7 +2717,7 @@ function FlyingChessNarrativeCardsDrawer({ workspace, busy, onUpdate, onClose }:
           repeat: false,
         }])
       }}>＋ 添加事件牌</button>
-      {invalid && <small className="story-world-cast-error">每张事件牌需要有效的触发条件、完整的公开事实与现场条件；承接事件必须存在且不能形成循环。</small>}
+      {invalid && <small className="story-world-cast-error">每张事件牌需要有效的触发条件、完整的公开事实与现场条件；承接事件必须存在且不能形成循环；可保留的对白机会需要至少一位回应人物。</small>}
       <div className="story-studio-actions"><button className="story-studio-button story-studio-button-primary" type="button"
         disabled={busy || invalid} onClick={save}>{busy ? '正在保存…' : '保存事件牌'}</button>
         <button className="story-studio-button" type="button" disabled={busy} onClick={onClose}>取消</button></div>

@@ -157,6 +157,20 @@ export interface PlayWorldPromptProjection {
   readonly text: string
 }
 
+/** Speech-act kinds that an authoritative world event may reserve for later use. */
+export type PlayWorldOpportunitySpeechMove = 'command' | 'question' | 'propose'
+
+const PLAY_WORLD_OPPORTUNITY_SPEECH_MOVES = new Set<PlayWorldOpportunitySpeechMove>([
+  'command',
+  'question',
+  'propose',
+])
+
+/** Return whether an untrusted value names a supported durable speech opportunity. */
+export function isPlayWorldOpportunitySpeechMove(value: unknown): value is PlayWorldOpportunitySpeechMove {
+  return typeof value === 'string' && PLAY_WORLD_OPPORTUNITY_SPEECH_MOVES.has(value as PlayWorldOpportunitySpeechMove)
+}
+
 /** One durable, character-owned choice opened by an authoritative world event. */
 export interface PlayWorldCharacterOpportunity {
   readonly id: string
@@ -167,7 +181,7 @@ export interface PlayWorldCharacterOpportunity {
   readonly instruction: string
   readonly use: {
     readonly kind: 'speech'
-    readonly move: 'question'
+    readonly move: PlayWorldOpportunitySpeechMove
   }
 }
 

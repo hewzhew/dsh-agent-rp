@@ -1,5 +1,7 @@
 /** Browser-safe records for the first-party flying-chess world module. */
 
+import type { PlayWorldOpportunitySpeechMove } from './play-world-protocol.ts'
+
 /** Stable module id used by persistence, HTTP discovery, and the native renderer. */
 export const FLYING_CHESS_WORLD_MODULE_ID = 'agent-rp/flying-chess'
 
@@ -61,7 +63,7 @@ export interface FlyingChessNarrativeCard {
     /** Durable use semantics when this cue grants a character-owned choice. */
     readonly opportunity?: {
       readonly kind: 'speech'
-      readonly move: 'question'
+      readonly move: PlayWorldOpportunitySpeechMove
       readonly targets: 'opponents'
     }
   }

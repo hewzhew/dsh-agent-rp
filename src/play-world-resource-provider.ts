@@ -63,6 +63,42 @@ export const FLYING_CHESS_WORLD_CONFIGURATION = {
       },
     },
     repeat: false,
+  }, {
+    id: 'first-collision-reckoning',
+    trigger: { kind: 'piece-captured' },
+    event: {
+      title: '基地边的赔礼签翻开',
+      summary: '本局第一次发生碰撞时，被撞回基地的木机压下基地边的一枚小签；签面翻出“被撞回的一方可以向撞击者提出一项不改变本局规则的补偿要求，对方可以答应、拒绝或另议”。',
+    },
+    cue: {
+      kind: 'opportunity',
+      text: '刚被撞回飞机的人物获得一次补偿要求机会，可以立即使用、留到以后或放弃；只有要求真正说出后，撞击者才获得回应前提。',
+      responders: 'opponents',
+      opportunity: {
+        kind: 'speech',
+        move: 'command',
+        targets: 'opponents',
+      },
+    },
+    repeat: false,
+  }, {
+    id: 'first-home-next-round-stake',
+    trigger: { kind: 'player-home-count', count: 1 },
+    event: {
+      title: '终点旁的加码签翻开',
+      summary: '本局第一架木机进入终点时，机头掀开终点格旁的一枚小签；签面写着“率先抵达终点的一方可以向另一位棋手提出一项只影响下一局的加码条件，对方可以接受、拒绝或另提条件”。',
+    },
+    cue: {
+      kind: 'opportunity',
+      text: '刚让本局第一架飞机抵达终点的人物获得一次下一局加码提议，可以立即使用、留到以后或放弃；提议公开前不改变本局规则，也不给对手回应前提。',
+      responders: 'actor',
+      opportunity: {
+        kind: 'speech',
+        move: 'propose',
+        targets: 'opponents',
+      },
+    },
+    repeat: false,
   }],
 } satisfies FlyingChessWorldConfiguration & JsonValue
 for (const card of FLYING_CHESS_WORLD_CONFIGURATION.narrativeCards) {

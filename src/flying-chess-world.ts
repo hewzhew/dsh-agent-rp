@@ -12,6 +12,7 @@ import {
   type FlyingChessWorldState,
 } from './flying-chess-protocol.ts'
 import type { PlayWorldContext, PlayWorldModule } from './play-world.ts'
+import { isPlayWorldOpportunitySpeechMove } from './play-world-protocol.ts'
 import type {
   PlayWorldCharacterOpportunity,
   PlayWorldCharacterOpportunityResolution,
@@ -19,6 +20,7 @@ import type {
   PlayWorldNarrativeCue,
   PlayWorldNarrativeFact,
   PlayWorldNarrativeProjection,
+  PlayWorldOpportunitySpeechMove,
 } from './play-world-protocol.ts'
 
 const INSTANCE_ID_PATTERN = /^world-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -39,7 +41,6 @@ const FLYING_CHESS_NARRATIVE_INVARIANTS = Object.freeze([Object.freeze({
   id: 'shared-die',
   text: '场景中只有一枚由各回合共用的骰子；投掷次数不能改写成骰子数量。',
 })])
-
 interface FlyingChessWorldModuleOptions {
   readonly rollDie?: () => number
 }
@@ -106,9 +107,11 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
       && value.cue.kind !== 'opportunity' && value.cue.kind !== 'relationship'
     || value.cue.responders !== 'none' && value.cue.responders !== 'actor' && value.cue.responders !== 'opponents'
       && value.cue.responders !== 'all' || typeof value.repeat !== 'boolean'
-    || value.cue.opportunity !== undefined && (!isRecord(value.cue.opportunity)
+    || value.cue.opportunity !== undefined && (value.cue.responders === 'none'
+      || !isRecord(value.cue.opportunity)
       || !exactKeys(value.cue.opportunity, ['kind', 'move', 'targets'])
-      || value.cue.opportunity.kind !== 'speech' || value.cue.opportunity.move !== 'question'
+      || value.cue.opportunity.kind !== 'speech'
+      || !isPlayWorldOpportunitySpeechMove(value.cue.opportunity.move)
       || value.cue.opportunity.targets !== 'opponents')) {
     throw new Error(`${label}无效`)
   }
@@ -130,7 +133,11 @@ function normalizeNarrativeCard(value: unknown, index: number): FlyingChessNarra
       responders: value.cue.responders,
       ...(value.cue.opportunity === undefined
         ? {}
-        : { opportunity: { kind: 'speech', move: 'question', targets: 'opponents' } as const }),
+        : { opportunity: {
+            kind: 'speech',
+            move: value.cue.opportunity.move as PlayWorldOpportunitySpeechMove,
+            targets: 'opponents',
+          } as const }),
     },
     repeat: value.repeat,
   }
@@ -347,9 +354,14 @@ function narrativeOpportunityUse(
   const data = eventData(item)
   if (item.type !== 'scene.changed' || data?.kind !== 'narrative-card'
     || typeof data.cardId !== 'string') return undefined
-  if (data.opportunityKind === 'speech' && data.opportunityMove === 'question'
+  if (data.opportunityKind === 'speech'
+    && isPlayWorldOpportunitySpeechMove(data.opportunityMove)
     && data.opportunityTargets === 'opponents') {
-    return { kind: 'speech', move: 'question', targets: 'opponents' }
+    return {
+      kind: 'speech',
+      move: data.opportunityMove,
+      targets: 'opponents',
+    }
   }
   const card = narrativeCards(context).find(candidate => candidate.id === data.cardId)
   if (card?.cue.opportunity !== undefined) return card.cue.opportunity
@@ -1220,10 +1232,10 @@ export function createFlyingChessWorldModule(options: FlyingChessWorldModuleOpti
         }
       } else {
         const source = normalized.events.find(item => item.sequence === selected.sourceEventSequence)
-        if (source === undefined || narrativeOpportunityUse(source, context)?.move !== 'question'
+        if (source === undefined || narrativeOpportunityUse(source, context) === undefined
           || resolution.responderId === undefined || !selected.responderIds.includes(resolution.responderId)
           || typeof resolution.publicEvidence !== 'string' || resolution.publicEvidence.trim() === '') {
-          throw new Error('使用飞行棋叙事机会缺少有效的公开提问')
+          throw new Error('使用飞行棋叙事机会缺少有效的公开话语')
         }
       }
       const opportunities = state.opportunities.map(item => item.id !== selected.id
