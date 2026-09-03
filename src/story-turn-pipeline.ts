@@ -1590,8 +1590,8 @@ function substantiallyRestatesText(
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
 const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
 const DEFERRED_SPEECH_INSIGHT_PATTERN = /(?:提问|追问|回答|答复|回话|回应|接话|拒答|拒绝回答|开口|把话)/u
-const ACQUIRED_OBJECT_PATTERN = /(?:拿|取|捡|找|搬|掏|抽|端)(?:来|出|起|回|到)?(?:了)?(?:一|两|几|半|那|这)?(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇)?([\p{Script=Han}]{1,8}?)(?=(?:压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|[，。；！？!?]|$))/gu
-const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|提|滚|翻|停|落|滑|晃|[，。；！？!?]|$))/gu
+const ACQUIRED_OBJECT_PATTERN = /(?:拿|取|捡|找|搬|掏|抽|端)(?:来|出|起|回|到)?(?:了)?(?:一|两|几|半|那|这)?(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇)?([\p{Script=Han}]{1,8}?)(?=(?:(?:随手|顺手|仔细|反复|来回)?(?:翻|看|读|查|端详|检查)|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|[，。；！？!?]|$))/gu
+const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:一先一后|先后|依次)?(?:(?:随手|顺手|仔细|反复|来回)?(?:翻|看|读|查|端详|检查)|重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|提|滚|翻|停|落|滑|晃|撞|[，。；！？!?]|$))/gu
 
 function playerForbidsWorldRecap(playerInput: string): boolean {
   return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
@@ -2381,9 +2381,9 @@ function parseSourcePassages(
     if (applyApprovedDialoguePolicy(passage, approvedDialogue) !== passage) {
       throw new Error(`${subject} passage[${String(index)}] 包含未获准或重复对白`)
     }
-    const groundedPassage = groundedHostOwnedAction(passage, authority)
-    if (groundedPassage !== passage) {
-      throw new Error(`${subject} passage[${String(index)}] 引入了来源中不存在的物件`)
+    const unsupportedObjects = unsupportedObjectMentions(passage, authority)
+    if (unsupportedObjects.length > 0) {
+      throw new Error(`${subject} passage[${String(index)}] 引入了来源中不存在的物件：${unsupportedObjects.map(value => JSON.stringify(value)).join('、')}`)
     }
     if (UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(passage)
       && !passageSources.some(source => UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(source.text))) {
@@ -2524,17 +2524,35 @@ function attributePublicAction(characterName: string, action: string): string {
   return completeNarrativeSentence(`${characterName}${text}`)
 }
 
+function mentionedObjectsInClause(clause: string): readonly string[] {
+  ACQUIRED_OBJECT_PATTERN.lastIndex = 0
+  COUNTED_OBJECT_PATTERN.lastIndex = 0
+  return [
+    ...[...clause.matchAll(ACQUIRED_OBJECT_PATTERN)].map(match => match[1]!),
+    ...[...clause.matchAll(COUNTED_OBJECT_PATTERN)].map(match => match[1]!),
+  ].flatMap(value => {
+    const head = value.slice(value.lastIndexOf('的') + 1).replace(/(?:上|下|里|中|旁|边|前|后)$/u, '')
+    return head === '' || /^(?:架|已|已经|正在|仍然|随即|随后|接着|被|让|将|把)$/u.test(head) ? [] : [head]
+  })
+}
+
+function unsupportedObjectMentions(text: string, authority: string): readonly string[] {
+  const normalizedAuthority = normalizedComparableText(authority)
+  const unsupported = new Set<string>()
+  for (const clause of text.match(/[^，。；！？!?]+[，。；！？!?]?/gu) ?? []) {
+    for (const object of mentionedObjectsInClause(clause)) {
+      if (!normalizedAuthority.includes(normalizedComparableText(object))) unsupported.add(object)
+    }
+  }
+  return [...unsupported]
+}
+
 function groundedHostOwnedAction(action: string, authority: string): string {
   const normalizedAuthority = normalizedComparableText(authority)
   const clauses = action.match(/[^，。；！？!?]+[，。；！？!?]?/gu) ?? []
   const retained: string[] = []
   for (const clause of clauses) {
-    ACQUIRED_OBJECT_PATTERN.lastIndex = 0
-    COUNTED_OBJECT_PATTERN.lastIndex = 0
-    const mentionedObjects = [
-      ...[...clause.matchAll(ACQUIRED_OBJECT_PATTERN)].map(match => match[1]!),
-      ...[...clause.matchAll(COUNTED_OBJECT_PATTERN)].map(match => match[1]!),
-    ]
+    const mentionedObjects = mentionedObjectsInClause(clause)
     if (mentionedObjects.some(object => !normalizedAuthority.includes(normalizedComparableText(object)))) break
     retained.push(clause)
   }
@@ -2590,16 +2608,19 @@ function renderHostOwnedWorldSections(
   characterDecisions: readonly StoryCharacterDecisionRecord[],
   director: StoryDirectorDecision | undefined,
   dialogueByReference: ReadonlyMap<string, string>,
+  hasAdditionalPublicMaterial: boolean,
 ): readonly StorySectionDraft[] | undefined {
   if (projection === undefined) return undefined
   const worldEventTypes = new Map(worldEvents.map(event => [event.sequence, event.type]))
-  const directTransition = projection.cadence === 'transition'
+  const directTransition = !hasAdditionalPublicMaterial
+    && projection.cadence === 'transition'
     && projection.cues.length === 0
     && projection.facts.every(fact => fact.retention === 'compressible')
   const essentialEventTypes = projection.facts
     .filter(fact => fact.retention === 'essential')
     .flatMap(fact => fact.eventSequences.map(sequence => worldEventTypes.get(sequence)))
-  const directSceneCard = projection.cadence === 'scene'
+  const directSceneCard = !hasAdditionalPublicMaterial
+    && projection.cadence === 'scene'
     && essentialEventTypes.length > 0
     && essentialEventTypes.every(type => type === 'scene.changed')
   return directTransition || directSceneCard
@@ -4953,6 +4974,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorDecision,
     dialogueByReference,
   )
+  const hasAdditionalPublicMaterial = narrativeAuthority.sources
+    .some(source => source.kind === 'public-action' || source.kind === 'approved-dialogue')
   const deterministicWorldSections = hostDirectorAssignment === undefined
     ? undefined
     : renderHostWorldSections(
@@ -4973,6 +4996,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         characterDecisions,
         directorDecision,
         dialogueByReference,
+        hasAdditionalPublicMaterial,
       )
   let sectionDrafts: readonly StorySectionDraft[]
   if (enabledSections.length === 0 || omittedPublicTurn) {
@@ -5041,20 +5065,21 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               enabledCharacters,
               dialogueByReference,
             )
-        const draft = await runStage(input, 'section', generateOptions(
-          input,
-          reasoning,
-          compactSection ? 'structural' : routineWorldSection ? 'routine' : 'quality',
-          [
+        const sectionReasoning = compactSection
+          ? 'structural'
+          : sourceBoundWorldSection || routineWorldSection
+            ? 'routine'
+            : 'quality'
+        const sectionSystem = [
             `你是“${section.name}”分区的 ${section.kind} Worker。${sectionPurpose(input, section)}`,
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
             worldInstruction,
             'director_brief 只列本分区需要兑现的额外节拍。叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动；感官细节不能改变物体位置、规则状态或人物认知。只写可观察行为，不从目光、表情、姿态或停顿推断故意、不以为意、期待、犹豫等人物内心。',
-            'narrative_authority 是 Host 汇总的非叙事化校验材料。narrativeFacts 中 retention 为 essential 的事实必须按 eventSequences 的顺序在正文中明确发生一次，包括其中的行动者、骰点、棋子编号和落点；compressible 的同类机械结果可以合并带过。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。',
+            'narrative_authority 是 Host 汇总的非叙事化校验材料。narrativeFacts 中 retention 为 essential 的事实必须按 eventSequences 的顺序在正文中明确发生一次，包括其中的行动者、骰点、棋子编号和落点；compressible 的同类机械结果可以合并带过。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。实体名称逐字沿用相关来源，不根据 recent_public_prose 换成近义词、材质名或临时别称。',
             '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
             outputInstruction,
-          ].join('\n'),
-          [
+          ].join('\n')
+        const sectionBody = [
             `<section_reference kind="${section.kind}">`, existing, '</section_reference>',
             '<recent_public_prose>', compactSection ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
             ...(worldOutcome === '' && worldNarrative === ''
@@ -5065,7 +5090,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             ...(narrativeAuthority.text === '' ? [] : ['<narrative_authority>', narrativeAuthority.text, '</narrative_authority>']),
             '<director_brief>', sectionDirectorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
-          ].join('\n'),
+          ].join('\n')
+        const draft = await runStage(input, 'section', generateOptions(
+          input,
+          reasoning,
+          sectionReasoning,
+          sectionSystem,
+          sectionBody,
           compactSection ? 768 : 6_144,
           compactSection ? 0.4 : 0.7,
         ), resultEventSeqs, section.id)
@@ -5073,21 +5104,44 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           if (draft.text === undefined || draft.text.trim() === '' || draft.text.trim() === '<omit-section />') {
             return deterministicWorldSection
           }
-          try {
-            const parsed = parseSourceBoundSection(
-              draft.text,
+          const parseDraft = (text: string): StorySectionDraft => ({
+            sectionId: section.id,
+            name: section.name,
+            kind: section.kind,
+            ...parseSourceBoundSection(
+              text,
               `${section.name}分区正文`,
               narrativeAuthority.sources,
               approvedDialogue,
-            )
-            return {
-              sectionId: section.id,
-              name: section.name,
-              kind: section.kind,
-              ...parsed,
+            ),
+          })
+          try {
+            return parseDraft(draft.text)
+          } catch (error: unknown) {
+            const failure = error instanceof Error ? error.message : '正文没有通过来源校验'
+            const retry = await runStage(input, 'section', generateOptions(
+              input,
+              reasoning,
+              sectionReasoning,
+              [
+                sectionSystem,
+                '上一稿没有通过 Host 来源校验。重新提交完整 JSON，只保留能由原 sourceIds 逐项支持的段落；不得沿用失败稿中的无来源行动、物件变化、回应、未回应或行动交接。失败原因若列出不存在的物件，删除该物件或改回对应来源逐字使用的名称。',
+              ].join('\n'),
+              [
+                sectionBody,
+                '<source_validation_failure>', failure, '</source_validation_failure>',
+              ].join('\n'),
+              compactSection ? 768 : 6_144,
+              compactSection ? 0.3 : 0.5,
+            ), resultEventSeqs, `retry:${section.id}`)
+            if (retry.text === undefined || retry.text.trim() === '' || retry.text.trim() === '<omit-section />') {
+              return deterministicWorldSection
             }
-          } catch {
-            return deterministicWorldSection
+            try {
+              return parseDraft(retry.text)
+            } catch {
+              return deterministicWorldSection
+            }
           }
         }
         if (draft.text === undefined
