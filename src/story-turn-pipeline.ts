@@ -166,6 +166,14 @@ export interface StoryTurnFinalSection {
   readonly characterId?: string
   /** Host-validated private records represented by this character section. */
   readonly privateInsights?: readonly StoryTurnPrivateInsight[]
+  /** Model-authored prose passages whose cited authorities were validated by the Host. */
+  readonly sourcePassages?: readonly StoryTurnSourcePassage[]
+  readonly text: string
+}
+
+/** One visible prose passage and the Host-issued authority ids that support it. */
+export interface StoryTurnSourcePassage {
+  readonly sourceIds: readonly string[]
   readonly text: string
 }
 
@@ -552,6 +560,18 @@ interface ContinuityUpdate {
 }
 
 type StorySectionDraft = StoryTurnFinalSection
+
+interface StoryNarrativeSource {
+  readonly id: string
+  readonly kind: 'world-fact' | 'public-action' | 'approved-dialogue'
+  readonly text: string
+  readonly required: boolean
+}
+
+interface StoryNarrativeAuthority {
+  readonly text: string
+  readonly sources: readonly StoryNarrativeSource[]
+}
 
 /** Resolve persisted output templates into the concrete, character-owned sections for one turn. */
 export function expandStoryTurnOutputs(
@@ -1037,6 +1057,7 @@ const COMPACT_PROSE_INTERPRETATION_PATTERN = /(?:仿佛|仿若|宛如|好像|像
 const INCOMPLETE_WORLD_VALUE_PATTERN = /(?:(?:点数|骰面|朝上)(?:是|为|的是)|(?:掷出|停在))\s*(?:[—–―-]+|…{1,2}|\.{3,})(?:\s*点)?(?=[，,。！？!?；;\s]|$)/u
 const COMPACT_WORLD_TURN_HANDOFF_PATTERN = /(?:轮到|下(?:一|个)回合(?:由)?|接下来(?:由)?)[^。！？\r\n]{0,24}(?:掷|行动|走棋|回合)|(?:该|换)[^。！？\r\n]{0,12}(?:掷|行动|走棋|了)|骰子[^。！？\r\n]{0,24}(?:回到|转回|滚回|推给|递给|交给|还给|(?:停|落)(?:到|在)[^。！？\r\n]{0,12}(?:手边|面前))|(?:接过(?:来)?|拿过)骰子|把骰子[^。！？\r\n]{0,20}(?:推|递|交|还)/u
 const COMPACT_WORLD_UNOWNED_DETAIL_PATTERN = /(?:目光|视线|眼神|盯着)[^。！？\r\n]{0,24}(?:停|落|移|扫|看)|(?:指尖|手指|指节)[^。！？\r\n]{0,20}(?:叩|敲)|(?:抿(?:了)?抿(?:嘴)?|没(?:有)?(?:说话|吭声)|顿了片刻)|(?:折签|纸角)[^。！？\r\n]{0,32}(?:(?:挪|移动|滑|翻|露|晃)(?:了|动|出)|(?:仍|依旧)[^。！？\r\n]{0,12}(?:原样|背面朝上|没有变化))/u
+const UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN = /(?:没有|未|并未|不曾)(?:立刻)?(?:回答|回应|接话|作答|开口)|(?:问题|问话)[^。！？\r\n]{0,20}(?:没有|未|并未|不曾)(?:得到)?(?:回答|回应)/u
 
 function parseDirectorDecision(
   text: string,
@@ -1570,7 +1591,7 @@ const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！�
 const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
 const DEFERRED_SPEECH_INSIGHT_PATTERN = /(?:提问|追问|回答|答复|回话|回应|接话|拒答|拒绝回答|开口|把话)/u
 const ACQUIRED_OBJECT_PATTERN = /(?:拿|取|捡|找|搬|掏|抽|端)(?:来|出|起|回|到)?(?:了)?(?:一|两|几|半|那|这)?(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇)?([\p{Script=Han}]{1,8}?)(?=(?:压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|[，。；！？!?]|$))/gu
-const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|滚|翻|停|落|滑|晃|[，。；！？!?]|$))/gu
+const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|提|滚|翻|停|落|滑|晃|[，。；！？!?]|$))/gu
 
 function playerForbidsWorldRecap(playerInput: string): boolean {
   return FORBID_WORLD_RECAP_PATTERN.test(playerInput)
@@ -2315,39 +2336,140 @@ function renderSectionDrafts(drafts: readonly StorySectionDraft[]): string {
   return drafts.map(draft => `## ${draft.name}\n\n${draft.text}`).join('\n\n')
 }
 
+function narrativeSourceSupportsPassage(source: StoryNarrativeSource, passage: string): boolean {
+  if (source.kind === 'approved-dialogue') return passage.includes(source.text)
+  if (source.kind === 'world-fact') return proseRetainsWorldFact(passage, source.text)
+  return substantiallyRestatesText(passage, source.text, 5, 0.2)
+}
+
+function parseSourcePassages(
+  value: unknown,
+  subject: string,
+  sources: readonly StoryNarrativeSource[],
+  approvedDialogue: ReadonlySet<string>,
+): readonly StoryTurnSourcePassage[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
+    throw new Error(`${subject} passages 无效`)
+  }
+  const sourceById = new Map(sources.map(source => [source.id, source]))
+  const usedSourceIds = new Set<string>()
+  const authority = sources.map(source => source.text).join('\n')
+  const passages = value.map((item, index): StoryTurnSourcePassage => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`${subject} passage[${String(index)}] 不是对象`)
+    }
+    const record = item as Record<string, unknown>
+    if (Object.keys(record).some(key => key !== 'sourceIds' && key !== 'text')
+      || !Array.isArray(record.sourceIds) || record.sourceIds.length === 0 || record.sourceIds.length > 8
+      || record.sourceIds.some(sourceId => typeof sourceId !== 'string')
+      || new Set(record.sourceIds as readonly string[]).size !== record.sourceIds.length) {
+      throw new Error(`${subject} passage[${String(index)}] 字段无效`)
+    }
+    const sourceIds = record.sourceIds as readonly string[]
+    const passageSources = sourceIds.map(sourceId => {
+      const source = sourceById.get(sourceId)
+      if (source === undefined || usedSourceIds.has(sourceId)) {
+        throw new Error(`${subject} passage[${String(index)}] 来源无效`)
+      }
+      return source
+    })
+    const passage = boundedString(record.text, `${subject} passage[${String(index)}].text`, 8_192).trim()
+    if (passage === '' || /^##\s+/mu.test(passage)) throw new Error(`${subject} passage[${String(index)}] 正文无效`)
+    if (passageSources.some(source => !narrativeSourceSupportsPassage(source, passage))) {
+      throw new Error(`${subject} passage[${String(index)}] 没有呈现所列来源`)
+    }
+    if (applyApprovedDialoguePolicy(passage, approvedDialogue) !== passage) {
+      throw new Error(`${subject} passage[${String(index)}] 包含未获准或重复对白`)
+    }
+    const groundedPassage = groundedHostOwnedAction(passage, authority)
+    if (groundedPassage !== passage) {
+      throw new Error(`${subject} passage[${String(index)}] 引入了来源中不存在的物件`)
+    }
+    if (UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(passage)
+      && !passageSources.some(source => UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(source.text))) {
+      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的未回应`)
+    }
+    if (COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(passage)
+      && !passageSources.some(source => COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(source.text))) {
+      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的行动交接`)
+    }
+    if (COMPACT_WORLD_UNOWNED_DETAIL_PATTERN.test(passage)
+      && !passageSources.some(source => COMPACT_WORLD_UNOWNED_DETAIL_PATTERN.test(source.text))) {
+      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的人物或物件变化`)
+    }
+    sourceIds.forEach(sourceId => usedSourceIds.add(sourceId))
+    return { sourceIds, text: passage }
+  })
+  if (sources.some(source => source.required && !usedSourceIds.has(source.id))) {
+    throw new Error(`${subject} 缺少必要来源`)
+  }
+  return passages
+}
+
+function parseSourceBoundSection(
+  text: string,
+  subject: string,
+  sources: readonly StoryNarrativeSource[],
+  approvedDialogue: ReadonlySet<string>,
+): Pick<StorySectionDraft, 'sourcePassages' | 'text'> {
+  const record = jsonObject(text, subject)
+  if (Object.keys(record).some(key => key !== 'passages')) throw new Error(`${subject}字段无效`)
+  const sourcePassages = parseSourcePassages(record.passages, subject, sources, approvedDialogue)
+  return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
+}
+
 function parseEditedSections(
   text: string,
   source: readonly StorySectionDraft[],
   approvedDialogue: ReadonlySet<string>,
+  narrativeSources: readonly StoryNarrativeSource[] = [],
 ): readonly StorySectionDraft[] {
   const record = jsonObject(text, '最终分区编辑')
   if (Object.keys(record).some(key => key !== 'sections') || !Array.isArray(record.sections)) {
     throw new Error('最终分区编辑字段无效')
   }
   const sourceById = new Map(source.map(section => [section.sectionId, section]))
-  const editedById = new Map<string, string>()
+  const editedById = new Map<string, StorySectionDraft>()
   for (const [index, value] of record.sections.entries()) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       throw new Error(`最终分区[${String(index)}]不是对象`)
     }
     const section = value as Record<string, unknown>
-    if (Object.keys(section).some(key => key !== 'sectionId' && key !== 'text')
-      || typeof section.sectionId !== 'string' || !sourceById.has(section.sectionId)
+    if (typeof section.sectionId !== 'string' || !sourceById.has(section.sectionId)
       || editedById.has(section.sectionId)) {
       throw new Error(`最终分区[${String(index)}]字段无效`)
     }
-    const editedText = boundedString(section.text, `最终分区[${String(index)}].text`)
-    if (/^##\s+/mu.test(editedText)) throw new Error(`最终分区[${String(index)}]包含二级标题`)
-    if (editedText !== '') {
-      const sourceSection = sourceById.get(section.sectionId)!
+    const sourceSection = sourceById.get(section.sectionId)!
+    if (sourceSection.sourcePassages !== undefined) {
+      if (Object.keys(section).some(key => key !== 'sectionId' && key !== 'passages')) {
+        throw new Error(`最终分区[${String(index)}]字段无效`)
+      }
+      const sourcePassages = parseSourcePassages(
+        section.passages,
+        `最终分区[${String(index)}]`,
+        narrativeSources,
+        approvedDialogue,
+      )
+      const editedText = sourcePassages.map(passage => passage.text).join('\n\n')
+      editedById.set(section.sectionId, { ...sourceSection, sourcePassages, text: editedText })
+    } else {
+      if (Object.keys(section).some(key => key !== 'sectionId' && key !== 'text')) {
+        throw new Error(`最终分区[${String(index)}]字段无效`)
+      }
+      const editedText = boundedString(section.text, `最终分区[${String(index)}].text`)
+      if (/^##\s+/mu.test(editedText)) throw new Error(`最终分区[${String(index)}]包含二级标题`)
+      if (editedText === '') continue
       const filtered = applyApprovedDialoguePolicy(editedText, approvedDialogue)
       const required = new Set(approvedDialogueLines(sourceSection.text, approvedDialogue))
-      editedById.set(section.sectionId, appendMissingApprovedDialogue(filtered, required))
+      editedById.set(section.sectionId, {
+        ...sourceSection,
+        text: appendMissingApprovedDialogue(filtered, required),
+      })
     }
   }
   return source.flatMap(section => {
-    const editedText = editedById.get(section.sectionId)?.trim()
-    return editedText === undefined || editedText === '' ? [] : [{ ...section, text: editedText }]
+    const edited = editedById.get(section.sectionId)
+    return edited === undefined || edited.text.trim() === '' ? [] : [{ ...edited, text: edited.text.trim() }]
   })
 }
 
@@ -2419,27 +2541,15 @@ function groundedHostOwnedAction(action: string, authority: string): string {
   return retained.join('').replace(/[，；]+$/u, '').trim()
 }
 
-function renderHostOwnedWorldSections(
+function renderHostWorldSections(
   outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
   projection: PlayWorldNarrativeProjection | undefined,
-  worldEvents: readonly { readonly sequence: number; readonly type: string }[],
   characters: readonly StoryWorkspaceSnapshot['characters'][number][],
   characterDecisions: readonly StoryCharacterDecisionRecord[],
   director: StoryDirectorDecision | undefined,
   dialogueByReference: ReadonlyMap<string, string>,
 ): readonly StorySectionDraft[] | undefined {
   if (projection === undefined) return undefined
-  const worldEventTypes = new Map(worldEvents.map(event => [event.sequence, event.type]))
-  const directTransition = projection.cadence === 'transition'
-    && projection.cues.length === 0
-    && projection.facts.every(fact => fact.retention === 'compressible')
-  const essentialEventTypes = projection.facts
-    .filter(fact => fact.retention === 'essential')
-    .flatMap(fact => fact.eventSequences.map(sequence => worldEventTypes.get(sequence)))
-  const directSceneCard = projection.cadence === 'scene'
-    && essentialEventTypes.length > 0
-    && essentialEventTypes.every(type => type === 'scene.changed')
-  if (!directTransition && !directSceneCard) return undefined
   const prose = outputs.filter(output => output.enabled && output.kind === 'prose')
   if (prose.length !== 1) return undefined
   const plan = director?.sections.find(section => section.sectionId === prose[0]!.id)
@@ -2470,6 +2580,31 @@ function renderHostOwnedWorldSections(
     kind: 'prose',
     text,
   }]
+}
+
+function renderHostOwnedWorldSections(
+  outputs: readonly StoryWorkspaceSnapshot['outputs'][number][],
+  projection: PlayWorldNarrativeProjection | undefined,
+  worldEvents: readonly { readonly sequence: number; readonly type: string }[],
+  characters: readonly StoryWorkspaceSnapshot['characters'][number][],
+  characterDecisions: readonly StoryCharacterDecisionRecord[],
+  director: StoryDirectorDecision | undefined,
+  dialogueByReference: ReadonlyMap<string, string>,
+): readonly StorySectionDraft[] | undefined {
+  if (projection === undefined) return undefined
+  const worldEventTypes = new Map(worldEvents.map(event => [event.sequence, event.type]))
+  const directTransition = projection.cadence === 'transition'
+    && projection.cues.length === 0
+    && projection.facts.every(fact => fact.retention === 'compressible')
+  const essentialEventTypes = projection.facts
+    .filter(fact => fact.retention === 'essential')
+    .flatMap(fact => fact.eventSequences.map(sequence => worldEventTypes.get(sequence)))
+  const directSceneCard = projection.cadence === 'scene'
+    && essentialEventTypes.length > 0
+    && essentialEventTypes.every(type => type === 'scene.changed')
+  return directTransition || directSceneCard
+    ? renderHostWorldSections(outputs, projection, characters, characterDecisions, director, dialogueByReference)
+    : undefined
 }
 
 function renderHostOnlyWorldSections(
@@ -3634,7 +3769,7 @@ function renderNarrativeAuthority(
   characterDecisions: readonly StoryCharacterDecisionRecord[],
   director: StoryDirectorDecision | undefined,
   dialogueByReference: ReadonlyMap<string, string>,
-): string {
+): StoryNarrativeAuthority {
   const characterNames = new Map(workspace.characters.map(character => [character.id, character.name]))
   const selected = new Set(eventSequences)
   const worldEvents = workspace.world?.events.filter(event => selected.has(event.sequence)).map(event => ({
@@ -3654,35 +3789,71 @@ function renderNarrativeAuthority(
   const selectedBeats = director?.sections
     .filter(section => proseSectionIds.has(section.sectionId))
     .flatMap(section => section.beats) ?? []
+  const actionAuthority = [
+    ...(projection?.facts.map(fact => fact.text) ?? []),
+    ...(projection?.cues.map(cue => cue.text) ?? []),
+  ].join('\n')
   const allowedPublicActions = characterDecisions.flatMap(record => {
     const action = record.decision.action
     if (action === '' || director !== undefined
       && !selectedBeats.some(beat => substantiallyRestatesText(beat, action, 5))) return []
+    const grounded = projection === undefined ? action : groundedHostOwnedAction(action, actionAuthority)
+    if (grounded === '') return []
     return [{
+      sourceId: `action:${record.characterId}`,
       characterId: record.characterId,
       characterName: characterNames.get(record.characterId) ?? record.characterId,
-      action,
+      action: grounded,
     }]
   })
   const charactersWithActions = new Set(allowedPublicActions.map(action => action.characterId))
   const approvedDialogues = director?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     return dialogue === undefined || dialogue === '' ? [] : [{
+      sourceId: `dialogue:${speech.reference}`,
+      reference: speech.reference,
       characterId: speech.characterId,
       characterName: characterNames.get(speech.characterId) ?? speech.characterId,
       dialogue,
     }]
   })) ?? []
-  return JSON.stringify({
+  const narrativeFacts = projection?.facts.map(fact => ({
+    ...fact,
+    sourceId: `world:${fact.eventSequences.join('.')}`,
+  })) ?? []
+  const sources: readonly StoryNarrativeSource[] = [
+    ...narrativeFacts.map(fact => ({
+      id: fact.sourceId,
+      kind: 'world-fact' as const,
+      text: fact.text,
+      required: fact.retention === 'essential',
+    })),
+    ...allowedPublicActions.map(action => ({
+      id: action.sourceId,
+      kind: 'public-action' as const,
+      text: action.action,
+      required: true,
+    })),
+    ...approvedDialogues.map(dialogue => ({
+      id: dialogue.sourceId,
+      kind: 'approved-dialogue' as const,
+      text: dialogue.dialogue,
+      required: true,
+    })),
+  ]
+  if (new Set(sources.map(source => source.id)).size !== sources.length) {
+    throw new Error('叙事依据 id 重复')
+  }
+  return { text: JSON.stringify({
     invariants: projection?.invariants ?? [],
-    narrativeFacts: projection?.facts ?? [],
+    narrativeFacts,
     worldEvents,
     allowedPublicActions,
     charactersWithoutAdditionalActions: characters
       .filter(character => !charactersWithActions.has(character.id))
       .map(character => ({ characterId: character.id, characterName: character.name })),
     approvedDialogues,
-  }, null, 2)
+  }, null, 2), sources }
 }
 
 function compactProseRetainsPlan(
@@ -3762,6 +3933,7 @@ function enforceFinalSections(
       name: output.name,
       kind: output.kind,
       ...(output.characterId === undefined ? {} : { characterId: output.characterId }),
+      ...(existing.sourcePassages === undefined ? {} : { sourcePassages: existing.sourcePassages }),
       text: existing.text,
     }]
   })
@@ -4781,6 +4953,16 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     directorDecision,
     dialogueByReference,
   )
+  const deterministicWorldSections = hostDirectorAssignment === undefined
+    ? undefined
+    : renderHostWorldSections(
+        enabledSections,
+        worldNarrativeProjection,
+        enabledCharacters,
+        characterDecisions,
+        directorDecision,
+        dialogueByReference,
+      )
   const hostOwnedWorldSections = hostDirectorAssignment === undefined
     ? undefined
     : renderHostOwnedWorldSections(
@@ -4830,12 +5012,17 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return dialogue === undefined || dialogue === '' ? [] : [dialogue]
           }) ?? [])
         const compactSection = compactProseTurn && section.kind === 'prose'
+        const deterministicWorldSection = deterministicWorldSections?.find(candidate => candidate.sectionId === section.id)
+        const sourceBoundWorldSection = section.kind === 'prose' && worldNarrative !== ''
+          && hostDirectorAssignment !== undefined && deterministicWorldSection !== undefined
         const routineWorldSection = section.kind === 'prose'
           && worldNarrativeProjection !== undefined
           && worldNarrativeProjection.cues.length === 0
           && publicActionCount === 0
           && approvedDialogue.size === 0
-        const outputInstruction = compactWorldTransition && section.kind === 'prose'
+        const outputInstruction = sourceBoundWorldSection
+          ? '只返回 JSON：{"passages":[{"sourceIds":["narrative_authority 中的 sourceId"],"text":"可直接展示的正文段落"}]}。每个 sourceId 只能用于一个 passage；一个 passage 可以合并多项紧邻来源。每个 passage 必须真实呈现所列来源，不得把没有来源的独立人物行动、物件变化、规则变化、回应或未回应塞进同一段。'
+          : compactWorldTransition && section.kind === 'prose'
           ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。只写一个自然段、二至四句且不超过 320 个字符；把相似投掷和移动合成时间流动，在本轮最终棋位落定后停止。可省略没有信息增长的单次骰点；若选择写出点数，只能使用 worldEvents 中的真实值，不能写破折号、省略号或其他占位符。不得逐次铺陈拿骰、停顿、视线、光影和静止物件，也不添加气氛总结。不要预告下一位行动者，也不要补写骰子最后交到谁手中；下一轮归属只由权威场地状态呈现。'
           : compactSection
             ? '本轮只有一项新的公开动作或一句获准对白。只写一个自然段、二至四句且不超过 320 个字符；直接从变化发生处接续，在可观察结果落定后停止。不得重述上一段静止状态，不把一个动作拆成反复停顿、伸手、收手、视线或物件位置盘点，也不添加气氛总结。比喻、象征和效果解读不能替动作解释意义；recent_public_prose 中已经发生的说话或动作不能改成没发生。'
@@ -4875,13 +5062,34 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               : ['<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>']),
             '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
             '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
-            ...(narrativeAuthority === '' ? [] : ['<narrative_authority>', narrativeAuthority, '</narrative_authority>']),
+            ...(narrativeAuthority.text === '' ? [] : ['<narrative_authority>', narrativeAuthority.text, '</narrative_authority>']),
             '<director_brief>', sectionDirectorBrief, '</director_brief>',
             '<player_input>', playerInput, '</player_input>',
           ].join('\n'),
           compactSection ? 768 : 6_144,
           compactSection ? 0.4 : 0.7,
         ), resultEventSeqs, section.id)
+        if (sourceBoundWorldSection) {
+          if (draft.text === undefined || draft.text.trim() === '' || draft.text.trim() === '<omit-section />') {
+            return deterministicWorldSection
+          }
+          try {
+            const parsed = parseSourceBoundSection(
+              draft.text,
+              `${section.name}分区正文`,
+              narrativeAuthority.sources,
+              approvedDialogue,
+            )
+            return {
+              sectionId: section.id,
+              name: section.name,
+              kind: section.kind,
+              ...parsed,
+            }
+          } catch {
+            return deterministicWorldSection
+          }
+        }
         if (draft.text === undefined
           || (section.kind === 'prose' && worldNarrative !== ''
             && (draft.text.trim() === '' || draft.text.trim() === '<omit-section />'))) return section.kind === 'prose' && worldNarrative !== ''
@@ -4908,7 +5116,13 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   }
   const uneditedDraft = renderSectionDrafts(sectionDrafts).trim()
   let editedSections = sectionDrafts
-  const compactDraftReady = hostOwnedWorldSections !== undefined
+  const sourceBoundWorldDraft = sectionDrafts.some(section => section.sourcePassages !== undefined)
+  const deterministicWorldDraftReady = deterministicWorldSections !== undefined
+    && deterministicWorldSections.every(expected => {
+      const actual = sectionDrafts.find(section => section.sectionId === expected.sectionId)
+      return actual?.sourcePassages === undefined && actual?.text === expected.text
+    })
+  const compactDraftReady = hostOwnedWorldSections !== undefined || deterministicWorldDraftReady
     || compactProseTurn && sectionDrafts.length === 1
       && (compactWorldTransition
         ? compactWorldTransitionWithinBudget(sectionDrafts[0]!.text)
@@ -4934,14 +5148,19 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           : 'prose 应读成连续场景：相似机械结果压缩成时间流动，scene 保留变化发生前的现场、触发动作与可观察后果，resolution 收束已经形成的结果。段落结构服从 world_narrative 的 cadence 和事件进展；没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由。保留权威事实、获准对白和已选公开行动；只删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞，不补造互动。',
         'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
         '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
-        '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
+        sourceBoundWorldDraft
+          ? 'ordered_sections 中带 sourcePassages 的 prose 已由 Host 核对来源。编辑时继续返回 passages，并保留每项 passage 的 sourceIds；可以改写 text，但不能重复、移动或创造 sourceId，也不能增加没有来源的独立行动、状态、对白或未回应。'
+          : 'ordered_sections 中的分区使用 text 字段。编辑不能自行增加来源标记。',
+        sourceBoundWorldDraft
+          ? '只返回 JSON：带 sourcePassages 的 prose 使用 {"sectionId":"稳定 ID","passages":[{"sourceIds":["原有来源 ID"],"text":"编辑后的正文段落"}]}；其余分区仍使用 {"sectionId":"稳定 ID","text":"编辑后的分区正文"}。把这些对象按原顺序放入 sections；不重复分区名，不添加标题。'
+          : '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
       ].join('\n'),
       [
         '<recent_public_prose>', compactProseTurn ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
         '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
         '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
         '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
-        ...(narrativeAuthority === '' ? [] : ['<narrative_authority>', narrativeAuthority, '</narrative_authority>']),
+        ...(narrativeAuthority.text === '' ? [] : ['<narrative_authority>', narrativeAuthority.text, '</narrative_authority>']),
         '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
       ].join('\n'),
       compactProseTurn ? 1_024 : 4_096,
@@ -4949,7 +5168,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     ), resultEventSeqs)
     if (edited.text !== undefined) {
       try {
-        const parsed = parseEditedSections(edited.text, sectionDrafts, approvedDialogue)
+        const parsed = parseEditedSections(
+          edited.text,
+          sectionDrafts,
+          approvedDialogue,
+          narrativeAuthority.sources,
+        )
         if (parsed.length > 0) {
           editedSections = preserveEditedPublicMaterials(
             parsed,
@@ -4985,8 +5209,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const finalDraft = renderSectionDrafts(finalSections).trim() || uneditedDraft
   const hostOnlyWorldDraft = hostOnlyWorldSections !== undefined
     && finalDraft === renderSectionDrafts(hostOnlyWorldSections).trim()
-  const hostOwnedWorldDraft = hostOwnedWorldSections !== undefined
-    && finalDraft === renderSectionDrafts(hostOwnedWorldSections).trim()
+  const deterministicFinalSections = deterministicWorldSections === undefined
+    ? undefined
+    : enforceFinalSections(deterministicWorldSections, enabledSections, worldOutcome)
+  const hostOwnedWorldDraft = deterministicFinalSections !== undefined
+    && finalSections.every(section => section.sourcePassages === undefined)
+    && finalDraft === renderSectionDrafts(deterministicFinalSections).trim()
   const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []

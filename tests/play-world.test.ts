@@ -2619,7 +2619,7 @@ test('renders a simple event-card scene without prose or editor inventions', asy
   assert.doesNotMatch(result.finalDraft, /两张棋盘|四只骰子|相同的白点|灵梦抬眼|石子/u)
 })
 
-test('restores the causal roll when generated prose jumps straight to a first launch', async (context) => {
+test('falls back to the causal roll when sourced prose omits a first launch', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-first-launch-retention-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })
   const rolls = [3, 2, 1, 6]
@@ -2723,9 +2723,11 @@ test('restores the causal roll when generated prose jumps straight to a first la
   })
 
   assert.match(sectionBody, /retention[\s\S]*essential/u)
-  assert.match(editorBody, /retention[\s\S]*essential/u)
+  assert.equal(editorBody, '')
   assert.notEqual(result.finalDraft, incomplete)
   assert.match(result.finalDraft, /雾雨魔理沙掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
+  assert.equal(result.hostOwnedWorldDraft, true)
+  assert.equal(result.finalSections[0]?.sourcePassages, undefined)
 })
 
 test('renders routine world transitions from authoritative facts without prose stages', async (context) => {
@@ -3657,8 +3659,20 @@ test('writes a manually completed world result without persisting a character co
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
   })
-  const naturalWorldScene = '红方起跑线前依然空着。灵梦探身把骰子捞回来，这一次握在指间多停了片刻。她松手时，骰子滚过三格跑道，停在空地中央。六点朝上。她低头确认骰面，随后把手探进红方基地。四架木机中靠外的一架，翼根刻着“壹”。她把那架木机提出来，放上航线第一格。木机落定时，第一格下露出一张折签。折签背面画着问号，签文仍被棋盘遮住。'
+  const naturalWorldPassages = [{
+    sourceIds: ['world:2.3'],
+    text: '红方起跑线前依然空着。灵梦探身把骰子捞回来，这一次握在指间多停了片刻。她松手时，骰子滚过三格跑道，停在空地中央。六点朝上。她低头确认骰面，随后把手探进红方基地。四架木机中靠外的一架，翼根刻着“壹”。她把那架木机提出来，放上航线第一格。',
+  }, {
+    sourceIds: ['world:4'],
+    text: '木机落定时，第一格下露出一张折签。折签背面画着问号，签文仍被棋盘遮住。',
+  }]
+  const naturalWorldScene = naturalWorldPassages.map(passage => passage.text).join('\n\n')
+  const invalidEditorPassages = naturalWorldPassages.map((passage, index) => index === 0 ? passage : {
+    ...passage,
+    text: `${passage.text}灵梦问过以后，魔理沙没有回答。`,
+  })
   const characterBodies: string[] = []
+  let invalidSection = false
   const fake = {
     sessions: { flush: async () => true },
     llm: {
@@ -3699,11 +3713,16 @@ test('writes a manually completed world result without persisting a character co
                 insights: [],
               })
           : system.includes('分区的 prose Worker')
-            ? naturalWorldScene
+            ? JSON.stringify({ passages: invalidSection
+              ? [{
+                  sourceIds: ['world:2.3', 'world:4'],
+                  text: `${naturalWorldScene}\n\n灵梦把骰子递给魔理沙，魔理沙没有回答。`,
+                }]
+              : naturalWorldPassages })
             : system.includes('最终正文编辑 Worker')
               ? JSON.stringify({ sections: [{
                   sectionId: proseId,
-                  text: naturalWorldScene,
+                  passages: invalidEditorPassages,
                 }, {
                   sectionId: historyId,
                   text: '错误的模型历史会被 Host 替换。',
@@ -3750,7 +3769,7 @@ test('writes a manually completed world result without persisting a character co
   assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
-  assert.match(proseDispatch, /是否有获准对白或附加人物行动不决定 scene 的段落数量/u)
+  assert.match(proseDispatch, /每个 sourceId 只能用于一个 passage/u)
   assert.match(editorDispatch, /没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由/u)
   for (const dispatch of [proseDispatch, editorDispatch]) {
     assert.match(dispatch, /<recent_public_prose>/u)
@@ -3768,12 +3787,39 @@ test('writes a manually completed world result without persisting a character co
   assert.match(JSON.stringify(stageRequests.find(request => request.stage === 'character'
     && request.subjectId === marisaId)?.dispatch), /thisCharacterRole=observer/u)
   assert.equal(result.finalDraft, naturalWorldScene)
+  assert.deepEqual(result.finalSections.find(section => section.sectionId === proseId)?.sourcePassages, naturalWorldPassages)
+  assert.doesNotMatch(result.finalDraft, /没有回答/u)
   assert.doesNotMatch(result.finalDraft, /博丽灵梦掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
   assert.equal(result.hostOwnedWorldDraft, undefined)
   assert.deepEqual(result.publicWorldEvents?.slice(0, 3).map(event => event.type), ['game.started', 'die.rolled', 'piece.moved'])
   assert.equal(manuallyAdvanced.world?.events.findLast(event => event.type === 'piece.moved')?.summary, '飞机前进到航线第 1 步。')
   assert.equal(store.get(manuallyAdvanced.id).revision, manuallyAdvanced.revision)
   assert.equal((store.get(manuallyAdvanced.id).world?.state as FlyingChessWorldState).currentPlayerId, reimuId)
+
+  invalidSection = true
+  const rejectedSession = Session.create(SessionId('manual-world-result-rejected-source'))
+  rejectedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' as never, maxTokens: 4_096 } },
+  })
+  const rejected = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: rejectedSession.id, options: { provider: 'fixture', model: 'fixture' }, session: rejectedSession } as Agent,
+    store,
+    workspace: manuallyAdvanced,
+    turn: 3,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(rejected.hostOwnedWorldDraft, true)
+  assert.equal(rejected.finalSections.find(section => section.sectionId === proseId)?.sourcePassages, undefined)
+  assert.doesNotMatch(rejected.finalDraft, /递给|没有回答/u)
+  assert.equal(sessionEvents(rejectedSession).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'editor'), false)
 
   session.append('assistant/message', {
     turn: 2,
@@ -4208,12 +4254,27 @@ test('assembles a grounded world result and approved dialogue without unowned mo
               : '你自己把两句话接在一起，还问我是哪句？',
           }] })
         } else if (system.includes('分区的 prose Worker')) {
-          text = '灵梦答道：“你自己把两句话接在一起，还问我是哪句？”'
+          const dialogue = body.includes('都被你接到一块了')
+            ? '“都被你接到一块了，怎么反倒来问我？”'
+            : '“你自己把两句话接在一起，还问我是哪句？”'
+          const prose = `灵梦答道：${dialogue}`
+          text = system.includes('每个 sourceId 只能用于一个 passage')
+            ? JSON.stringify({ passages: [{
+                sourceIds: [`dialogue:speech:${proseId}:1`],
+                text: prose,
+              }] })
+            : prose
         } else if (system.includes('最终正文编辑 Worker')) {
-          text = JSON.stringify({ sections: [{
-            sectionId: proseId,
-            text: '灵梦答道：“你自己把两句话接在一起，还问我是哪句？”',
-          }] })
+          const dialogue = body.includes('都被你接到一块了')
+            ? '“都被你接到一块了，怎么反倒来问我？”'
+            : '“你自己把两句话接在一起，还问我是哪句？”'
+          const prose = `灵梦答道：${dialogue}`
+          text = system.includes('带 sourcePassages 的 prose')
+            ? JSON.stringify({ sections: [{
+                sectionId: proseId,
+                passages: [{ sourceIds: [`dialogue:speech:${proseId}:1`], text: prose }],
+              }] })
+            : JSON.stringify({ sections: [{ sectionId: proseId, text: prose }] })
         } else {
           throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
         }
