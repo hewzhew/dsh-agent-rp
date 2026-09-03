@@ -4667,6 +4667,163 @@ test('keeps the exact world outcome while preserving only private-section charac
     && event.data.stage === 'continuity'), true)
 })
 
+test('prioritizes an open exchange responder over a new automatic world reaction', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-open-exchange-response-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 1 }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const created = store.create({ format: 2, name: '开放话轮优先级' })
+  const reimu = character(reimuId, '博丽灵梦')
+  const configured = store.save({
+    ...editable(created),
+    characters: [{
+      ...reimu,
+      profile: { ...reimu.profile, exampleDialogue: '博丽灵梦：“这还用问？”' },
+    }, character(marisaId, '雾雨魔理沙')],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  const installed = store.installWorld(configured.id, {
+    format: 0,
+    revision: configured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  const session = Session.create(SessionId('open-exchange-response-priority'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const question = '“你打算在基地里待到什么时候啊？”'
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: installed.id,
+    workspaceRevision: installed.revision,
+    turn: 1,
+    step: 1,
+    resultEventSeqs: [],
+    directorBrief: '',
+    finalSections: [],
+    finalDraft: question,
+    modelContext: '',
+    publicDialogues: [{
+      characterId: marisaId,
+      targetCharacterId: reimuId,
+      dialogue: question,
+      move: 'question',
+    }],
+  })
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
+  const answer = '“骰子不给六，我能怎么办？”'
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: 'off', name: 'Off' }], defaultEffort: 'off' },
+        }
+      },
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        const referenceMatch = body.match(/\[speech:([^\]]+)\]/u)
+        const reference = referenceMatch === null ? `speech:${proseId}:1` : `speech:${referenceMatch[1]}`
+        const seedId = body.match(/\[seed:([^\]]+)\]\[目标人物\]/u)?.[1]
+        let text: string
+        if (system.includes('结构化世界行动 Worker')) {
+          text = JSON.stringify({ actionId: 'roll' })
+        } else if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          text = body.includes('# 人物：博丽灵梦')
+            ? JSON.stringify({
+                observation: '魔理沙刚问自己打算在基地里待到什么时候。',
+                action: '',
+                speech: {
+                  respondsTo: `魔理沙问灵梦：${question}`,
+                  move: 'answer',
+                  focus: '没有掷出六点就不能起飞。',
+                  effect: '直接回答魔理沙的问题。',
+                },
+                opportunityDecisions: [],
+                insights: [],
+              })
+            : JSON.stringify({
+                observation: '一阵风掀起棋盘一角，基地里的木机随之晃动。',
+                action: '',
+                speech: {
+                  respondsTo: '一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
+                  move: 'inform',
+                  focus: '先把棋盘压稳。',
+                  effect: '让两人先处理棋盘。',
+                },
+                opportunityDecisions: [],
+                insights: [],
+              })
+        } else if (system.includes('人物自己的对白 Worker')) {
+          text = JSON.stringify({ lines: [{
+            reference,
+            move: 'answer',
+            seedLineIds: seedId === undefined ? [] : [seedId],
+            mechanics: '用反问直接收束对方的问题',
+            leftImplicit: '只有六点才能起飞。',
+            dialogue: answer,
+          }] })
+        } else if (system.includes('严格对白审校 Worker')) {
+          text = JSON.stringify({ lines: [{ reference, dialogue: answer }] })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = '<omit-section />'
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace: installed,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.deepEqual(result.publicDialogues?.map(dialogue => ({
+    characterId: dialogue.characterId,
+    dialogue: dialogue.dialogue,
+    move: dialogue.move,
+  })), [{ characterId: reimuId, dialogue: answer, move: 'answer' }])
+  const stageRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    ? [event.data]
+    : [])
+  const characterBodies = stageRequests.filter(request => request.stage === 'character')
+    .map(request => JSON.stringify(request.dispatch.messages))
+  assert.match(characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? '', /status=open/u)
+  assert.match(characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? '', /status=closed/u)
+  assert.deepEqual(stageRequests.filter(request => request.stage === 'voice')
+    .map(request => request.subjectId?.split(':').slice(0, 2).join(':'))
+    .filter((value, index, values) => values.indexOf(value) === index), [`draft:${reimuId}`, `review:${reimuId}`])
+})
+
 test('assembles a grounded world result and approved dialogue without unowned model stages', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-host-world-dialogue-'))
   context.after(() => { rmSync(root, { recursive: true, force: true }) })

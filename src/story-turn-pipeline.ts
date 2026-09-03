@@ -4883,7 +4883,9 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     deferWorldOpportunityResponders(parallelCharacterDecisions, enabledCharacters),
     automaticAdvance,
     worldOutcome,
-    worldActionCharacterIds.at(-1),
+    recentExchange?.status === 'open'
+      ? recentExchange.lines.at(-1)?.targetCharacterId ?? worldActionCharacterIds.at(-1)
+      : worldActionCharacterIds.at(-1),
     enabledCharacters,
   )
   const characterDecisionText = characterDecisions.map(record => record.text)
