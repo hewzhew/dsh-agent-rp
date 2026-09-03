@@ -2419,7 +2419,7 @@ test('shows recorded facts to every character but only offers a cue to its named
   })
   const scenePassages = [{
     sourceIds: projection.facts.map(fact => `world:${fact.eventSequences.join('.')}`),
-    text: '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。几轮过去，博丽灵梦与雾雨魔理沙的飞机都没有移动。一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
+    text: '博丽灵梦、雾雨魔理沙在棋盘两侧坐定。几轮过去，一枚骰子在两人之间滚了又停，博丽灵梦与雾雨魔理沙的飞机都没有移动，一架也没有离开基地。一阵风忽然掀起棋盘一角，基地里的木机随之晃动。',
   }, {
     sourceIds: [`action:${reimuId}`],
     text: '博丽灵梦捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
@@ -2470,13 +2470,19 @@ test('shows recorded facts to every character but only offers a cue to its named
                   speech: [],
                 }] })
               : system.includes('分区的 prose Worker')
-                ? JSON.stringify({ passages: sectionAttempts === 1
-                  ? scenePassages.map((passage, index) => index === 1
-                    ? { ...passage, text: `${passage.text}雾雨魔理沙接过骰子，又把一架纸机撞回基地。` }
-                    : passage)
-                  : scenePassages })
+                ? (() => {
+                    const serialized = JSON.stringify({ passages: sectionAttempts === 1
+                      ? [{
+                          sourceIds: scenePassages.flatMap(passage => passage.sourceIds),
+                          text: `一枚骰子在棋盘上停住。棋盘边沿多了一架纸机，机身写着“测试”。${scenePassages[1]!.text}`,
+                        }]
+                      : scenePassages })
+                    return sectionAttempts === 1
+                      ? serialized.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/gu, '“$1”').replace(/”:/gu, '”：')
+                      : serialized
+                  })()
                 : system.includes('最终正文编辑 Worker')
-                  ? JSON.stringify({ sections: [{ sectionId: proseId, passages: scenePassages }] })
+                  ? JSON.stringify({ sections: [{ sectionId: proseId, passages: scenePassages.slice().reverse() }] })
               : (() => { throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`) })()
         return (async function* () {
           yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -2503,6 +2509,7 @@ test('shows recorded facts to every character but only offers a cue to its named
 
   assert.equal(result.finalDraft, sceneText)
   assert.match(result.finalDraft, /几轮过去/u)
+  assert.match(result.finalDraft, /一枚骰子/u)
   assert.doesNotMatch(result.finalDraft, /掷出 1|第 \d+ 回合/u)
   const reimuBody = characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
   const marisaBody = characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
@@ -2523,8 +2530,16 @@ test('shows recorded facts to every character but only offers a cue to its named
     && event.data.stage === 'director'), false)
   assert.match(sectionBody, /每个 sourceId 只能用于一个 passage/u)
   assert.match(sectionBody, /source_validation_failure/u)
+  assert.match(sectionBody, /没有呈现所列来源[^\n]*world:/u)
   assert.match(sectionBody, /不存在的物件[^\n]*纸机/u)
+  assert.match(sectionBody, /世界事实与人物后续材料不能合并到同一 passage/u)
   assert.match(sectionBody, /实体名称逐字沿用相关来源/u)
+  assert.match(sectionBody, /compressible 来源若保留 sourceId/u)
+  assert.match(sectionBody, /objectNames 只允许沿用已有物件名称/u)
+  assert.match(sectionBody, /allowedPublicActions 和 approvedDialogues 中的每一项都是必要来源/u)
+  assert.match(sectionBody, /必要来源不能从重试稿删除/u)
+  assert.match(sectionBody, /JSON 只是来源容器/u)
+  assert.match(sectionBody, /校验失败不是把小说场景缩成事件摘要的理由/u)
   assert.equal(sectionAttempts, 2)
   assert.match(editorBody, /带 sourcePassages 的 prose/u)
   assert.deepEqual(result.finalSections[0]?.sourcePassages, scenePassages)
@@ -3516,7 +3531,8 @@ test('advances executable worlds from the unified direction input unless the pla
     llm: {
       stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
-        if (system.includes('指定人物认知')) characterBodies.push(JSON.stringify(options.messages ?? []))
+        const body = JSON.stringify(options.messages ?? [])
+        if (system.includes('指定人物认知')) characterBodies.push(body)
         const text = system.includes('结构化世界行动 Worker')
           ? JSON.stringify({ actionId: 'roll' })
           : system.includes('人物参与路由 Worker')
@@ -3526,12 +3542,19 @@ test('advances executable worlds from the unified direction input unless the pla
             : system.includes('剧情研究 Worker')
               ? JSON.stringify({ findings: [], followUps: [] })
               : system.includes('指定人物认知')
-                ? JSON.stringify({
-                  observation: '看见骰子在桌沿裂开一道缝。',
-                  action: '暂停棋局并检查骰子。',
-                  speech: null,
-                  insights: [],
-                })
+                ? JSON.stringify(body.includes('验证 Host 拦截')
+                  ? {
+                      observation: '棋局仍在眼前。',
+                      action: '灵梦的2号飞机绕场一周后落在第8步，又让3号机从起点滑出三格。',
+                      speech: null,
+                      insights: [],
+                    }
+                  : {
+                      observation: '看见骰子在桌沿裂开一道缝。',
+                      action: '暂停棋局并检查骰子。',
+                      speech: null,
+                      insights: [],
+                    })
                 : system.includes('剧情导演 Worker')
                   ? JSON.stringify({ sections: [{
                     sectionId: proseId,
@@ -3584,7 +3607,7 @@ test('advances executable worlds from the unified direction input unless the pla
     reason: 'initial',
     header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
   })
-  const directedInput = '让棋局继续推进；不要为了凑对白让人物开口。'
+  const directedInput = '先让场地继续推进四个合法棋局动作；不要为了凑对白让人物开口。'
   const directedResult = await runStoryTurnPipeline({
     ctx: fake,
     agent: {
@@ -3608,6 +3631,33 @@ test('advances executable worlds from the unified direction input unless the pla
     && event.data.stage === 'world-action'), true)
   assert.equal((directedResult.worldEventSequences?.length ?? 0) > 0, true)
   assert.equal(store.get(installed.id).revision > installed.revision, true)
+
+  const guardedSession = Session.create(SessionId('guarded-story-world'))
+  guardedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const guardedInput = '验证 Host 拦截：让人物观察棋盘；不要推进棋局，规则状态保持不变。'
+  const guardedResult = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: {
+      id: guardedSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: guardedSession,
+    } as Agent,
+    store,
+    workspace: store.get(installed.id),
+    turn: 4,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: guardedInput }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(sessionEvents(guardedSession).some(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'world-action'), false)
+  assert.doesNotMatch(guardedResult.finalDraft, /2号飞机|3号机|绕场|滑出三格/u)
 })
 
 test('lets the current private character Worker complete one world turn exactly once', async (context) => {
@@ -3816,7 +3866,7 @@ test('writes a manually completed world result without persisting a character co
             ? JSON.stringify({ passages: invalidSection
               ? [{
                   sourceIds: ['world:2.3', 'world:4'],
-                  text: `${naturalWorldScene}\n\n灵梦把骰子递给魔理沙，魔理沙没有回答。`,
+                  text: `${naturalWorldScene}\n\n骰子被推到魔理沙面前，魔理沙没有回答。`,
                 }]
               : naturalWorldPassages })
             : system.includes('最终正文编辑 Worker')
@@ -3917,7 +3967,7 @@ test('writes a manually completed world result without persisting a character co
   })
   assert.equal(rejected.hostOwnedWorldDraft, true)
   assert.equal(rejected.finalSections.find(section => section.sectionId === proseId)?.sourcePassages, undefined)
-  assert.doesNotMatch(rejected.finalDraft, /递给|没有回答/u)
+  assert.doesNotMatch(rejected.finalDraft, /推到魔理沙面前|没有回答/u)
   assert.equal(sessionEvents(rejectedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'editor'), false)
 

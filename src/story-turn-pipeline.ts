@@ -565,6 +565,7 @@ interface StoryNarrativeSource {
   readonly id: string
   readonly kind: 'world-fact' | 'public-action' | 'approved-dialogue'
   readonly text: string
+  readonly objectNames: readonly string[]
   readonly required: boolean
 }
 
@@ -662,7 +663,7 @@ function isAutomaticStoryAdvance(messages: readonly UserMessage[]): boolean {
 }
 
 const WORLD_ADVANCE_PAUSE_PATTERN = /(?:棋局|世界|规则)(?:的)?(?:状态)?(?:保持|维持)?不变|(?:不要|别|禁止|暂不|先不|先别|暂停|停止)(?:再|立刻|现在|马上|自动|新的|任何|本轮|这轮|\s){0,5}(?:推进|继续|执行|运行|掷骰|投骰|移动|世界动作|规则动作|棋局)|(?:无需|不必)(?:再|立刻|现在|自动|新的|本轮|这轮|\s){0,5}(?:推进|执行|掷骰|投骰|移动|世界动作|规则动作)/u
-const WORLD_ADVANCE_REQUEST_PATTERN = /(?:继续|推进|开始|进入|完成|进行|玩)(?:这|本|下|下一)?(?:一)?(?:回合|轮|局|棋局)|(?:继续|推进)(?:棋局|世界)|(?:棋局|世界)[^。！？；\r\n]{0,4}(?:继续|推进)|(?:掷|投)(?:骰|色子)|(?:移动|推进)(?:棋|飞机|棋子)|(?:让|由)[^。！？；\r\n]{0,12}(?:行动|走棋)/u
+const WORLD_ADVANCE_REQUEST_PATTERN = /(?:继续|推进|开始|进入|完成|进行|玩)(?:这|本|下|下一)?(?:一)?(?:回合|轮|局|棋局)|(?:继续|推进)(?:场地|棋局|世界|规则)|(?:场地|棋局|世界|规则)[^。！？；\r\n]{0,8}(?:继续|推进)|(?:掷|投)(?:骰|色子)|(?:移动|推进)(?:棋|飞机|棋子)|(?:让|由)[^。！？；\r\n]{0,12}(?:行动|走棋)/u
 const DIALOGUE_BEAT_PATTERN = /(?:说|回答|答道|追问|发问|开口|回应|对话|交谈|吐槽|解释|反驳|承认|拒绝|提议|提醒|警告|命令|告诉)/u
 
 function playerPausesWorldAdvance(playerInput: string): boolean {
@@ -826,8 +827,74 @@ function boundedString(value: unknown, subject: string, max = 64 * 1_024): strin
   return text
 }
 
+/** Accept fullwidth JSON delimiters without changing prose punctuation inside string values. */
+function normalizeModelJsonSyntax(text: string): string {
+  const structural = new Map([
+    ['：', ':'],
+    ['，', ','],
+    ['［', '['],
+    ['］', ']'],
+    ['｛', '{'],
+    ['｝', '}'],
+  ])
+  let output = ''
+  let quote: 'ascii' | 'curly' | undefined
+  let escaped = false
+  let nestedCurlyQuotes = 0
+  for (const character of text) {
+    if (quote === 'ascii') {
+      output += character
+      if (escaped) {
+        escaped = false
+      } else if (character === '\\') {
+        escaped = true
+      } else if (character === '"') {
+        quote = undefined
+      }
+      continue
+    }
+    if (quote === 'curly') {
+      if (escaped) {
+        output += character
+        escaped = false
+      } else if (character === '\\') {
+        output += character
+        escaped = true
+      } else if (character === '“') {
+        output += character
+        nestedCurlyQuotes += 1
+      } else if (character === '”') {
+        if (nestedCurlyQuotes > 0) {
+          output += character
+          nestedCurlyQuotes -= 1
+        } else {
+          output += '"'
+          quote = undefined
+        }
+      } else if (character === '"') {
+        output += '\\"'
+      } else {
+        output += character
+      }
+      continue
+    }
+    if (character === '"') {
+      output += character
+      quote = 'ascii'
+    } else if (character === '“') {
+      output += '"'
+      quote = 'curly'
+    } else {
+      output += structural.get(character) ?? character
+    }
+  }
+  return output
+}
+
 function jsonObject(text: string, subject: string): Record<string, unknown> {
-  const unfenced = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')
+  const unfenced = normalizeModelJsonSyntax(
+    text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, ''),
+  )
   const start = unfenced.indexOf('{')
   if (start < 0) throw new Error(`${subject}没有 JSON 对象`)
   const end = unfenced.lastIndexOf('}')
@@ -1055,7 +1122,7 @@ const DIRECT_DIALOGUE_PATTERN = /[“”「」『』"]/u
 const DIRECTOR_SPEECH_BEAT_PATTERN = /(?:开口|说出|发问|提问|问出|回答|答复|回话|回应|接话|接过[^。！？\r\n]{0,16}(?:问题|话)|拒答|拒绝回答|把话|话锋|话题)/u
 const COMPACT_PROSE_INTERPRETATION_PATTERN = /(?:仿佛|仿若|宛如|好像|像|似乎|余韵|(?:没(?:有)?动|未动)[^。！？\r\n]{0,16}(?:看|望|听))/u
 const INCOMPLETE_WORLD_VALUE_PATTERN = /(?:(?:点数|骰面|朝上)(?:是|为|的是)|(?:掷出|停在))\s*(?:[—–―-]+|…{1,2}|\.{3,})(?:\s*点)?(?=[，,。！？!?；;\s]|$)/u
-const COMPACT_WORLD_TURN_HANDOFF_PATTERN = /(?:轮到|下(?:一|个)回合(?:由)?|接下来(?:由)?)[^。！？\r\n]{0,24}(?:掷|行动|走棋|回合)|(?:该|换)[^。！？\r\n]{0,12}(?:掷|行动|走棋|了)|骰子[^。！？\r\n]{0,24}(?:回到|转回|滚回|推给|递给|交给|还给|(?:停|落)(?:到|在)[^。！？\r\n]{0,12}(?:手边|面前))|(?:接过(?:来)?|拿过)骰子|把骰子[^。！？\r\n]{0,20}(?:推|递|交|还)/u
+const COMPACT_WORLD_TURN_HANDOFF_PATTERN = /(?:轮到|下(?:一|个)回合(?:由)?|接下来(?:由)?)[^。！？\r\n]{0,24}(?:掷|行动|走棋|回合)|(?:该|换)[^。！？\r\n]{0,12}(?:掷|行动|走棋|了)|骰子[^。！？\r\n]{0,24}(?:回到|转回|滚回|推给|递给|交给|还给|被(?:推|递|交|还)(?:到|给)?|(?:停|落)(?:到|在)[^。！？\r\n]{0,12}(?:手边|面前))|(?:接过(?:来)?|拿过)骰子|把骰子[^。！？\r\n]{0,20}(?:推|递|交|还)/u
 const COMPACT_WORLD_UNOWNED_DETAIL_PATTERN = /(?:目光|视线|眼神|盯着)[^。！？\r\n]{0,24}(?:停|落|移|扫|看)|(?:指尖|手指|指节)[^。！？\r\n]{0,20}(?:叩|敲)|(?:抿(?:了)?抿(?:嘴)?|没(?:有)?(?:说话|吭声)|顿了片刻)|(?:折签|纸角)[^。！？\r\n]{0,32}(?:(?:挪|移动|滑|翻|露|晃)(?:了|动|出)|(?:仍|依旧)[^。！？\r\n]{0,12}(?:原样|背面朝上|没有变化))/u
 const UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN = /(?:没有|未|并未|不曾)(?:立刻)?(?:回答|回应|接话|作答|开口)|(?:问题|问话)[^。！？\r\n]{0,20}(?:没有|未|并未|不曾)(?:得到)?(?:回答|回应)/u
 
@@ -1588,7 +1655,7 @@ function substantiallyRestatesText(
 }
 
 const FORBID_WORLD_RECAP_PATTERN = /(?:不要|别|禁止|无需|不必)[^。！？\r\n]{0,16}(?:复述|重复)[^。！？\r\n]{0,16}(?:棋局|规则|世界|结算|骰点|棋子|位置|事实|结果)/u
-const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,6}(?:飞机|棋子)|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
+const CHARACTER_RULE_ACTION_PATTERN = /(?:掷|投)(?:骰|色子)|(?:移动|推进)[^。！？\r\n]{0,8}(?:飞机|棋子|\d+\s*号机)|(?:飞机|棋子|\d+\s*号机)[^。！？\r\n]{0,12}(?:移动|推进|前进|起飞|绕场|抵达|到达|滑出|进入|返回|落在|停在)(?:航线|起点|终点|基地|第\s*\d+\s*(?:步|格))|(?:准备|等待|轮到)[^。！？\r\n]{0,12}(?:掷骰|投骰|移动|走棋)|(?:拿起|拾起|抓起)[^。！？\r\n]{0,6}(?:骰|色子)[^。！？\r\n]{0,12}(?:准备|下一回合|下一轮)/u
 const DEFERRED_SPEECH_INSIGHT_PATTERN = /(?:提问|追问|回答|答复|回话|回应|接话|拒答|拒绝回答|开口|把话)/u
 const ACQUIRED_OBJECT_PATTERN = /(?:拿|取|捡|找|搬|掏|抽|端)(?:来|出|起|回|到)?(?:了)?(?:一|两|几|半|那|这)?(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇)?([\p{Script=Han}]{1,8}?)(?=(?:(?:随手|顺手|仔细|反复|来回)?(?:翻|看|读|查|端详|检查)|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|[，。；！？!?]|$))/gu
 const COUNTED_OBJECT_PATTERN = /(?:一|两|几|半|那|这)(?:个|块|本|张|枚|只|根|把|杯|瓶|颗|片|叠|卷|件|条|盒|盘|碟|碗|壶|扇|架|面|套|双)([\p{Script=Han}]{1,8}?)(?=(?:一先一后|先后|依次)?(?:(?:随手|顺手|仔细|反复|来回)?(?:翻|看|读|查|端详|检查)|重新|已经|正在|仍然|随即|随后|接着|被|让|将|把|在|从|向|沿|往|压|放|摆|递|盖|垫|塞|推|扶|移|抛|扔|搁|置|按|拂|扫|拾|捡|拿|取|找|搬|掏|抽|端|提|滚|翻|停|落|滑|晃|撞|[，。；！？!?]|$))/gu
@@ -1653,6 +1720,15 @@ function constrainAutomaticWorldDecision(
       ? {}
       : { speech: undefined }),
   }
+}
+
+function suppressExecutableWorldRuleAction(
+  decision: StoryCharacterDecision,
+  executableWorld: boolean,
+): StoryCharacterDecision {
+  return executableWorld && CHARACTER_RULE_ACTION_PATTERN.test(decision.action)
+    ? { ...decision, action: '' }
+    : decision
 }
 
 function limitAutomaticWorldSpeech(
@@ -2342,6 +2418,16 @@ function narrativeSourceSupportsPassage(source: StoryNarrativeSource, passage: s
   return substantiallyRestatesText(passage, source.text, 5, 0.2)
 }
 
+function narrativeSourceFailure(source: StoryNarrativeSource, passage: string): string | undefined {
+  if (narrativeSourceSupportsPassage(source, passage)) return undefined
+  if (source.kind !== 'world-fact') return JSON.stringify(source.id)
+  const passageNumbers = narrativeNumbers(passage)
+  const missingNumbers = [...narrativeNumbers(source.text)].filter(number => !passageNumbers.has(number))
+  return missingNumbers.length === 0
+    ? `${JSON.stringify(source.id)}（没有覆盖该事实的语义）`
+    : `${JSON.stringify(source.id)}（缺少数值 ${missingNumbers.join('、')}）`
+}
+
 function parseSourcePassages(
   value: unknown,
   subject: string,
@@ -2352,8 +2438,14 @@ function parseSourcePassages(
     throw new Error(`${subject} passages 无效`)
   }
   const sourceById = new Map(sources.map(source => [source.id, source]))
+  const worldSourceOrder = new Map(sources.flatMap((source, index) =>
+    source.kind === 'world-fact' ? [[source.id, index] as const] : []))
   const usedSourceIds = new Set<string>()
-  const authority = sources.map(source => source.text).join('\n')
+  const authority = sources
+    .flatMap(source => [source.text, ...source.objectNames])
+    .join('\n')
+  let lastWorldSourceIndex = -1
+  let additionalMaterialStarted = false
   const passages = value.map((item, index): StoryTurnSourcePassage => {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
       throw new Error(`${subject} passage[${String(index)}] 不是对象`)
@@ -2375,33 +2467,55 @@ function parseSourcePassages(
     })
     const passage = boundedString(record.text, `${subject} passage[${String(index)}].text`, 8_192).trim()
     if (passage === '' || /^##\s+/mu.test(passage)) throw new Error(`${subject} passage[${String(index)}] 正文无效`)
-    if (passageSources.some(source => !narrativeSourceSupportsPassage(source, passage))) {
-      throw new Error(`${subject} passage[${String(index)}] 没有呈现所列来源`)
+    const sourceFailures = passageSources.flatMap(source => {
+      const failure = narrativeSourceFailure(source, passage)
+      return failure === undefined ? [] : [failure]
+    })
+    const failures: string[] = []
+    if (sourceFailures.length > 0) failures.push(`没有呈现所列来源：${sourceFailures.join('、')}`)
+    const worldSourceCount = passageSources.filter(source => source.kind === 'world-fact').length
+    const additionalSourceCount = passageSources.length - worldSourceCount
+    if (worldSourceCount > 0 && additionalSourceCount > 0) {
+      failures.push('世界事实与人物后续材料不能合并到同一 passage')
     }
+    if (additionalSourceCount > 1) failures.push('每项人物行动或对白必须使用独立 passage')
     if (applyApprovedDialoguePolicy(passage, approvedDialogue) !== passage) {
-      throw new Error(`${subject} passage[${String(index)}] 包含未获准或重复对白`)
+      failures.push('包含未获准或重复对白')
     }
     const unsupportedObjects = unsupportedObjectMentions(passage, authority)
     if (unsupportedObjects.length > 0) {
-      throw new Error(`${subject} passage[${String(index)}] 引入了来源中不存在的物件：${unsupportedObjects.map(value => JSON.stringify(value)).join('、')}`)
+      failures.push(`引入了来源中不存在的物件：${unsupportedObjects.map(value => JSON.stringify(value)).join('、')}`)
     }
     if (UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(passage)
       && !passageSources.some(source => UNAUTHORIZED_RESPONSE_ABSENCE_PATTERN.test(source.text))) {
-      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的未回应`)
+      failures.push('补写了没有来源的未回应')
     }
     if (COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(passage)
       && !passageSources.some(source => COMPACT_WORLD_TURN_HANDOFF_PATTERN.test(source.text))) {
-      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的行动交接`)
+      failures.push('补写了没有来源的行动交接')
     }
     if (COMPACT_WORLD_UNOWNED_DETAIL_PATTERN.test(passage)
       && !passageSources.some(source => COMPACT_WORLD_UNOWNED_DETAIL_PATTERN.test(source.text))) {
-      throw new Error(`${subject} passage[${String(index)}] 补写了没有来源的人物或物件变化`)
+      failures.push('补写了没有来源的人物或物件变化')
+    }
+    if (failures.length > 0) throw new Error(`${subject} passage[${String(index)}] ${failures.join('；')}`)
+    for (const source of passageSources) {
+      if (source.kind !== 'world-fact') {
+        additionalMaterialStarted = true
+        continue
+      }
+      const sourceIndex = worldSourceOrder.get(source.id)!
+      if (additionalMaterialStarted || sourceIndex <= lastWorldSourceIndex) {
+        throw new Error(`${subject} passage[${String(index)}] 把已经结算的世界事实写到了人物后续行动之后`)
+      }
+      lastWorldSourceIndex = sourceIndex
     }
     sourceIds.forEach(sourceId => usedSourceIds.add(sourceId))
     return { sourceIds, text: passage }
   })
   if (sources.some(source => source.required && !usedSourceIds.has(source.id))) {
-    throw new Error(`${subject} 缺少必要来源`)
+    const missing = sources.filter(source => source.required && !usedSourceIds.has(source.id))
+    throw new Error(`${subject} 缺少必要来源：${missing.map(source => JSON.stringify(source.id)).join('、')}`)
   }
   return passages
 }
@@ -2532,7 +2646,11 @@ function mentionedObjectsInClause(clause: string): readonly string[] {
     ...[...clause.matchAll(COUNTED_OBJECT_PATTERN)].map(match => match[1]!),
   ].flatMap(value => {
     const head = value.slice(value.lastIndexOf('的') + 1).replace(/(?:上|下|里|中|旁|边|前|后)$/u, '')
-    return head === '' || /^(?:架|已|已经|正在|仍然|随即|随后|接着|被|让|将|把)$/u.test(head) ? [] : [head]
+    return head === ''
+      || /^(?:也|都)?(?:没有|未|并未|不曾)/u.test(head)
+      || /^(?:架|已|已经|正在|仍然|随即|随后|接着|被|让|将|把)$/u.test(head)
+      ? []
+      : [head]
   })
 }
 
@@ -3838,8 +3956,11 @@ function renderNarrativeAuthority(
       dialogue,
     }]
   })) ?? []
+  const worldEventBySequence = new Map(worldEvents.map(event => [event.sequence, event]))
   const narrativeFacts = projection?.facts.map(fact => ({
     ...fact,
+    objectNames: [...new Set(fact.eventSequences.flatMap(sequence =>
+      worldEventBySequence.get(sequence)?.type === 'die.rolled' ? ['骰子'] : []))],
     sourceId: `world:${fact.eventSequences.join('.')}`,
   })) ?? []
   const sources: readonly StoryNarrativeSource[] = [
@@ -3847,18 +3968,21 @@ function renderNarrativeAuthority(
       id: fact.sourceId,
       kind: 'world-fact' as const,
       text: fact.text,
+      objectNames: fact.objectNames,
       required: fact.retention === 'essential',
     })),
     ...allowedPublicActions.map(action => ({
       id: action.sourceId,
       kind: 'public-action' as const,
       text: action.action,
+      objectNames: [],
       required: true,
     })),
     ...approvedDialogues.map(dialogue => ({
       id: dialogue.sourceId,
       kind: 'approved-dialogue' as const,
       text: dialogue.dialogue,
+      objectNames: [],
       required: true,
     })),
   ]
@@ -4667,8 +4791,12 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         : { ...bounded, action: '', speech: undefined }
       const permitted = suppressForbiddenWorldOutcomeSpeech(scoped, playerInput, worldOutcome)
       const continuous = suppressClosedExchangeReprise(permitted, playerInput, recentExchange)
-      const constrained = constrainAutomaticWorldDecision(
+      const ruleBound = suppressExecutableWorldRuleAction(
         continuous,
+        input.workspace.world !== undefined,
+      )
+      const constrained = constrainAutomaticWorldDecision(
+        ruleBound,
         automaticAdvance,
         worldOutcome,
         characterRecentExchange,
@@ -5045,7 +5173,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           && publicActionCount === 0
           && approvedDialogue.size === 0
         const outputInstruction = sourceBoundWorldSection
-          ? '只返回 JSON：{"passages":[{"sourceIds":["narrative_authority 中的 sourceId"],"text":"可直接展示的正文段落"}]}。每个 sourceId 只能用于一个 passage；一个 passage 可以合并多项紧邻来源。每个 passage 必须真实呈现所列来源，不得把没有来源的独立人物行动、物件变化、规则变化、回应或未回应塞进同一段。'
+          ? '输出必须从字符 { 开始、以字符 } 结束，且只返回 JSON：{"passages":[{"sourceIds":["narrative_authority 中的 sourceId"],"text":"可直接展示的正文段落"}]}。JSON 只是来源容器；把连续的小说场景写在各项 text 中，不能在 JSON 前后另写正文，也不能把 text 压缩成规则记录。每个 sourceId 只能用于一个 passage；一个 passage 只能合并多项紧邻 world 来源，不能把 world 来源与人物的后续行动或对白合并。所有 world 来源必须依照 narrativeFacts 的顺序出现并先写完。allowedPublicActions 和 approvedDialogues 中的每一项都是必要来源：随后分别为每项建立自己的 passage，保留对应 sourceId，并完整沿用 action 或 dialogue 文本；不要添加引入动作、目光、姿态、沉默或收尾状态。每个 passage 必须真实呈现所列来源，不得把没有来源的独立人物行动、物件变化、规则变化、回应或未回应塞进同一段。'
           : compactWorldTransition && section.kind === 'prose'
           ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。只写一个自然段、二至四句且不超过 320 个字符；把相似投掷和移动合成时间流动，在本轮最终棋位落定后停止。可省略没有信息增长的单次骰点；若选择写出点数，只能使用 worldEvents 中的真实值，不能写破折号、省略号或其他占位符。不得逐次铺陈拿骰、停顿、视线、光影和静止物件，也不添加气氛总结。不要预告下一位行动者，也不要补写骰子最后交到谁手中；下一轮归属只由权威场地状态呈现。'
           : compactSection
@@ -5075,7 +5203,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             'recent_public_prose 是用户刚读到的上一段。承接它的时空、视角、叙述距离和句法节奏，从已经结束的动作之后继续。',
             worldInstruction,
             'director_brief 只列本分区需要兑现的额外节拍。叙述权限限于 world_narrative 的事实、获准对白和其中列明的人物公开行动；感官细节不能改变物体位置、规则状态或人物认知。只写可观察行为，不从目光、表情、姿态或停顿推断故意、不以为意、期待、犹豫等人物内心。',
-            'narrative_authority 是 Host 汇总的非叙事化校验材料。narrativeFacts 中 retention 为 essential 的事实必须按 eventSequences 的顺序在正文中明确发生一次，包括其中的行动者、骰点、棋子编号和落点；compressible 的同类机械结果可以合并带过。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。实体名称逐字沿用相关来源，不根据 recent_public_prose 换成近义词、材质名或临时别称。',
+            'narrative_authority 是 Host 汇总的非叙事化校验材料。narrativeFacts 中 retention 为 essential 的事实必须按 eventSequences 的顺序在正文中明确发生一次，包括其中的行动者、骰点、棋子编号和落点；compressible 来源可以整项省略，但引用它时，同一 passage 仍须保留 fact.text 的全部数值与结果，不要把已经压缩的事实重新展开成逐回合记录。invariants 必须全部满足；worldEvents 中每项是一条事件，重复事件次数不是物体数量，不同数值不能概括成相同；allowedPublicActions 是规则事件以外唯一获准的新增人物行动。charactersWithoutAdditionalActions 仍可执行 worldEvents 已记录的规则动作、承担 approvedDialogues 的说话归因，但不能新增目光、表情、姿态、停顿或其他行为。objectNames 只允许沿用已有物件名称，不授权物件交接、位置变化或人物附加动作。实体名称逐字沿用相关来源，不根据 recent_public_prose 换成近义词、材质名或临时别称。',
             '“获准对白”是声音 Worker 依据人物自己的原作证据写定的逐字台词。将每句完整放入场景一次并明确说话人；其余文字承担动作、现场与衔接。',
             outputInstruction,
           ].join('\n')
@@ -5125,7 +5253,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               sectionReasoning,
               [
                 sectionSystem,
-                '上一稿没有通过 Host 来源校验。重新提交完整 JSON，只保留能由原 sourceIds 逐项支持的段落；不得沿用失败稿中的无来源行动、物件变化、回应、未回应或行动交接。失败原因若列出不存在的物件，删除该物件或改回对应来源逐字使用的名称。',
+                '上一稿没有通过 Host 来源校验。重新提交完整 JSON，但校验失败不是把小说场景缩成事件摘要的理由；仍然把时间流动、可观察的动作过程和现场细节写在 text 中，并从上一段正文自然接续。逐项修正失败原因列出的 sourceId、缺失数值和无来源内容；compressible 来源若保留 sourceId，就保留 fact.text 的全部数值与结果，但不要展开成逐回合记录。必要来源不能从重试稿删除：先写完所有 world passages，再把每项 allowedPublicAction 和 approvedDialogue 作为独立 passage，保留自己的 sourceId 并完整沿用原文本。只保留能由原 sourceIds 逐项支持的段落；不得沿用失败稿中的无来源行动、物件变化、回应、未回应或行动交接。失败原因若列出不存在的物件，删除该物件或改回对应来源逐字使用的名称；若指出时序错误，先写完所有已结算世界事实，再写人物的后续行动与对白。',
               ].join('\n'),
               [
                 sectionBody,
