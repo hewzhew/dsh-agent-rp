@@ -2833,7 +2833,10 @@ test('shows recorded facts to every character but only offers a cue to its named
   const recoveryAttemptPassages = [{
     sourceIds: compressibleSourceIds,
     text: '几轮过去，一枚骰子在两人之间滚了又停，博丽灵梦与雾雨魔理沙的飞机都没有移动。博丽灵梦没有说话。',
-  }, recoveredPassages[0]!, {
+  }, {
+    sourceIds: essentialSourceIds,
+    text: `${recoveredPassages[0]!.text}骰子随后被递给魔理沙。`,
+  }, {
     sourceIds: [`action:${reimuId}`],
     text: '我捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
   }]
@@ -2924,6 +2927,7 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.match(result.finalDraft, /一阵风忽然掀起棋盘一角/u)
   assert.doesNotMatch(result.finalDraft, /掷出 1|第 \d+ 回合/u)
   assert.doesNotMatch(result.finalDraft, /没有说话/u)
+  assert.doesNotMatch(result.finalDraft, /递给魔理沙/u)
   const reimuBody = characterBodies.find(body => body.includes('# 人物：博丽灵梦')) ?? ''
   const marisaBody = characterBodies.find(body => body.includes('# 人物：雾雨魔理沙')) ?? ''
   assert.match(reimuBody, /棋盘被风掀动/u)
@@ -4378,11 +4382,12 @@ test('writes a manually completed world result without persisting a character co
     })],
     signal: new AbortController().signal,
   })
-  assert.equal(rejected.hostOwnedWorldDraft, true)
-  assert.equal(rejected.finalSections.find(section => section.sectionId === proseId)?.sourcePassages, undefined)
+  assert.equal(rejected.hostOwnedWorldDraft, undefined)
+  assert.deepEqual(rejected.finalSections.find(section => section.sectionId === proseId)?.sourcePassages
+    ?.map(passage => passage.sourceIds), [['world:2.3'], ['world:4']])
   assert.doesNotMatch(rejected.finalDraft, /推到魔理沙面前|没有回答/u)
   assert.equal(sessionEvents(rejectedSession).some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'editor'), false)
+    && event.data.stage === 'editor'), true)
 
   session.append('assistant/message', {
     turn: 2,

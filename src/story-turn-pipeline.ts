@@ -2540,6 +2540,13 @@ function parseSourceBoundSection(
   return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
 }
 
+function deterministicSourcePassage(source: StoryNarrativeSource): StoryTurnSourcePassage {
+  const text = source.kind === 'approved-dialogue' && source.characterName !== undefined
+    ? `${source.characterName}说：${source.text}`
+    : source.text
+  return { sourceIds: [source.id], text }
+}
+
 function recoverValidSourcePassages(
   text: string,
   subject: string,
@@ -2582,14 +2589,35 @@ function recoverValidSourcePassages(
       // One invalid passage cannot authorize any of its text or source ids.
     }
   }
-  if (retained.length === 0 || sources.some(source => source.required && !usedSourceIds.has(source.id))) {
-    return undefined
+  const retainedBySourceId = new Map(retained.flatMap(passage =>
+    passage.sourceIds.map(sourceId => [sourceId, passage] as const)))
+  const assembledSourceIds = new Set<string>()
+  const assembled: StoryTurnSourcePassage[] = []
+  for (const source of sources) {
+    if (assembledSourceIds.has(source.id)) continue
+    const passage = retainedBySourceId.get(source.id)
+    if (passage !== undefined) {
+      assembled.push(passage)
+      passage.sourceIds.forEach(sourceId => assembledSourceIds.add(sourceId))
+      continue
+    }
+    if (!source.required) continue
+    assembled.push(deterministicSourcePassage(source))
+    assembledSourceIds.add(source.id)
   }
+  if (assembled.length === 0) return undefined
   try {
-    const sourcePassages = parseSourcePassages(retained, subject, sources, approvedDialogue)
+    const sourcePassages = parseSourcePassages(assembled, subject, sources, approvedDialogue)
     return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
   } catch {
-    return undefined
+    const required = sources.filter(source => source.required).map(deterministicSourcePassage)
+    if (required.length === 0) return undefined
+    try {
+      const sourcePassages = parseSourcePassages(required, subject, sources, approvedDialogue)
+      return { sourcePassages, text: sourcePassages.map(passage => passage.text).join('\n\n') }
+    } catch {
+      return undefined
+    }
   }
 }
 
@@ -4047,6 +4075,7 @@ function renderNarrativeAuthority(
       id: dialogue.sourceId,
       kind: 'approved-dialogue' as const,
       text: dialogue.dialogue,
+      characterName: dialogue.characterName,
       objectNames: [],
       required: true,
     })),
@@ -5325,7 +5354,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
               sectionReasoning,
               [
                 sectionSystem,
-                '上一稿没有通过 Host 来源校验。重新提交完整 JSON，但校验失败不是把小说场景缩成事件摘要的理由；仍然把时间流动、可观察的动作过程和现场细节写在 text 中，并从上一段正文自然接续。逐项修正失败原因列出的 sourceId、缺失数值和无来源内容；compressible 来源若保留 sourceId，就保留 fact.text 的全部数值与结果，但不要展开成逐回合记录。必要来源不能从重试稿删除：先写完所有 world passages，再把每项 allowedPublicAction 和 approvedDialogue 作为独立 passage，保留自己的 sourceId 并完整沿用原文本。只保留能由原 sourceIds 逐项支持的段落；不得沿用失败稿中的无来源行动、物件变化、回应、未回应或行动交接。失败原因若列出不存在的物件，删除该物件或改回对应来源逐字使用的名称；若指出时序错误，先写完所有已结算世界事实，再写人物的后续行动与对白。',
+                '上一稿没有通过 Host 来源校验。重新提交完整 JSON，但校验失败不是把小说场景缩成事件摘要的理由；仍然把时间流动、可观察的动作过程和现场细节写在 text 中，并从上一段正文自然接续。重试稿的每个 passage 只列一个 sourceId，不合并来源，确保每项事实、行动或对白可以独立保留。逐项修正失败原因列出的 sourceId、缺失数值和无来源内容；compressible 来源若保留 sourceId，就保留 fact.text 的全部数值与结果，但不要展开成逐回合记录。必要来源不能从重试稿删除：先写完所有 world passages，再把每项 allowedPublicAction 和 approvedDialogue 作为独立 passage，保留自己的 sourceId 并完整沿用原文本。只保留能由原 sourceIds 逐项支持的段落；不得沿用失败稿中的无来源行动、物件变化、回应、未回应或行动交接。失败原因若列出不存在的物件，删除该物件或改回对应来源逐字使用的名称；若指出时序错误，先写完所有已结算世界事实，再写人物的后续行动与对白。',
               ].join('\n'),
               [
                 sectionBody,
