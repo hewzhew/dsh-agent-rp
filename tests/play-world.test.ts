@@ -3097,6 +3097,20 @@ test('shows recorded facts to every character but only offers a cue to its named
   const fake = {
     sessions: { flush: async () => true },
     llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+            ],
+            defaultEffort: 'low',
+          },
+        }
+      },
       stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages ?? [])
@@ -3188,7 +3202,15 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.doesNotMatch(result.finalDraft, /魔理沙把手按到棋盘另一角/u)
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
+  const sectionRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'section' ? [event.data] : [])
   assert.equal(characterRequests.length, 2)
+  assert.deepEqual(sectionRequests.map(request => request.subjectId), [
+    proseId,
+    `scene-source-repair:${proseId}`,
+  ])
+  assert.equal(sectionRequests[1]?.dispatch.reasoningEffort, 'off')
+  assert.equal(sectionRequests[1]?.dispatch.maxTokens, 2_048)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'research'), false)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
@@ -3199,15 +3221,12 @@ test('shows recorded facts to every character but only offers a cue to its named
   assert.match(sectionBodies[1]!, /不存在的物件[^\n]*纸机/u)
   assert.match(sectionBodies[1]!, /世界事实与人物后续材料不能合并到同一 passage/u)
   assert.match(sectionBodies[1]!, /实体名称逐字沿用相关来源/u)
-  assert.match(sectionBodies[1]!, /compressible 来源若保留 sourceId/u)
   assert.match(sectionBodies[1]!, /objectNames 只允许沿用已有物件名称/u)
   assert.match(sectionBodies[1]!, /allowedPublicActions 和 approvedDialogues 中的每一项都是必要来源/u)
-  assert.match(sectionBodies[1]!, /必要来源不能从重试稿删除/u)
   assert.match(sectionBodies[1]!, /JSON 只是来源容器/u)
-  assert.match(sectionBodies[1]!, /校验失败不是把小说场景缩成事件摘要的理由/u)
-  assert.match(sectionBodies[2]!, /最后修复只改正 source_validation_failure/u)
-  assert.match(sectionBodies[2]!, /至少保留三项各自独立的 world passage/u)
-  assert.equal(sectionAttempts, 3)
+  assert.match(sectionBodies[1]!, /只改正 source_validation_failure/u)
+  assert.match(sectionBodies[1]!, /至少保留三项各自独立的 world passage/u)
+  assert.equal(sectionAttempts, 2)
   assert.match(editorBody, /带 sourcePassages 的 prose/u)
   assert.deepEqual(result.finalSections[0]?.sourcePassages, completeRecoveredPassages)
   assert.equal(result.hostOwnedWorldDraft, undefined)
@@ -3708,9 +3727,9 @@ test('repairs a source-invalid scene before falling back to required facts', asy
     signal: new AbortController().signal,
   })
 
-  assert.equal(sectionCalls, 3)
-  assert.match(sectionSystems[2]!, /最后修复只改正 source_validation_failure/u)
-  assert.match(sectionSystems[2]!, /至少保留三项各自独立的 world passage/u)
+  assert.equal(sectionCalls, 2)
+  assert.match(sectionSystems[1]!, /只改正 source_validation_failure/u)
+  assert.match(sectionSystems[1]!, /至少保留三项各自独立的 world passage/u)
   assert.equal(editorCalls, 2)
   assert.match(editorSystems[1]!, /不得用一段规则复述替代整场/u)
   assert.equal(result.finalDraft, safeText)

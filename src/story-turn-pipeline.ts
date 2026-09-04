@@ -5479,6 +5479,55 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             return parseDraft(draft.text)
           } catch (error: unknown) {
             const failure = error instanceof Error ? error.message : '正文没有通过来源校验'
+            const recoverDraft = (
+              candidates: readonly string[],
+              minimumWorldPassages = 0,
+            ): StorySectionDraft => {
+              const recovered = candidates.reduce<Pick<StorySectionDraft, 'sourcePassages' | 'text'> | undefined>(
+                (accepted, candidate) => accepted ?? recoverValidSourcePassages(
+                  candidate,
+                  `${section.name}分区正文`,
+                  narrativeAuthority.sources,
+                  approvedDialogue,
+                  minimumWorldPassages,
+                ),
+                undefined,
+              )
+              return recovered === undefined ? deterministicWorldSection : {
+                sectionId: section.id,
+                name: section.name,
+                kind: section.kind,
+                ...recovered,
+              }
+            }
+            if (worldNarrativeProjection?.cadence === 'scene') {
+              const recoveryCandidates = [draft.text]
+              const sceneRepair = await runStageAttempt(input, 'section', generateOptions(
+                input,
+                reasoning,
+                'structural',
+                [
+                  sectionSystem,
+                  '这份场景没有通过 Host 来源校验。只改正 source_validation_failure，不整篇重写，也不把场景退回规则摘要：保留仍受 sourceId 支持的时间顺序、句法和段落，只删除失败原因指出的无来源内容。不得新增接骰、递骰、视线、姿态、沉默或来源没有命名的物件与材质。每个 passage 仍只列一个 sourceId；可以逐字使用 narrativeFacts 的 text。scene 至少有三项 world 来源时，至少保留三项各自独立的 world passage，让变化前现场、触发动作与可观察后果仍然分段可读。',
+                ].join('\n'),
+                [
+                  sectionBody,
+                  '<source_validation_failure>', failure, '</source_validation_failure>',
+                  '<invalid_source_draft>', draft.text, '</invalid_source_draft>',
+                ].join('\n'),
+                2_048,
+                0.2,
+              ), resultEventSeqs, `scene-source-repair:${section.id}`)
+              if (sceneRepair.text !== undefined && sceneRepair.text.trim() !== ''
+                && sceneRepair.text.trim() !== '<omit-section />') {
+                try {
+                  return parseDraft(sceneRepair.text)
+                } catch {
+                  recoveryCandidates.unshift(sceneRepair.text)
+                }
+              }
+              return recoverDraft(recoveryCandidates, 3)
+            }
             const retry = await runStage(input, 'section', generateOptions(
               input,
               reasoning,
@@ -5499,53 +5548,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             }
             try {
               return parseDraft(retry.text)
-            } catch (retryError: unknown) {
-              const recoveryCandidates = [retry.text]
-              if (worldNarrativeProjection?.cadence === 'scene') {
-                const retryFailure = retryError instanceof Error
-                  ? retryError.message
-                  : '重试正文没有通过来源校验'
-                const sceneRepair = await runStage(input, 'section', generateOptions(
-                  input,
-                  reasoning,
-                  sectionReasoning,
-                  [
-                    sectionSystem,
-                    '前两稿都没有通过 Host 来源校验。最后修复只改正 source_validation_failure，不把场景退回规则摘要：保留仍受 sourceId 支持的时间顺序、句法和段落，只删除失败原因指出的无来源内容。不得新增接骰、递骰、视线、姿态、沉默或来源没有命名的物件与材质。每个 passage 仍只列一个 sourceId；可以逐字使用 narrativeFacts 的 text。scene 至少有三项 world 来源时，至少保留三项各自独立的 world passage，让变化前现场、触发动作与可观察后果仍然分段可读。',
-                  ].join('\n'),
-                  [
-                    sectionBody,
-                    '<source_validation_failure>', retryFailure, '</source_validation_failure>',
-                    '<invalid_source_draft>', retry.text, '</invalid_source_draft>',
-                  ].join('\n'),
-                  compactSection ? 768 : 6_144,
-                  compactSection ? 0.2 : 0.4,
-                ), resultEventSeqs, `scene-source-repair:${section.id}`)
-                if (sceneRepair.text !== undefined && sceneRepair.text.trim() !== ''
-                  && sceneRepair.text.trim() !== '<omit-section />') {
-                  try {
-                    return parseDraft(sceneRepair.text)
-                  } catch {
-                    recoveryCandidates.unshift(sceneRepair.text)
-                  }
-                }
-              }
-              const recovered = recoveryCandidates.reduce<Pick<StorySectionDraft, 'sourcePassages' | 'text'> | undefined>(
-                (accepted, candidate) => accepted ?? recoverValidSourcePassages(
-                  candidate,
-                  `${section.name}分区正文`,
-                  narrativeAuthority.sources,
-                  approvedDialogue,
-                  worldNarrativeProjection?.cadence === 'scene' ? 3 : 0,
-                ),
-                undefined,
-              )
-              return recovered === undefined ? deterministicWorldSection : {
-                sectionId: section.id,
-                name: section.name,
-                kind: section.kind,
-                ...recovered,
-              }
+            } catch {
+              return recoverDraft([retry.text])
             }
           }
         }
