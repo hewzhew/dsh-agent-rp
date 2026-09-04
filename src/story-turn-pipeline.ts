@@ -5628,7 +5628,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         ? 'routine'
         : 'structural'
     const runEditor = async (system: string, subjectId?: string): Promise<readonly StorySectionDraft[] | undefined> => {
-      const edited = await runStage(input, 'editor', generateOptions(
+      const request = generateOptions(
         input,
         reasoning,
         editorReasoningMode,
@@ -5636,7 +5636,10 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         editorBody,
         compactProseTurn ? 1_024 : 4_096,
         0.2,
-      ), resultEventSeqs, subjectId)
+      )
+      const edited = editorReasoningMode === 'routine'
+        ? await runStageAttempt(input, 'editor', request, resultEventSeqs, subjectId)
+        : await runStage(input, 'editor', request, resultEventSeqs, subjectId)
       if (edited.text === undefined) return undefined
       try {
         const parsed = parseEditedSections(
@@ -5769,7 +5772,6 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     publicDialogues,
   )
   const deterministicWorldMaterialization = worldOutcome !== ''
-    && privateCharacterStates.length === 0
     && characterDecisions.every(record => record.decision.action === '')
     && (directorDecision?.sections.every(section => section.beats.length === 0) ?? true)
   const record: StoryTurnBriefRecord = {

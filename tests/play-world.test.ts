@@ -3524,6 +3524,7 @@ test('retries an editor that collapses a full world scene into an event summary'
   assert.ok(richText.length >= 160)
   const richPassage = { sourceIds: requiredSourceIds, text: richText }
   let editorCalls = 0
+  let emptyEditor = false
   const editorSystems: string[] = []
   const session = Session.create(SessionId('scene-editor-retention'))
   session.append('request/header', {
@@ -3557,7 +3558,7 @@ test('retries an editor that collapses a full world scene into an event summary'
         } else if (system.includes('最终正文编辑 Worker')) {
           editorCalls += 1
           editorSystems.push(system)
-          text = JSON.stringify({
+          text = emptyEditor ? '' : JSON.stringify({
             sections: [{
               sectionId: proseId,
               passages: [editorCalls === 1
@@ -3597,6 +3598,32 @@ test('retries an editor that collapses a full world scene into an event summary'
   assert.match(editorSystems[1]!, /不得用一段规则复述替代整场/u)
   assert.equal(result.finalDraft, richText)
   assert.equal(result.finalDraft.split(/\n\s*\n/gu).length, 3)
+
+  emptyEditor = true
+  editorCalls = 0
+  editorSystems.length = 0
+  const emptySession = Session.create(SessionId('scene-editor-empty-fallback'))
+  emptySession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const fallback = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: emptySession.id, options: { provider: 'fixture', model: 'fixture' }, session: emptySession } as Agent,
+    store,
+    workspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  assert.equal(editorCalls, 1)
+  assert.equal(sessionEvents(emptySession).filter(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'editor').length, 1)
+  assert.equal(fallback.finalDraft, richText)
 })
 
 test('repairs a source-invalid scene before falling back to required facts', async (context) => {
@@ -5315,6 +5342,7 @@ test('keeps the exact world outcome while preserving only private-section charac
     characterId: reimuId,
     insights: [{ kind: 'decision', text: '遇到不利结果时，仍会接受结算并继续这局。' }],
   }])
+  assert.equal(result.deterministicWorldMaterialization, true)
   assert.doesNotMatch(result.finalDraft, /前几手全是小点|飞机全压在基地|错误记录|魔理沙视角|下一回合掷骰/u)
   assert.deepEqual(sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'section' ? [event.data.subjectId] : []), [proseId])
@@ -5337,7 +5365,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   })
   const continuityRequest = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'continuity' ? [event.data] : []).at(-1)
-  assert.equal(continuityRequest?.dispatch.reasoningEffort, 'low')
+  assert.equal(continuityRequest, undefined)
   assert.deepEqual(materialized?.changes.characters, [])
   assert.equal(store.get(installed.id).characters.find(character => character.id === reimuId)?.state.objective, '')
   assert.equal(store.get(installed.id).characters.find(character => character.id === marisaId)?.state.objective, '')
@@ -5347,7 +5375,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   }])
   assert.deepEqual(materialized?.changes.nodes, [])
   assert.deepEqual(materialized?.changes.edges, [])
-  assert.equal(typeof materialized?.continuityResultEventSeq, 'number')
+  assert.equal(materialized?.continuityResultEventSeq, undefined)
   assert.match(materialized?.eventSummary ?? '', /博丽灵梦掷出 1/u)
   assert.doesNotMatch(materialized?.eventSummary ?? '', /错误的模型概括/u)
   assert.deepEqual(store.get(installed.id).events.at(-1)?.worldEventSequences, [1, 2, 3])
@@ -5361,7 +5389,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.doesNotMatch(compileStoryCharacterContext(saved, reimuId, { playerInput: '继续。' }).privateKnowledge, /前几手全是小点|飞机全压在基地/u)
   assert.doesNotMatch(compileStoryCharacterContext(saved, marisaId, { playerInput: '继续。' }).privateKnowledge, /遇到不利结果时/u)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
-    && event.data.stage === 'continuity'), true)
+    && event.data.stage === 'continuity'), false)
 })
 
 test('prioritizes an open exchange responder over a new automatic world reaction', async (context) => {
