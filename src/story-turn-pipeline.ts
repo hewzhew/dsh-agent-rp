@@ -2880,7 +2880,6 @@ function renderHostOwnedWorldSections(
   const directTransition = !hasAdditionalPublicMaterial
     && projection.cadence === 'transition'
     && projection.cues.length === 0
-    && projection.facts.every(fact => fact.retention === 'compressible')
   const essentialEventTypes = projection.facts
     .filter(fact => fact.retention === 'essential')
     .flatMap(fact => fact.eventSequences.map(sequence => worldEventTypes.get(sequence)))
@@ -5247,10 +5246,8 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     && publicActionCount + approvedDialogue.size > 0
     && publicActionCount <= 1
     && approvedDialogue.size <= 1
-  const compactWorldTransition = hostDirectorAssignment !== undefined
-    && worldNarrativeProjection?.cadence === 'transition'
+  const compactWorldTransition = worldNarrativeProjection?.cadence === 'transition'
     && worldNarrativeProjection.cues.length === 0
-    && worldNarrativeProjection.facts.every(fact => fact.retention === 'compressible')
     && enabledSections.length === 1
     && enabledSections[0]?.kind === 'prose'
     && publicActionCount === 0

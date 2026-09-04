@@ -3583,6 +3583,158 @@ test('renders routine world transitions from authoritative facts without prose s
   assert.doesNotMatch(result.modelContext, /分区写作与编辑/u)
   assert.doesNotMatch(result.finalDraft, /点数是—|\n\s*\n/u)
 
+  const sourced = store.save({
+    ...editable(store.get(workspace.id)),
+    sources: [{
+      id: createStorySourceId(),
+      name: '原作对白',
+      kind: 'original',
+      enabled: true,
+      content: '博丽灵梦与雾雨魔理沙在原作中交谈。',
+    }],
+  })
+  const sourcedSession = Session.create(SessionId('compact-sourced-world-transition'))
+  sourcedSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const sourcedResult = await runStoryTurnPipeline({
+    ctx: fakeContext(compactDraft),
+    agent: {
+      id: sourcedSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: sourcedSession,
+    } as Agent,
+    store,
+    workspace: sourced,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  const sourcedStages = sessionEvents(sourcedSession).flatMap(event =>
+    event.type === 'agent-rp/story-stage-request' ? [event.data.stage] : [])
+  assert.equal(sourcedStages.includes('research'), true)
+  assert.equal(sourcedStages.includes('director'), true)
+  assert.equal(sourcedStages.includes('section'), true)
+  assert.equal(sourcedStages.includes('editor'), true)
+  assert.equal(sourcedResult.finalDraft, compactDraft)
+  assert.doesNotMatch(sourcedResult.finalDraft, /点数是—|\n\s*\n/u)
+
+  const essentialRolls = [6, 6, 6, 6, 2, 1, 4]
+  const essentialWorlds = new PlayWorldRegistry()
+  essentialWorlds.register(createFlyingChessWorldModule({ rollDie: () => essentialRolls.shift()! }))
+  const essentialRoot = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-essential-compact-world-transition-'))
+  const essentialStore = new StoryWorkspaceStore({
+    root: essentialRoot,
+    worlds: essentialWorlds,
+    resources: fixtureWorldResources(essentialWorlds),
+  })
+  context.after(() => { rmSync(essentialRoot, { recursive: true, force: true }) })
+  const essentialCreated = essentialStore.create({ format: 2, name: '必要事实规则过渡' })
+  const essentialConfigured = essentialStore.save({
+    ...editable(essentialCreated),
+    characters: [reimu, character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。')],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+    sources: [{
+      id: createStorySourceId(),
+      name: '原作对白',
+      kind: 'original',
+      enabled: true,
+      content: '博丽灵梦与雾雨魔理沙在原作中交谈。',
+    }],
+  })
+  let essentialWorkspace = essentialStore.installWorld(essentialConfigured.id, {
+    format: 0,
+    revision: essentialConfigured.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  essentialWorkspace = essentialStore.updateWorldConfiguration(essentialWorkspace.id, {
+    format: 0,
+    revision: essentialWorkspace.revision,
+    configuration: {},
+  })
+  const completeRoll = (): void => {
+    const turn = essentialStore.worldTurn(essentialWorkspace.id)!
+    essentialWorkspace = essentialStore.dispatchWorldAction(essentialWorkspace.id, {
+      format: 0,
+      revision: essentialWorkspace.revision,
+      cycleId: turn.cycleId,
+      actionId: 'roll',
+    })
+    const moveTurn = essentialStore.worldTurn(essentialWorkspace.id)!
+    const move = moveTurn.actions.find(action => action.id.startsWith('move:'))
+    if (move === undefined) return
+    essentialWorkspace = essentialStore.dispatchWorldAction(essentialWorkspace.id, {
+      format: 0,
+      revision: essentialWorkspace.revision,
+      cycleId: moveTurn.cycleId,
+      actionId: move.id,
+    })
+  }
+  for (let roll = 0; roll < 6; roll += 1) completeRoll()
+  const priorEssentialSequences = essentialWorkspace.world!.events.map(event => event.sequence)
+  essentialWorkspace = essentialStore.save({
+    ...editable(essentialWorkspace),
+    events: [{
+      id: createStoryEventId(),
+      key: 'essential-transition-prior',
+      turn: 1,
+      title: '此前棋局',
+      summary: '棋子已经推进到航线末段。',
+      evidence: '棋子已经推进到航线末段。',
+      participantIds: [reimuId, marisaId],
+      worldEventSequences: priorEssentialSequences,
+    }],
+  })
+  completeRoll()
+  const essentialPendingSequences = storyPendingWorldEvents(essentialWorkspace).map(event => event.sequence)
+  const essentialProjection = essentialWorlds.get(FLYING_CHESS_WORLD_MODULE_ID).projectNarrative(
+    essentialWorkspace.world!,
+    essentialPendingSequences,
+    resolveStoryPlayWorldContext(essentialWorkspace),
+  )
+  assert.equal(essentialProjection.cadence, 'transition')
+  assert.equal(essentialProjection.cues.length, 0)
+  assert.equal(essentialProjection.facts.some(fact => fact.retention === 'essential'), true)
+  const essentialHostDraft = essentialProjection.facts.map(fact => fact.text).join('')
+  const essentialVerboseDraft = `${essentialHostDraft}\n\n那张折签仍压在棋盘边缘，纸角被灯光照亮。`
+  const essentialSession = Session.create(SessionId('compact-sourced-essential-world-transition'))
+  essentialSession.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+  })
+  const essentialResult = await runStoryTurnPipeline({
+    ctx: fakeContext(essentialVerboseDraft, essentialVerboseDraft),
+    agent: {
+      id: essentialSession.id,
+      options: { provider: 'fixture', model: 'fixture' },
+      session: essentialSession,
+    } as Agent,
+    store: essentialStore,
+    workspace: essentialWorkspace,
+    turn: 2,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+  const essentialStages = sessionEvents(essentialSession).flatMap(event =>
+    event.type === 'agent-rp/story-stage-request' ? [event.data.stage] : [])
+  assert.equal(essentialStages.includes('research'), true)
+  assert.equal(essentialStages.includes('director'), true)
+  assert.equal(essentialStages.includes('section'), true)
+  assert.equal(essentialStages.includes('editor'), true)
+  assert.equal(essentialResult.finalDraft, essentialHostDraft)
+  assert.match(essentialResult.finalDraft, /4 点/u)
+  assert.doesNotMatch(essentialResult.finalDraft, /折签|\n\s*\n/u)
+
   const dialogueSession = Session.create(SessionId('host-owned-world-transition-dialogue'))
   dialogueSession.append('request/header', {
     reason: 'initial',
