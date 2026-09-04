@@ -81,8 +81,10 @@ test('reuses durable continuity when recovering a completed visible turn without
   const store = new StoryWorkspaceStore({ root })
   const created = store.create({ format: 2, name: '未完成物化恢复' })
   const proseSectionId = createStoryOutputId()
+  const reimuId = createStoryCharacterId()
   const workspace = store.save({
     ...created,
+    characters: [character(reimuId, '博丽灵梦', '直率。')],
     outputs: [{ id: proseSectionId, name: '正文', kind: 'prose', enabled: true, instructions: '' }],
   })
   const session = Session.create(SessionId('story-materialization-recovery'))
@@ -96,6 +98,15 @@ test('reuses durable continuity when recovering a completed visible turn without
     turn: 4,
     step: 1,
     resultEventSeqs: [],
+    privateCharacterStates: [{
+      characterId: reimuId,
+      insights: [{ kind: 'decision', text: '下一局按没有公开的酒约行动。' }],
+    }],
+    publicDialogues: [{
+      characterId: reimuId,
+      dialogue: '“下一局输的人请酒。”',
+      move: 'propose',
+    }],
     worldOpportunityResolutions: [{
       opportunityId: 'opportunity:unshown-question',
       characterId: 'character:reimu',
@@ -163,6 +174,7 @@ test('reuses durable continuity when recovering a completed visible turn without
   assert.equal(recovered[0]?.worldOpportunityResolutions, undefined)
   assert.equal(store.get(workspace.id).events.length, 1)
   assert.equal(store.get(workspace.id).events[0]?.evidence, '雨停后，灵梦合上伞。')
+  assert.equal(store.get(workspace.id).facts.some(fact => fact.text.includes('酒约')), false)
   assert.equal(flushes, 1)
   const revision = store.get(workspace.id).revision
   assert.deepEqual(await recoverUnmaterializedStoryTurns({ ctx, agent, store }), [])
@@ -594,7 +606,7 @@ test('omits character outputs when their isolated character decision is unavaila
   assert.doesNotMatch(result.modelContext, /下一幕会停电|第三幕打开/u)
 })
 
-test('delegates isolated character decisions to durable DSH Subagent sessions', async () => {
+test('delegates isolated character decisions without exposing unrendered prior dialogue', async () => {
   const session = Session.create(SessionId('story-character-subagents'))
   session.append('request/header', {
     reason: 'initial',
@@ -607,6 +619,30 @@ test('delegates isolated character decisions to durable DSH Subagent sessions', 
     outputs: [],
     sources: [],
   }
+  appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: inputWorkspace.id,
+    workspaceRevision: inputWorkspace.revision,
+    turn: 0,
+    step: 1,
+    resultEventSeqs: [],
+    directorBrief: '',
+    finalSections: [{
+      sectionId,
+      name: '正文',
+      kind: 'prose',
+      text: '准备稿中原本安排了对白。',
+    }],
+    finalDraft: '准备稿中原本安排了对白。',
+    modelContext: '',
+    publicDialogues: [{
+      characterId: aliceId,
+      targetCharacterId: bobId,
+      dialogue: '“这句准备稿没有真正展示。”',
+      move: 'question',
+    }],
+  })
   const requests: Array<{
     readonly label?: string
     readonly prompt: readonly { readonly type: string; readonly text?: string }[]
@@ -683,6 +719,8 @@ test('delegates isolated character decisions to durable DSH Subagent sessions', 
   assert.doesNotMatch(prompts[0]!, /柏舟藏起了车票|只有柏舟看见站牌背面反光/u)
   assert.match(prompts[1]!, /柏舟藏起了车票/u)
   assert.doesNotMatch(prompts[1]!, /阿梨知道徽章/u)
+  assert.equal(prompts.every(prompt => !prompt.includes('这句准备稿没有真正展示')), true)
+  assert.equal(prompts.every(prompt => /<recent_public_exchange>\s*（无）\s*<\/recent_public_exchange>/u.test(prompt)), true)
   assert.deepEqual(disposed, ['story-child-1', 'story-child-2'])
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
@@ -1217,6 +1255,14 @@ test('runs logged story stages while keeping each character request privately sc
       move: 'tease',
     }],
   })
+  session.append('assistant/message', {
+    turn: 0,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: '柏舟说：“旧话到这里已经说完了。”' }],
+    }),
+  }, { surfaceOp: 'append' })
   const input = {
     ctx: fake,
     agent,

@@ -3081,10 +3081,17 @@ test('shows recorded facts to every character but only offers a cue to its named
     sourceIds: [`action:${reimuId}`],
     text: '我捡起那枚已经晃动的木机随手查看一遍，把它放回原位，让木机重新稳住。',
   }]
-  const recoveredText = recoveredPassages.map(passage => passage.text).join('\n\n')
+  const completeRecoveredPassages = [
+    ...projection.facts.map(fact => ({
+      sourceIds: [`world:${fact.eventSequences.join('.')}`],
+      text: fact.text,
+    })),
+    recoveredPassages[1]!,
+  ]
+  const recoveredText = completeRecoveredPassages.map(passage => passage.text).join('\n\n')
   const characterBodies: string[] = []
   let directorBody = ''
-  let sectionBody = ''
+  const sectionBodies: string[] = []
   let editorBody = ''
   let sectionAttempts = 0
   const fake = {
@@ -3097,7 +3104,7 @@ test('shows recorded facts to every character but only offers a cue to its named
         if (system.includes('剧情导演 Worker')) directorBody = body
         if (system.includes('分区的 prose Worker')) {
           sectionAttempts += 1
-          sectionBody = `${system}\n${body}`
+          sectionBodies.push(`${system}\n${body}`)
         }
         if (system.includes('最终正文编辑 Worker')) editorBody = `${system}\n${body}`
         const text = system.includes('单个人物的历史检索 Worker')
@@ -3186,21 +3193,23 @@ test('shows recorded facts to every character but only offers a cue to its named
     && event.data.stage === 'research'), false)
   assert.equal(sessionEvents(session).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'director'), false)
-  assert.match(sectionBody, /每个 sourceId 只能用于一个 passage/u)
-  assert.match(sectionBody, /source_validation_failure/u)
-  assert.match(sectionBody, /没有呈现所列来源[^\n]*world:/u)
-  assert.match(sectionBody, /不存在的物件[^\n]*纸机/u)
-  assert.match(sectionBody, /世界事实与人物后续材料不能合并到同一 passage/u)
-  assert.match(sectionBody, /实体名称逐字沿用相关来源/u)
-  assert.match(sectionBody, /compressible 来源若保留 sourceId/u)
-  assert.match(sectionBody, /objectNames 只允许沿用已有物件名称/u)
-  assert.match(sectionBody, /allowedPublicActions 和 approvedDialogues 中的每一项都是必要来源/u)
-  assert.match(sectionBody, /必要来源不能从重试稿删除/u)
-  assert.match(sectionBody, /JSON 只是来源容器/u)
-  assert.match(sectionBody, /校验失败不是把小说场景缩成事件摘要的理由/u)
-  assert.equal(sectionAttempts, 2)
+  assert.match(sectionBodies[1]!, /每个 sourceId 只能用于一个 passage/u)
+  assert.match(sectionBodies[1]!, /source_validation_failure/u)
+  assert.match(sectionBodies[1]!, /没有呈现所列来源[^\n]*world:/u)
+  assert.match(sectionBodies[1]!, /不存在的物件[^\n]*纸机/u)
+  assert.match(sectionBodies[1]!, /世界事实与人物后续材料不能合并到同一 passage/u)
+  assert.match(sectionBodies[1]!, /实体名称逐字沿用相关来源/u)
+  assert.match(sectionBodies[1]!, /compressible 来源若保留 sourceId/u)
+  assert.match(sectionBodies[1]!, /objectNames 只允许沿用已有物件名称/u)
+  assert.match(sectionBodies[1]!, /allowedPublicActions 和 approvedDialogues 中的每一项都是必要来源/u)
+  assert.match(sectionBodies[1]!, /必要来源不能从重试稿删除/u)
+  assert.match(sectionBodies[1]!, /JSON 只是来源容器/u)
+  assert.match(sectionBodies[1]!, /校验失败不是把小说场景缩成事件摘要的理由/u)
+  assert.match(sectionBodies[2]!, /最后修复只改正 source_validation_failure/u)
+  assert.match(sectionBodies[2]!, /至少保留三项各自独立的 world passage/u)
+  assert.equal(sectionAttempts, 3)
   assert.match(editorBody, /带 sourcePassages 的 prose/u)
-  assert.deepEqual(result.finalSections[0]?.sourcePassages, recoveredPassages)
+  assert.deepEqual(result.finalSections[0]?.sourcePassages, completeRecoveredPassages)
   assert.equal(result.hostOwnedWorldDraft, undefined)
   assert.deepEqual(result.privateCharacterStates, [{
     characterId: marisaId,
@@ -3435,6 +3444,277 @@ test('falls back to the causal roll when sourced prose omits a first launch', as
   assert.match(result.finalDraft, /雾雨魔理沙掷出的骰子停在 6 点，随后把 1 号飞机推进到航线第 1 步/u)
   assert.equal(result.hostOwnedWorldDraft, true)
   assert.equal(result.finalSections[0]?.sourcePassages, undefined)
+})
+
+test('retries an editor that collapses a full world scene into an event summary', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-scene-editor-retention-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 6 }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const created = store.create({ format: 2, name: '完整场景编辑保留' })
+  let workspace = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  workspace = store.installWorld(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  let available = store.worldTurn(workspace.id)!
+  workspace = store.dispatchWorldAction(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    cycleId: available.cycleId,
+    actionId: 'roll',
+  })
+  available = store.worldTurn(workspace.id)!
+  const move = available.actions.find(action => action.id.startsWith('move:'))
+  assert.ok(move)
+  workspace = store.dispatchWorldAction(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    cycleId: available.cycleId,
+    actionId: move.id,
+  })
+  const pendingSequences = storyPendingWorldEvents(workspace).map(event => event.sequence)
+  const playContext = resolveStoryPlayWorldContext(workspace)
+  const projection = projectPlayWorldNarrative(
+    worlds.get(workspace.world!.moduleId).projectNarrative(workspace.world!, pendingSequences, playContext),
+    pendingSequences,
+    playContext,
+  )
+  assert.equal(projection.cadence, 'scene')
+  const requiredFacts = projection.facts.filter(fact => fact.retention === 'essential')
+  const requiredSourceIds = requiredFacts.map(fact => `world:${fact.eventSequences.join('.')}`)
+  const compactText = requiredFacts.map(fact => fact.text).join(' ')
+  const richText = [
+    `骰子沿棋盘滚过几格才停稳，六点朝上留在两座基地之间。${requiredFacts[0]?.text ?? ''}`,
+    `基地与航线之间终于出现了变化。靠近出口的木机被推离原来的位置，底座顺着格线向前滑去。${requiredFacts[1]?.text ?? ''}`,
+    `木机越过起飞线，在新的格位上落定；同一座基地里的其余木机仍停在原处。${requiredFacts.slice(2).map(fact => fact.text).join('')}`,
+  ].join('\n\n')
+  assert.ok(richText.length >= 160)
+  const richPassage = { sourceIds: requiredSourceIds, text: richText }
+  let editorCalls = 0
+  const editorSystems: string[] = []
+  const session = Session.create(SessionId('scene-editor-retention'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        let text: string
+        if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          const opportunityIds = [...body.matchAll(/id=(opportunity:[^\\t\\n"]+)/gu)].map(match => match[1]!)
+          text = JSON.stringify({
+            observation: '棋局出现了第一次起飞。',
+            action: '',
+            speech: null,
+            opportunityDecisions: opportunityIds.map(opportunityId => ({
+              opportunityId,
+              disposition: 'retain',
+              responderId: null,
+            })),
+            insights: [],
+          })
+        } else if (system.includes('分区的 prose Worker')) {
+          text = JSON.stringify({ passages: [richPassage] })
+        } else if (system.includes('最终正文编辑 Worker')) {
+          editorCalls += 1
+          editorSystems.push(system)
+          text = JSON.stringify({
+            sections: [{
+              sectionId: proseId,
+              passages: [editorCalls === 1
+                ? { sourceIds: requiredSourceIds, text: compactText }
+                : richPassage],
+            }],
+          })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(editorCalls, 2)
+  assert.doesNotMatch(editorSystems[0]!, /上一稿把完整场景压成了事件摘要/u)
+  assert.match(editorSystems[1]!, /不得用一段规则复述替代整场/u)
+  assert.equal(result.finalDraft, richText)
+  assert.equal(result.finalDraft.split(/\n\s*\n/gu).length, 3)
+})
+
+test('repairs a source-invalid scene before falling back to required facts', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-scene-source-repair-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const worlds = new PlayWorldRegistry()
+  worlds.register(createFlyingChessWorldModule({ rollDie: () => 6 }))
+  const store = new StoryWorkspaceStore({ root, worlds, resources: fixtureWorldResources(worlds) })
+  const reimuId = createStoryCharacterId()
+  const marisaId = createStoryCharacterId()
+  const proseId = createStoryOutputId()
+  const created = store.create({ format: 2, name: '完整场景来源修复' })
+  let workspace = store.save({
+    ...editable(created),
+    characters: [
+      character(reimuId, '博丽灵梦', '博丽神社的巫女。'),
+      character(marisaId, '雾雨魔理沙', '住在魔法森林的人类魔法使。'),
+    ],
+    outputs: [{ id: proseId, name: '正文', kind: 'prose', enabled: true, instructions: '写成连续场景。' }],
+  })
+  workspace = store.installWorld(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    resource: { kind: 'world', id: FLYING_CHESS_WORLD_RESOURCE_ID },
+    cast: [],
+  })
+  let available = store.worldTurn(workspace.id)!
+  workspace = store.dispatchWorldAction(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    cycleId: available.cycleId,
+    actionId: 'roll',
+  })
+  available = store.worldTurn(workspace.id)!
+  const move = available.actions.find(action => action.id.startsWith('move:'))
+  assert.ok(move)
+  workspace = store.dispatchWorldAction(workspace.id, {
+    format: 0,
+    revision: workspace.revision,
+    cycleId: available.cycleId,
+    actionId: move.id,
+  })
+  const pendingSequences = storyPendingWorldEvents(workspace).map(event => event.sequence)
+  const playContext = resolveStoryPlayWorldContext(workspace)
+  const projection = projectPlayWorldNarrative(
+    worlds.get(workspace.world!.moduleId).projectNarrative(workspace.world!, pendingSequences, playContext),
+    pendingSequences,
+    playContext,
+  )
+  assert.equal(projection.cadence, 'scene')
+  const safePassages = projection.facts.map(fact => ({
+    sourceIds: [`world:${fact.eventSequences.join('.')}`],
+    text: fact.text,
+  }))
+  assert.ok(safePassages.length >= 3)
+  const safeText = safePassages.map(passage => passage.text).join('\n\n')
+  assert.ok(safeText.length < 160)
+  let sectionCalls = 0
+  const sectionSystems: string[] = []
+  let editorCalls = 0
+  const editorSystems: string[] = []
+  const session = Session.create(SessionId('scene-source-repair'))
+  session.append('request/header', {
+    reason: 'initial',
+    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 8_192 } },
+  })
+  const fake = {
+    sessions: { flush: async () => true },
+    llm: {
+      stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
+        const system = options.system ?? ''
+        const body = JSON.stringify(options.messages ?? [])
+        let text: string
+        if (system.includes('单个人物的历史检索 Worker')) {
+          text = JSON.stringify({ references: [] })
+        } else if (system.includes('指定人物认知')) {
+          const opportunityIds = [...body.matchAll(/id=(opportunity:[^\t\n"]+)/gu)].map(match => match[1]!)
+          text = JSON.stringify({
+            observation: '棋局出现了第一次起飞。',
+            action: '',
+            speech: null,
+            opportunityDecisions: opportunityIds.map(opportunityId => ({
+              opportunityId,
+              disposition: 'retain',
+              responderId: null,
+            })),
+            insights: [],
+          })
+        } else if (system.includes('分区的 prose Worker')) {
+          sectionCalls += 1
+          sectionSystems.push(system)
+          text = sectionCalls < 3
+            ? JSON.stringify({ passages: [{ sourceIds: ['world:missing'], text: '无效来源。' }] })
+            : JSON.stringify({ passages: safePassages })
+        } else if (system.includes('最终正文编辑 Worker')) {
+          editorCalls += 1
+          editorSystems.push(system)
+          text = JSON.stringify({
+            sections: [{
+              sectionId: proseId,
+              passages: editorCalls === 1 ? safePassages.slice(1) : safePassages,
+            }],
+          })
+        } else {
+          throw new Error(`不应调用额外故事阶段：${system.slice(0, 40)}`)
+        }
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    },
+  } as unknown as Context
+
+  const result = await runStoryTurnPipeline({
+    ctx: fake,
+    agent: { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent,
+    store,
+    workspace,
+    turn: 1,
+    step: 1,
+    messages: [createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: STORY_AUTO_ADVANCE_INPUT }],
+    })],
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(sectionCalls, 3)
+  assert.match(sectionSystems[2]!, /最后修复只改正 source_validation_failure/u)
+  assert.match(sectionSystems[2]!, /至少保留三项各自独立的 world passage/u)
+  assert.equal(editorCalls, 2)
+  assert.match(editorSystems[1]!, /不得用一段规则复述替代整场/u)
+  assert.equal(result.finalDraft, safeText)
+  assert.deepEqual(result.finalSections[0]?.sourcePassages, safePassages)
 })
 
 test('renders routine world transitions from authoritative facts without prose stages', async (context) => {
@@ -4726,7 +5006,7 @@ test('writes a manually completed world result without persisting a character co
   assert.equal(stageRequests.filter(request => request.stage === 'character')
     .every(request => request.dispatch.reasoningEffort === 'low' && request.dispatch.maxTokens === 4_096), true)
   assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'low')
-  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
   const proseDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'section')?.dispatch)
   const editorDispatch = JSON.stringify(stageRequests.find(request => request.stage === 'editor')?.dispatch)
   assert.match(proseDispatch, /每个 sourceId 只能用于一个 passage/u)
@@ -4777,7 +5057,7 @@ test('writes a manually completed world result without persisting a character co
   })
   assert.equal(rejected.hostOwnedWorldDraft, undefined)
   assert.deepEqual(rejected.finalSections.find(section => section.sectionId === proseId)?.sourcePassages
-    ?.map(passage => passage.sourceIds), [['world:2.3'], ['world:4']])
+    ?.map(passage => passage.sourceIds), [['world:1'], ['world:2.3'], ['world:4']])
   assert.doesNotMatch(rejected.finalDraft, /推到魔理沙面前|没有回答/u)
   assert.equal(sessionEvents(rejectedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'editor'), true)
@@ -4994,7 +5274,7 @@ test('keeps the exact world outcome while preserving only private-section charac
   assert.equal(stageRequests.find(request => request.stage === 'cast')?.dispatch.reasoningEffort, 'off')
   assert.equal(stageRequests.find(request => request.stage === 'research')?.dispatch.reasoningEffort, 'low')
   assert.equal(stageRequests.find(request => request.stage === 'section')?.dispatch.reasoningEffort, 'low')
-  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'off')
+  assert.equal(stageRequests.find(request => request.stage === 'editor')?.dispatch.reasoningEffort, 'low')
   const characterRequests = sessionEvents(session).flatMap(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'character' ? [event.data] : [])
   const reimuRequest = characterRequests.find(request => request.subjectId === reimuId)
@@ -5115,6 +5395,14 @@ test('prioritizes an open exchange responder over a new automatic world reaction
       move: 'question',
     }],
   })
+  session.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: `雾雨魔理沙说：${question}` }],
+    }),
+  }, { surfaceOp: 'append' })
   session.append('turn/start', { turn: 2 })
   session.append('step/start', { turn: 2, step: 1 })
   const answer = '“骰子不给六，我能怎么办？”'

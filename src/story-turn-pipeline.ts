@@ -707,7 +707,9 @@ function recentPublicExchange(
 ): StoryRecentPublicExchange | undefined {
   const previous = events.findLast((event): event is SessionEvent<'agent-rp/story-turn-brief'> =>
     event.type === 'agent-rp/story-turn-brief' && event.data.format === 1 && event.data.turn < turn)
-  const dialogues = previous?.data.publicDialogues ?? []
+  const visibleReply = previous === undefined ? '' : visibleReplyText(events, previous.data.turn, previous.seq)
+  const dialogues = (previous?.data.publicDialogues ?? [])
+    .filter(dialogue => visibleReply.includes(dialogue.dialogue))
   const characterNameById = new Map(characters.map(character => [character.id, character.name]))
   const lines = dialogues.flatMap(dialogue => {
     const characterName = characterNameById.get(dialogue.characterId)
@@ -1854,16 +1856,12 @@ function deferWorldOpportunityResponders(
 
 function materializablePrivateCharacterStates(
   records: readonly StoryCharacterDecisionRecord[],
-  director: StoryDirectorDecision | undefined,
-  dialogueByReference: ReadonlyMap<string, string>,
+  publicDialogues: readonly StoryTurnPublicDialogue[],
 ): readonly StoryTurnCharacterPrivateState[] {
-  const approvedCharacters = new Set(director?.sections.flatMap(section => section.speech.flatMap(speech => {
-    const dialogue = dialogueByReference.get(speech.reference)
-    return dialogue === undefined || dialogue === '' ? [] : [speech.characterId]
-  })) ?? [])
+  const visibleSpeakers = new Set(publicDialogues.map(dialogue => dialogue.characterId))
   return records.flatMap(record => {
     const speech = record.decision.speech
-    const insights = speech === undefined || approvedCharacters.has(record.characterId)
+    const insights = speech === undefined || visibleSpeakers.has(record.characterId)
       ? record.decision.insights
       : []
     return insights.length === 0 ? [] : [{ characterId: record.characterId, insights }]
@@ -2609,6 +2607,7 @@ function recoverValidSourcePassages(
   subject: string,
   sources: readonly StoryNarrativeSource[],
   approvedDialogue: ReadonlySet<string>,
+  minimumWorldPassages = 0,
 ): Pick<StorySectionDraft, 'sourcePassages' | 'text'> | undefined {
   let record: Record<string, unknown>
   try {
@@ -2648,6 +2647,20 @@ function recoverValidSourcePassages(
   }
   const retainedBySourceId = new Map(retained.flatMap(passage =>
     passage.sourceIds.map(sourceId => [sourceId, passage] as const)))
+  const retainedWorldPassages = new Set(sources.flatMap(source => {
+    if (source.kind !== 'world-fact') return []
+    const passage = retainedBySourceId.get(source.id)
+    return passage === undefined ? [] : [passage]
+  }))
+  let worldPassageCount = retainedWorldPassages.size + sources.filter(source =>
+    source.kind === 'world-fact' && source.required && !retainedBySourceId.has(source.id)).length
+  const supplementalWorldSourceIds = new Set<string>()
+  for (const source of sources) {
+    if (worldPassageCount >= minimumWorldPassages) break
+    if (source.kind !== 'world-fact' || source.required || retainedBySourceId.has(source.id)) continue
+    supplementalWorldSourceIds.add(source.id)
+    worldPassageCount += 1
+  }
   const assembledSourceIds = new Set<string>()
   const assembled: StoryTurnSourcePassage[] = []
   for (const source of sources) {
@@ -2658,7 +2671,7 @@ function recoverValidSourcePassages(
       passage.sourceIds.forEach(sourceId => assembledSourceIds.add(sourceId))
       continue
     }
-    if (!source.required) continue
+    if (!source.required && !supplementalWorldSourceIds.has(source.id)) continue
     assembled.push(deterministicSourcePassage(source))
     assembledSourceIds.add(source.id)
   }
@@ -4189,6 +4202,30 @@ function compactSectionsWithinBudget(
       : compactProseWithinBudget(sections[0].text))
 }
 
+const SCENE_EDIT_RETENTION_MIN_SOURCE_LENGTH = 160
+const SCENE_EDIT_RETENTION_MIN_RATIO = 0.5
+const SCENE_EDIT_RETENTION_MAX_REQUIRED_PARAGRAPHS = 3
+
+function sceneEditRetainsNarrative(
+  source: readonly StorySectionDraft[],
+  edited: readonly StorySectionDraft[],
+  projection: PlayWorldNarrativeProjection | undefined,
+): boolean {
+  if (projection?.cadence !== 'scene') return true
+  const editedById = new Map(edited.map(section => [section.sectionId, section]))
+  return source.every(section => {
+    if (section.kind !== 'prose') return true
+    const original = section.text.trim()
+    const originalParagraphs = original.split(/\n\s*\n/gu).filter(paragraph => paragraph.trim() !== '').length
+    if (originalParagraphs < 2) return true
+    const candidate = editedById.get(section.sectionId)?.text.trim() ?? ''
+    const candidateParagraphs = candidate.split(/\n\s*\n/gu).filter(paragraph => paragraph.trim() !== '').length
+    return (original.length < SCENE_EDIT_RETENTION_MIN_SOURCE_LENGTH
+        || candidate.length >= Math.ceil(original.length * SCENE_EDIT_RETENTION_MIN_RATIO))
+      && candidateParagraphs >= Math.min(SCENE_EDIT_RETENTION_MAX_REQUIRED_PARAGRAPHS, originalParagraphs)
+  })
+}
+
 function proseWithoutHostWorldNarrative(text: string, worldNarrative: string): string {
   let remainder = text.replaceAll(worldNarrative, '')
   const sentences = worldNarrative.match(/[^。！？.!?]+[。！？.!?]+|[^。！？.!?]+$/gu) ?? []
@@ -5462,12 +5499,46 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
             }
             try {
               return parseDraft(retry.text)
-            } catch {
-              const recovered = recoverValidSourcePassages(
-                retry.text,
-                `${section.name}分区正文`,
-                narrativeAuthority.sources,
-                approvedDialogue,
+            } catch (retryError: unknown) {
+              const recoveryCandidates = [retry.text]
+              if (worldNarrativeProjection?.cadence === 'scene') {
+                const retryFailure = retryError instanceof Error
+                  ? retryError.message
+                  : '重试正文没有通过来源校验'
+                const sceneRepair = await runStage(input, 'section', generateOptions(
+                  input,
+                  reasoning,
+                  sectionReasoning,
+                  [
+                    sectionSystem,
+                    '前两稿都没有通过 Host 来源校验。最后修复只改正 source_validation_failure，不把场景退回规则摘要：保留仍受 sourceId 支持的时间顺序、句法和段落，只删除失败原因指出的无来源内容。不得新增接骰、递骰、视线、姿态、沉默或来源没有命名的物件与材质。每个 passage 仍只列一个 sourceId；可以逐字使用 narrativeFacts 的 text。scene 至少有三项 world 来源时，至少保留三项各自独立的 world passage，让变化前现场、触发动作与可观察后果仍然分段可读。',
+                  ].join('\n'),
+                  [
+                    sectionBody,
+                    '<source_validation_failure>', retryFailure, '</source_validation_failure>',
+                    '<invalid_source_draft>', retry.text, '</invalid_source_draft>',
+                  ].join('\n'),
+                  compactSection ? 768 : 6_144,
+                  compactSection ? 0.2 : 0.4,
+                ), resultEventSeqs, `scene-source-repair:${section.id}`)
+                if (sceneRepair.text !== undefined && sceneRepair.text.trim() !== ''
+                  && sceneRepair.text.trim() !== '<omit-section />') {
+                  try {
+                    return parseDraft(sceneRepair.text)
+                  } catch {
+                    recoveryCandidates.unshift(sceneRepair.text)
+                  }
+                }
+              }
+              const recovered = recoveryCandidates.reduce<Pick<StorySectionDraft, 'sourcePassages' | 'text'> | undefined>(
+                (accepted, candidate) => accepted ?? recoverValidSourcePassages(
+                  candidate,
+                  `${section.name}分区正文`,
+                  narrativeAuthority.sources,
+                  approvedDialogue,
+                  worldNarrativeProjection?.cadence === 'scene' ? 3 : 0,
+                ),
+                undefined,
               )
               return recovered === undefined ? deterministicWorldSection : {
                 sectionId: section.id,
@@ -5521,40 +5592,48 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           approvedDialogue,
         ))
   if (sectionDrafts.length > 0 && !compactDraftReady) {
-    const edited = await runStage(input, 'editor', generateOptions(
-      input,
-      reasoning,
-      'structural',
-      [
-        '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
-        'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
-        'world_state 中标为持续只读的状态不是本轮事件；若 worldEvents 没有记录对应变化，删除物件的新移动、显露、处置及仅由这项旧状态引出的新增人物动作。',
-        compactWorldTransition
-          ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。prose 只保留一个自然段、二至四句且不超过 320 个字符；合并相似投掷和移动，在最终棋位落定后停止。可删除没有信息增长的单次骰点；保留的点数必须逐字使用 worldEvents 中的真实值，不能留下破折号、省略号或其他占位符。删除逐次拿骰、停顿、视线、静止物件盘点、气氛总结、下一行动者预告和没有权威事件支撑的骰子交接。'
-          : compactPublicTurn
-            ? '本轮只有一项新的公开动作或一句获准对白。prose 只保留一个自然段、二至四句且不超过 320 个字符；从变化开始，在可观察结果落定后停止。合并反复停顿、伸手、收手、视线、物件位置盘点和气氛总结，删除解释动作意义的比喻、象征与效果判断。recent_public_prose 中已经发生的说话或动作不能改成没发生。'
+    const editorSystem = [
+      '你是最终正文编辑 Worker，负责整理用户将看到的分区文字。',
+      'recent_public_prose 确定接续位置；world_narrative 的 cadence 与 facts 确定本轮篇幅和事实；world_state 用于校验规则结果。人物私有信息不在输入中，也不由编辑补写。',
+      'world_state 中标为持续只读的状态不是本轮事件；若 worldEvents 没有记录对应变化，删除物件的新移动、显露、处置及仅由这项旧状态引出的新增人物动作。',
+      compactWorldTransition
+        ? '本轮只是没有现场变化、人物额外行动或获准对白的规则过渡。prose 只保留一个自然段、二至四句且不超过 320 个字符；合并相似投掷和移动，在最终棋位落定后停止。可删除没有信息增长的单次骰点；保留的点数必须逐字使用 worldEvents 中的真实值，不能留下破折号、省略号或其他占位符。删除逐次拿骰、停顿、视线、静止物件盘点、气氛总结、下一行动者预告和没有权威事件支撑的骰子交接。'
+        : compactPublicTurn
+          ? '本轮只有一项新的公开动作或一句获准对白。prose 只保留一个自然段、二至四句且不超过 320 个字符；从变化开始，在可观察结果落定后停止。合并反复停顿、伸手、收手、视线、物件位置盘点和气氛总结，删除解释动作意义的比喻、象征与效果判断。recent_public_prose 中已经发生的说话或动作不能改成没发生。'
           : 'prose 应读成连续场景：相似机械结果压缩成时间流动，scene 保留变化发生前的现场、触发动作与可观察后果，resolution 收束已经形成的结果。段落结构服从 world_narrative 的 cadence 和事件进展；没有获准对白或附加人物行动不是把 scene 压成一个自然段的理由。保留权威事实、获准对白和已选公开行动；只删除规则播报、同义复述、从目光、表情、姿态或停顿推断出的内心、未记录的物体变化、空泛总结和只为拉长篇幅的修辞，不补造互动。',
-        'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
-        '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
-        sourceBoundWorldDraft
-          ? 'ordered_sections 中带 sourcePassages 的 prose 已由 Host 核对来源。编辑时继续返回 passages，并保留每项 passage 的 sourceIds；可以改写 text，但不能重复、移动或创造 sourceId，也不能增加没有来源的独立行动、状态、对白或未回应。'
-          : 'ordered_sections 中的分区使用 text 字段。编辑不能自行增加来源标记。',
-        sourceBoundWorldDraft
-          ? '只返回 JSON：带 sourcePassages 的 prose 使用 {"sectionId":"稳定 ID","passages":[{"sourceIds":["原有来源 ID"],"text":"编辑后的正文段落"}]}；其余分区仍使用 {"sectionId":"稳定 ID","text":"编辑后的分区正文"}。把这些对象按原顺序放入 sections；不重复分区名，不添加标题。'
-          : '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
-      ].join('\n'),
-      [
-        '<recent_public_prose>', compactProseTurn ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
-        '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
-        '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
-        '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
-        ...(narrativeAuthority.text === '' ? [] : ['<narrative_authority>', narrativeAuthority.text, '</narrative_authority>']),
-        '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
-      ].join('\n'),
-      compactProseTurn ? 1_024 : 4_096,
-      0.2,
-    ), resultEventSeqs)
-    if (edited.text !== undefined) {
+      'narrative_authority 是 Host 汇总的逐项校验依据。编辑每个 prose 前先核对 narrativeFacts：retention 为 essential 的事实必须按 eventSequences 顺序保留行动者、数值与结果，不能从结果倒推或跳过促成结果的动作；compressible 的同类机械结果可以合并。再核对 invariants、worldEvents、allowedPublicActions、charactersWithoutAdditionalActions 和 approvedDialogues；次数不能改写成物体数量，不同数值不能写成相同，未列入 allowedPublicActions 的具名人物新增行为必须删除。发现冲突时改正正文，不能因为错误已经出现在 ordered_sections 中就保留。',
+      '每条获准对白在原分区中逐字保留一次，可以整理其说话人标识和前后叙述。编辑只处理已有事件与已批准材料，不增加新的规则变化、人物行动或台词。',
+      sourceBoundWorldDraft
+        ? 'ordered_sections 中带 sourcePassages 的 prose 已由 Host 核对来源。编辑时继续返回 passages，并保留每项 passage 的 sourceIds；可以改写 text，但不能重复、移动或创造 sourceId，也不能增加没有来源的独立行动、状态、对白或未回应。'
+        : 'ordered_sections 中的分区使用 text 字段。编辑不能自行增加来源标记。',
+      sourceBoundWorldDraft
+        ? '只返回 JSON：带 sourcePassages 的 prose 使用 {"sectionId":"稳定 ID","passages":[{"sourceIds":["原有来源 ID"],"text":"编辑后的正文段落"}]}；其余分区仍使用 {"sectionId":"稳定 ID","text":"编辑后的分区正文"}。把这些对象按原顺序放入 sections；不重复分区名，不添加标题。'
+        : '只返回 JSON：{"sections":[{"sectionId":"ordered_sections 中的稳定 ID","text":"编辑后的分区正文"}]}。sectionId 保持原顺序且不重复；text 不重复分区名，不添加标题。',
+    ].join('\n')
+    const editorBody = [
+      '<recent_public_prose>', compactProseTurn ? latestPublicProse(input.workspace) : priorPublicProse, '</recent_public_prose>',
+      '<world_state>', compileStoryDirectorWorldContext(input.workspace), '</world_state>',
+      '<current_world_outcome>', worldOutcome, '</current_world_outcome>',
+      '<world_narrative>', worldNarrativeWritingBrief, '</world_narrative>',
+      ...(narrativeAuthority.text === '' ? [] : ['<narrative_authority>', narrativeAuthority.text, '</narrative_authority>']),
+      '<ordered_sections>', JSON.stringify(sectionDrafts), '</ordered_sections>',
+    ].join('\n')
+    const editorReasoningMode: StoryStageReasoningMode = compactProseTurn
+      ? 'structural'
+      : worldNarrativeProjection?.cadence === 'scene' || worldNarrativeProjection?.cadence === 'resolution'
+        ? 'routine'
+        : 'structural'
+    const runEditor = async (system: string, subjectId?: string): Promise<readonly StorySectionDraft[] | undefined> => {
+      const edited = await runStage(input, 'editor', generateOptions(
+        input,
+        reasoning,
+        editorReasoningMode,
+        system,
+        editorBody,
+        compactProseTurn ? 1_024 : 4_096,
+        0.2,
+      ), resultEventSeqs, subjectId)
+      if (edited.text === undefined) return undefined
       try {
         const parsed = parseEditedSections(
           edited.text,
@@ -5562,18 +5641,29 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
           approvedDialogue,
           narrativeAuthority.sources,
         )
-        if (parsed.length > 0) {
-          editedSections = preserveEditedPublicMaterials(
-            parsed,
-            sectionDrafts,
-            directorDecision,
-            approvedDialogue,
-            worldNarrativeProjection,
-          )
-        }
+        return parsed.length === 0 ? undefined : preserveEditedPublicMaterials(
+          parsed,
+          sectionDrafts,
+          directorDecision,
+          approvedDialogue,
+          worldNarrativeProjection,
+        )
       } catch {
-        editedSections = sectionDrafts
+        return undefined
       }
+    }
+    const firstEdit = await runEditor(editorSystem)
+    if (firstEdit !== undefined && sceneEditRetainsNarrative(sectionDrafts, firstEdit, worldNarrativeProjection)) {
+      editedSections = firstEdit
+    } else if (firstEdit !== undefined && worldNarrativeProjection?.cadence === 'scene') {
+      const retryEdit = await runEditor([
+        editorSystem,
+        '上一稿把完整场景压成了事件摘要。重新编辑：保留 ordered_sections 已有的事件过程、空间关系与可观察后果；只删除明确重复、无来源或解释性的句子。正文原有多个有效自然段时仍使用多个自然段，不得用一段规则复述替代整场。',
+      ].join('\n'), 'scene-retention-retry')
+      editedSections = retryEdit !== undefined
+        && sceneEditRetainsNarrative(sectionDrafts, retryEdit, worldNarrativeProjection)
+        ? retryEdit
+        : sectionDrafts
     }
   }
   if (compactWorldTransition && !compactSectionsWithinBudget(editedSections, true)) {
@@ -5603,7 +5693,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const hostOwnedWorldDraft = deterministicFinalSections !== undefined
     && finalSections.every(section => section.sourcePassages === undefined)
     && finalDraft === renderSectionDrafts(deterministicFinalSections).trim()
-  const publicDialogues = directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
+  const publicDialogues = (directorDecision?.sections.flatMap(section => section.speech.flatMap(speech => {
     const dialogue = dialogueByReference.get(speech.reference)
     const voiceCitations = voiceCitationsByReference.get(speech.reference) ?? []
     const opportunityUseCandidate = characterDecisions.find(record => record.characterId === speech.characterId)
@@ -5634,7 +5724,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
         : {}),
       ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     }]
-  })) ?? []
+  })) ?? []).filter(dialogue => finalDraft.includes(dialogue.dialogue))
   const worldOpportunityResolutions: readonly PlayWorldCharacterOpportunityResolution[] = characterDecisions
     .flatMap(record => record.decision.opportunityDecisions.flatMap((decision): readonly PlayWorldCharacterOpportunityResolution[] => {
       if (decision.disposition !== 'use') {
@@ -5672,8 +5762,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
   const context = modelContext(finalDraft)
   const privateCharacterStates = materializablePrivateCharacterStates(
     characterDecisions,
-    directorDecision,
-    dialogueByReference,
+    publicDialogues,
   )
   const deterministicWorldMaterialization = worldOutcome !== ''
     && privateCharacterStates.length === 0
@@ -5790,6 +5879,17 @@ function visibleWorldOpportunityReplies(
   visibleReply: string,
 ): readonly PlayWorldCharacterOpportunityReply[] {
   return (replies ?? []).filter(reply => visibleReply.includes(reply.publicEvidence))
+}
+
+function visiblePrivateCharacterStates(
+  states: readonly StoryTurnCharacterPrivateState[] | undefined,
+  dialogues: readonly StoryTurnPublicDialogue[] | undefined,
+  visibleReply: string,
+): readonly StoryTurnCharacterPrivateState[] {
+  const speakersWithHiddenDialogue = new Set((dialogues ?? [])
+    .filter(dialogue => !visibleReply.includes(dialogue.dialogue))
+    .map(dialogue => dialogue.characterId))
+  return (states ?? []).filter(state => !speakersWithHiddenDialogue.has(state.characterId))
 }
 
 /** Materialize the completed presentation into internal history and one typed story change set. */
@@ -5987,9 +6087,16 @@ export async function materializeStoryTurn(input: {
       changes: update.changes,
     }
   }
-  const ownedPrivateFacts = privateInsightFacts(
-    briefEvent.data.privateCharacterStates ?? legacyPrivateCharacterStates(visibleSections ?? []),
+  const privateCharacterStates = visiblePrivateCharacterStates(
+    briefEvent.data.privateCharacterStates,
+    briefEvent.data.publicDialogues,
+    visibleReply,
   )
+  const ownedPrivateFacts = privateInsightFacts(privateCharacterStates.length > 0
+    ? privateCharacterStates
+    : briefEvent.data.privateCharacterStates === undefined
+      ? legacyPrivateCharacterStates(visibleSections ?? [])
+      : [])
   if (ownedPrivateFacts.length > 0) {
     update = {
       ...update,
