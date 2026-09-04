@@ -9,7 +9,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 const patchPath = resolve(dirname(manifestPath), manifest.patch.file)
 
 function fail(message) {
-  throw new Error(`DSH alpha Host patch check failed: ${message}`)
+  throw new Error(`DSH prerelease Host patch check failed: ${message}`)
 }
 
 function git(root, ...args) {

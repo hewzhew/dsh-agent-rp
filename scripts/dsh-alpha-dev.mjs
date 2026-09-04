@@ -35,7 +35,7 @@ const managedProfileFiles = new Map([
 ])
 
 function fail(message) {
-  throw new Error(`DSH alpha development setup failed: ${message}`)
+  throw new Error(`DSH prerelease development setup failed: ${message}`)
 }
 
 function parseArguments(args) {
@@ -87,10 +87,10 @@ function parseArguments(args) {
     }
     fail(`unknown argument ${JSON.stringify(arg)}`)
   }
-  const fallbackRoot = resolve(repositoryRoot, '../dsh-alpha5-host')
+  const fallbackRoot = resolve(repositoryRoot, '../dsh-rc1-host')
   const requestedRoot = dshRoot ?? (existsSync(fallbackRoot) ? fallbackRoot : undefined)
   if (requestedRoot === undefined) {
-    fail('set DSH_ALPHA_ROOT or pass --dsh-root with the compatible DSH alpha source checkout')
+    fail('set DSH_ALPHA_ROOT or pass --dsh-root with the compatible DSH prerelease source checkout')
   }
   const resolvedRoot = realpathSync(resolve(requestedRoot))
   const resolvedHome = resolve(home ?? resolve(repositoryRoot, '.runtime/dsh-alpha-home'))

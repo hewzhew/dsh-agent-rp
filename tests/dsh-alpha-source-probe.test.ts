@@ -45,7 +45,7 @@ function runProbe(fixture: ReturnType<typeof createProbeFixture>) {
   })
 }
 
-test('alpha source probe verifies replay-safe plugin event appends', context => {
+test('prerelease source probe verifies replay-safe plugin event appends', context => {
   const fixture = createProbeFixture(context, `
 export const KNOWN_SESSION_EVENT_TYPES = new Set()
 export function SessionId(value) { return value }
@@ -69,7 +69,7 @@ export class Session {
   assert.equal(result.stdout, 'ready')
 })
 
-test('alpha source probe rejects a Session without replay-safe plugin event appends', context => {
+test('prerelease source probe rejects a Session without replay-safe plugin event appends', context => {
   const fixture = createProbeFixture(context, `
 export const KNOWN_SESSION_EVENT_TYPES = new Set()
 export function SessionId(value) { return value }

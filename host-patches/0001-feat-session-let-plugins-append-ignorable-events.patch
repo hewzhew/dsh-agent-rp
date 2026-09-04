@@ -1,4 +1,4 @@
-From 8e9df846b29097eb45c1d89a14af863615b4c989 Mon Sep 17 00:00:00 2001
+From 59ab8dee24f985d2d0710c52c795942ad393d199 Mon Sep 17 00:00:00 2001
 From: hewzhew <hewzhew@bupt.edu.cn>
 Date: Sun, 23 Aug 2026 03:42:06 +0800
 Subject: [PATCH] feat(session): let plugins append ignorable events

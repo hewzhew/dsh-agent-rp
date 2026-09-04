@@ -35,7 +35,7 @@ const catalog = {
   }],
 } satisfies AvailableModelCatalog
 
-test('combines the alpha Host catalog with the durable next-request selection', () => {
+test('combines the prerelease Host catalog with the durable next-request selection', () => {
   const host = {
     default: { provider: 'default', model: 'default' },
     routableProviders: ['opencode-go'],
