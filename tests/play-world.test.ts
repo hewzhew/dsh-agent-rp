@@ -32,6 +32,7 @@ import { acceptStorySuggestionBatch } from '../src/story-suggestion-batch.ts'
 import {
   advanceStoryWorldByCharacter,
   materializeStoryTurn,
+  recoverUnmaterializedStoryTurns,
   runStoryTurnPipeline,
   stopStoryTurnPipeline,
 } from '../src/story-turn-pipeline.ts'
@@ -400,6 +401,8 @@ test('commits an intentionally omitted scene without leaving world events or pri
     actionId: turn.actions[0]!.id,
   })
   const session = Session.create(SessionId('omitted-world-scene'))
+  session.append('turn/start', { turn: 1 })
+  session.append('step/start', { turn: 1, step: 1 })
   appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
     format: 1,
     sessionId: String(session.id),
@@ -418,21 +421,18 @@ test('commits an intentionally omitted scene without leaving world events or pri
     finalDraft: '',
     modelContext: '',
   })
+  session.append('step/end', { turn: 1, step: 1 })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   const fake = {
     sessions: { flush: async () => true },
     llm: { stream() { throw new Error('省略正文不应再调用连续性模型') } },
   } as unknown as Context
   const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
 
-  const materialized = await materializeStoryTurn({
-    ctx: fake,
-    agent,
-    store,
-    workspaceId: advanced.id,
-    turn: 1,
-    signal: new AbortController().signal,
-  })
+  const recovered = await recoverUnmaterializedStoryTurns({ ctx: fake, agent, store })
+  const materialized = recovered[0]
 
+  assert.equal(recovered.length, 1)
   assert.equal(materialized?.continuityResultEventSeq, undefined)
   assert.match(materialized?.eventSummary ?? '', /计数值变为 1/u)
   assert.deepEqual(materialized?.changes.facts, [{ text: '下一次仍继续当前计数。', knownBy: [actorId] }])

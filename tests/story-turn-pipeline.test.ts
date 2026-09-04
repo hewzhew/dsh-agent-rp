@@ -20,6 +20,7 @@ import {
   expandStoryTurnOutputs,
   materializeStoryTurn,
   recoverStoppedStoryTurns,
+  recoverUnmaterializedStoryTurns,
   runStoryTurnPipeline,
   storyWebFetchAvailable,
   storyWebSearchAvailable,
@@ -72,6 +73,102 @@ test('recovers a story turn closed only by its parent Agent boundary', async () 
   assert.equal(flushes, 1)
   assert.deepEqual(await recoverStoppedStoryTurns({ ctx, agent }), [])
   assert.equal(flushes, 1)
+})
+
+test('reuses durable continuity when recovering a completed visible turn without materialization', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-agent-rp-story-materialization-recovery-'))
+  context.after(() => { rmSync(root, { recursive: true, force: true }) })
+  const store = new StoryWorkspaceStore({ root })
+  const created = store.create({ format: 2, name: '未完成物化恢复' })
+  const proseSectionId = createStoryOutputId()
+  const workspace = store.save({
+    ...created,
+    outputs: [{ id: proseSectionId, name: '正文', kind: 'prose', enabled: true, instructions: '' }],
+  })
+  const session = Session.create(SessionId('story-materialization-recovery'))
+  session.append('turn/start', { turn: 4 })
+  session.append('step/start', { turn: 4, step: 1 })
+  const brief = appendAgentRpSessionEvent(session, 'agent-rp/story-turn-brief', {
+    format: 1,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 4,
+    step: 1,
+    resultEventSeqs: [],
+    worldOpportunityResolutions: [{
+      opportunityId: 'opportunity:unshown-question',
+      characterId: 'character:reimu',
+      disposition: 'use',
+      responderId: 'character:marisa',
+      publicEvidence: '“下一局输的人请酒。”',
+    }],
+    directorBrief: '',
+    finalSections: [{ sectionId: proseSectionId, name: '正文', kind: 'prose', text: '雨停后，灵梦合上伞。' }],
+    finalDraft: '雨停后，灵梦合上伞。',
+    modelContext: '',
+  })
+  session.append('assistant/message', {
+    turn: 4,
+    step: 1,
+    message: createAssistantMessage({
+      source: { provider: 'fixture', model: 'fixture' },
+      content: [{ type: 'text', text: '雨停后，灵梦合上伞。' }],
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn: 4, step: 1 })
+  const requestId = 'continuity-recovery-request'
+  const request = appendAgentRpSessionEvent(session, 'agent-rp/story-stage-request', {
+    format: 0,
+    requestId,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 4,
+    step: 1,
+    stage: 'continuity',
+    dispatch: { provider: 'fixture', model: 'fixture', messages: [] },
+  })
+  const continuity = appendAgentRpSessionEvent(session, 'agent-rp/story-stage-result', {
+    format: 0,
+    requestId,
+    requestSeq: request.seq,
+    sessionId: String(session.id),
+    workspaceId: workspace.id,
+    workspaceRevision: workspace.revision,
+    turn: 4,
+    step: 1,
+    stage: 'continuity',
+    result: {
+      kind: 'success',
+      text: JSON.stringify({
+        history: { text: '雨停后，灵梦合上伞。', sourceSectionIds: [proseSectionId] },
+        changes: { characters: [], facts: [], nodes: [], edges: [] },
+      }),
+    },
+  })
+  session.append('turn/end', { turn: 4, reason: { kind: 'completed' } })
+  let flushes = 0
+  const ctx = {
+    sessions: { flush: async () => { flushes += 1; return true } },
+    llm: { stream: () => { throw new Error('恢复不应发起新的模型调用') } },
+  } as unknown as Context
+  const agent = { id: session.id, options: { provider: 'fixture', model: 'fixture' }, session } as Agent
+
+  const recovered = await recoverUnmaterializedStoryTurns({ ctx, agent, store })
+
+  assert.equal(recovered.length, 1)
+  assert.equal(recovered[0]?.continuityResultEventSeq, continuity.seq)
+  assert.equal(recovered[0]?.eventSummary, '雨停后，灵梦合上伞。')
+  assert.equal(recovered[0]?.worldOpportunityResolutions, undefined)
+  assert.equal(store.get(workspace.id).events.length, 1)
+  assert.equal(store.get(workspace.id).events[0]?.evidence, '雨停后，灵梦合上伞。')
+  assert.equal(flushes, 1)
+  const revision = store.get(workspace.id).revision
+  assert.deepEqual(await recoverUnmaterializedStoryTurns({ ctx, agent, store }), [])
+  assert.equal(store.get(workspace.id).revision, revision)
+  assert.equal(flushes, 1)
+  assert.equal(brief.seq < continuity.seq, true)
 })
 
 test('reports optional Host web research services without making a network request', () => {

@@ -688,8 +688,8 @@ function playerDirectionAdvancesWorld(playerInput: string): boolean {
   return !DIALOGUE_BEAT_PATTERN.test(playerInput)
 }
 
-function visibleReplyText(events: readonly SessionEvent[], turn: number): string {
-  const event = events.findLast(candidate => candidate.type === 'assistant/message'
+function visibleReplyText(events: readonly SessionEvent[], turn: number, afterSeq = 0): string {
+  const event = events.findLast(candidate => candidate.seq > afterSeq && candidate.type === 'assistant/message'
     && candidate.data.turn === turn && candidate.data.interrupted !== true
     && candidate.data.message.content.some(block => block.type === 'text' && block.text.trim() !== ''))
   if (event?.type !== 'assistant/message') return ''
@@ -4727,6 +4727,41 @@ export async function recoverStoppedStoryTurns(input: {
   return recovered
 }
 
+/** Materialize completed visible story turns left unfinished by shutdown or a transient failure. */
+export async function recoverUnmaterializedStoryTurns(input: {
+  readonly ctx: Context
+  readonly agent: Agent
+  readonly store: StoryWorkspaceStore
+}): Promise<readonly StoryTurnMaterializedRecord[]> {
+  const recovered: StoryTurnMaterializedRecord[] = []
+  for (const brief of sessionEvents(input.agent.session)) {
+    if (brief.type !== 'agent-rp/story-turn-brief' || brief.data.format !== 1) continue
+    const events = sessionEvents(input.agent.session)
+    const materialized = events.find(event => event.seq > brief.seq
+      && event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3
+      && event.data.sessionId === brief.data.sessionId
+      && event.data.workspaceId === brief.data.workspaceId
+      && event.data.turn === brief.data.turn && event.data.step === brief.data.step)
+    if (materialized !== undefined) continue
+    const parentEnd = events.find((event): event is SessionEvent<'turn/end'> => event.seq > brief.seq
+      && event.type === 'turn/end' && event.data.turn === brief.data.turn)
+    if (parentEnd?.data.reason.kind !== 'completed'
+      || (brief.data.finalDraft !== '' && visibleReplyText(events, brief.data.turn, brief.seq) === '')) continue
+    const record = await materializeStoryTurn({
+      ctx: input.ctx,
+      agent: input.agent,
+      store: input.store,
+      workspaceId: brief.data.workspaceId,
+      turn: brief.data.turn,
+      signal: new AbortController().signal,
+      allowContinuityGeneration: false,
+    })
+    if (record === undefined) throw new Error('已完成故事回合缺少可恢复的正文物化记录')
+    recovered.push(record)
+  }
+  return recovered
+}
+
 function directorFallback(
   input: RunStoryTurnPipelineInput,
   playerInput: string,
@@ -5716,6 +5751,47 @@ function storyTurnPublicWorldEvents(
   }] : []) ?? []
 }
 
+function successfulContinuityResult(
+  events: readonly SessionEvent[],
+  brief: SessionEvent<'agent-rp/story-turn-brief'>,
+): SessionEvent<'agent-rp/story-stage-result'> | undefined {
+  const eventBySeq = new Map<number, SessionEvent>(events.map(event => [event.seq, event]))
+  return events.findLast((event): event is SessionEvent<'agent-rp/story-stage-result'> => {
+    if (event.seq <= brief.seq || event.type !== 'agent-rp/story-stage-result'
+      || event.data.format !== 0 || event.data.result.kind !== 'success'
+      || event.data.stage !== 'continuity'
+      || event.data.sessionId !== brief.data.sessionId
+      || event.data.workspaceId !== brief.data.workspaceId
+      || event.data.turn !== brief.data.turn || event.data.step !== brief.data.step) return false
+    const request = eventBySeq.get(event.data.requestSeq)
+    return request?.type === 'agent-rp/story-stage-request'
+      && request.data.requestId === event.data.requestId
+      && request.data.stage === 'continuity'
+  })
+}
+
+function hostContinuityFallback(visibleSections: readonly StoryTurnFinalSection[]): ContinuityUpdate {
+  return {
+    history: renderSectionDrafts(visibleSections.filter(section => section.kind !== 'character')),
+    changes: { characters: [], facts: [], nodes: [], edges: [] },
+  }
+}
+
+function visibleWorldOpportunityResolutions(
+  resolutions: readonly PlayWorldCharacterOpportunityResolution[] | undefined,
+  visibleReply: string,
+): readonly PlayWorldCharacterOpportunityResolution[] {
+  return (resolutions ?? []).filter(resolution => resolution.disposition !== 'use'
+    || (resolution.publicEvidence !== undefined && visibleReply.includes(resolution.publicEvidence)))
+}
+
+function visibleWorldOpportunityReplies(
+  replies: readonly PlayWorldCharacterOpportunityReply[] | undefined,
+  visibleReply: string,
+): readonly PlayWorldCharacterOpportunityReply[] {
+  return (replies ?? []).filter(reply => visibleReply.includes(reply.publicEvidence))
+}
+
 /** Materialize the completed presentation into internal history and one typed story change set. */
 export async function materializeStoryTurn(input: {
   readonly ctx: Context
@@ -5724,6 +5800,8 @@ export async function materializeStoryTurn(input: {
   readonly workspaceId: string
   readonly turn: number
   readonly signal: AbortSignal
+  /** False during recovery: reuse a durable continuity result or fall back to Host-only materialization. */
+  readonly allowContinuityGeneration?: boolean
 }): Promise<StoryTurnMaterializedRecord | undefined> {
   const previous = sessionEvents(input.agent.session).findLast((event): event is SessionEvent<'agent-rp/story-turn-materialized'> =>
     event.type === 'agent-rp/story-turn-materialized' && event.data.format === 3 && event.data.turn === input.turn
@@ -5733,9 +5811,17 @@ export async function materializeStoryTurn(input: {
     event.type === 'agent-rp/story-turn-brief' && event.data.format === 1 && event.data.turn === input.turn
       && event.data.workspaceId === input.workspaceId)
   if (briefEvent === undefined) return undefined
-  const visibleReply = visibleReplyText(sessionEvents(input.agent.session), input.turn)
+  const visibleReply = visibleReplyText(sessionEvents(input.agent.session), input.turn, briefEvent.seq)
   const intentionallyOmitted = briefEvent.data.finalDraft === ''
   if (visibleReply === '' && !intentionallyOmitted) return undefined
+  const worldOpportunityResolutions = visibleWorldOpportunityResolutions(
+    briefEvent.data.worldOpportunityResolutions,
+    visibleReply,
+  )
+  const worldOpportunityReplies = visibleWorldOpportunityReplies(
+    briefEvent.data.worldOpportunityReplies,
+    visibleReply,
+  )
   const voiceCitations = uniqueCitationDrafts((briefEvent.data.publicDialogues ?? []).flatMap(dialogue =>
     visibleReply.includes(dialogue.dialogue) ? dialogue.voiceCitations ?? [] : []), 12)
   const visibleSections = visibleReplySections(visibleReply, briefEvent.data.finalSections)
@@ -5801,6 +5887,39 @@ export async function materializeStoryTurn(input: {
       history: '',
       changes: { characters: [], facts: [], nodes: [], edges: [] },
     }
+  } else if (input.allowContinuityGeneration === false) {
+    const compactContinuity = worldOutcome === ''
+      && visibleSections.length === 1
+      && visibleSections[0]?.kind === 'prose'
+      && compactProseWithinBudget(visibleSections[0].text)
+    const continuity = successfulContinuityResult(sessionEvents(input.agent.session), briefEvent)
+    if (continuity === undefined || continuity.data.result.kind !== 'success') {
+      update = hostContinuityFallback(visibleSections)
+    } else {
+      continuityResultEventSeq = continuity.seq
+      try {
+        const parsed = parseContinuityUpdate(
+          continuity.data.result.text,
+          visibleSections,
+          new Set(participants.map(character => character.id)),
+          new Set(canonicalNodes.map(node => node.id)),
+          worldOutcome !== '',
+        )
+        update = compactContinuity
+          ? {
+              history: parsed.history,
+              changes: {
+                characters: parsed.changes.characters,
+                facts: [],
+                nodes: [],
+                edges: [],
+              },
+            }
+          : parsed
+      } catch {
+        update = hostContinuityFallback(visibleSections)
+      }
+    }
   } else {
     const resultEventSeqs: number[] = []
     const reasoning = await resolveStoryStageReasoning(stageInput)
@@ -5859,10 +5978,7 @@ export async function materializeStoryTurn(input: {
           }
         : parsed
     } catch {
-      update = {
-        history: renderSectionDrafts(visibleSections.filter(section => section.kind !== 'character')),
-        changes: { characters: [], facts: [], nodes: [], edges: [] },
-      }
+      update = hostContinuityFallback(visibleSections)
     }
   }
   if (worldOutcome !== '' && !hostOwnedMaterialization) {
@@ -5891,12 +6007,12 @@ export async function materializeStoryTurn(input: {
     evidence: visibleReply,
     participantIds: participants.map(character => character.id),
     worldEventSequences: briefEvent.data.worldEventSequences ?? [],
-    ...(briefEvent.data.worldOpportunityResolutions === undefined
+    ...(worldOpportunityResolutions.length === 0
       ? {}
-      : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
-    ...(briefEvent.data.worldOpportunityReplies === undefined
+      : { worldOpportunityResolutions }),
+    ...(worldOpportunityReplies.length === 0
       ? {}
-      : { worldOpportunityReplies: briefEvent.data.worldOpportunityReplies }),
+      : { worldOpportunityReplies }),
     changes: update.changes,
     citations: uniqueCitationDrafts([
       ...(briefEvent.data.researchCitations ?? []),
@@ -5919,12 +6035,12 @@ export async function materializeStoryTurn(input: {
     ...(continuityResultEventSeq === undefined ? {} : { continuityResultEventSeq }),
     eventSummary: update.history,
     changes: update.changes,
-    ...(briefEvent.data.worldOpportunityResolutions === undefined
+    ...(worldOpportunityResolutions.length === 0
       ? {}
-      : { worldOpportunityResolutions: briefEvent.data.worldOpportunityResolutions }),
-    ...(briefEvent.data.worldOpportunityReplies === undefined
+      : { worldOpportunityResolutions }),
+    ...(worldOpportunityReplies.length === 0
       ? {}
-      : { worldOpportunityReplies: briefEvent.data.worldOpportunityReplies }),
+      : { worldOpportunityReplies }),
     ...(briefEvent.data.researchCitations === undefined ? {} : { researchCitations: briefEvent.data.researchCitations }),
     ...(voiceCitations.length === 0 ? {} : { voiceCitations }),
     publicTrace: {

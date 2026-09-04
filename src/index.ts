@@ -30,6 +30,7 @@ import { executeStoryWorkspaceCommand, readSessionStoryWorkspaceId } from './ses
 import {
   materializeStoryTurn,
   recoverStoppedStoryTurns,
+  recoverUnmaterializedStoryTurns,
   runStoryTurnPipeline,
   stopStoryTurnPipeline,
 } from './story-turn-pipeline.ts'
@@ -1002,6 +1003,7 @@ export function installAgentRp(
       if (!settlementRuntimeActive || agentsByScope.get(agent) !== agent) return
       void (async () => {
         try {
+          await recoverUnmaterializedStoryTurns({ ctx, agent, store: storyWorkspaces })
           await recoverStoppedStoryTurns({ ctx, agent })
         } catch (error: unknown) {
           ctx.logger.warn(`agent-rp: story turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -1089,6 +1091,7 @@ export function installAgentRp(
       const workspaceId = readSessionStoryWorkspaceId(sessionEvents(agent.session))
       if (workspaceId !== undefined) {
         try {
+          await recoverUnmaterializedStoryTurns({ ctx, agent, store: storyWorkspaces })
           const brief = await runStoryTurnPipeline({
             ctx,
             agent,
@@ -1239,6 +1242,7 @@ export function installAgentRp(
       if (!settlementRuntimeActive) return
       void (async () => {
         try {
+          await recoverUnmaterializedStoryTurns({ ctx, agent, store: storyWorkspaces })
           await recoverStoppedStoryTurns({ ctx, agent })
         } catch (error: unknown) {
           ctx.logger.warn(`agent-rp: story turn recovery failed: ${error instanceof Error ? error.message : String(error)}`)

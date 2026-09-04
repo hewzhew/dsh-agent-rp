@@ -94,7 +94,7 @@ DSH 正式 `spawn` 后端可用时，每个人物 Worker 是具有独立 Session
 
 网络搜索结果与正式资料采用同样的候选分层：搜索摘要可以供当轮研究 Worker 判断，但完成回合后只进入收件箱。玩家选择“收为资料”才会建立可编辑、可检索和可引用的研究资料；“忽略”只移除候选。接受时保留原始 URL、查询和 Session 事件位置，因此后续编辑摘录不会抹掉来源。
 
-故事回合开始写入 `agent-rp/story-turn-start`；完整模型请求和成功文本或稳定失败分别写入 `agent-rp/story-stage-request` 与 `agent-rp/story-stage-result`。每个阶段结果重复携带所属 Session、故事、revision、turn、step、职责和目标，使客户端无需进程内反查即可关联回合；普通对话投影会移除完整 prompt、输出与私有人物状态。网络检索、最终准备稿和回合沉淀也各自写入可忽略的 Session 事件。相同 turn、step、故事及 revision 的准备稿可以从 Session 重放复用，导出、分支与重载不依赖进程内缓存。
+故事回合开始写入 `agent-rp/story-turn-start`；完整模型请求和成功文本或稳定失败分别写入 `agent-rp/story-stage-request` 与 `agent-rp/story-stage-result`。每个阶段结果重复携带所属 Session、故事、revision、turn、step、职责和目标，使客户端无需进程内反查即可关联回合；普通对话投影会移除完整 prompt、输出与私有人物状态。网络检索、最终准备稿和回合沉淀也各自写入可忽略的 Session 事件。相同 turn、step、故事及 revision 的准备稿可以从 Session 重放复用，导出、分支与重载不依赖进程内缓存。`story-turn-brief` 只表示可见正文已经准备完成，`story-turn-materialized` 才表示该正文引用的世界事件、人物私记和连续性变更已经写入故事工作区。若一个 Agent 回合已经正常结束且正文可见，重启或下一轮开始前会先补齐缺失的物化：已有成功的连续性结果从 Session 直接重放，没有结果时使用实际可见分区作 Host 保底，不为恢复再发起模型请求；稳定物化 key 保证工作区已经写入而 Session 回执尚未落盘时也不会重复消费世界事件或人物机会。
 
 ## 当前实现边界
 
