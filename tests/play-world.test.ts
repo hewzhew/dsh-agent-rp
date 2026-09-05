@@ -4659,12 +4659,34 @@ test('advances executable worlds from the unified direction input unless the pla
   const session = Session.create(SessionId('free-story-world'))
   session.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+    header: {
+      config: {
+        provider: 'fixture',
+        model: 'fixture',
+        reasoningEffort: 'high' as never,
+        maxTokens: 4_096,
+      },
+    },
   })
   const characterBodies: string[] = []
   const fake = {
     sessions: { flush: async () => true },
     llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        return {
+          provider,
+          id: model,
+          name: model,
+          reasoning: {
+            efforts: [
+              { id: 'off', name: 'Off' },
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+            ],
+            defaultEffort: 'high',
+          },
+        }
+      },
       stream(options: { readonly system?: string; readonly messages?: readonly unknown[] }) {
         const system = options.system ?? ''
         const body = JSON.stringify(options.messages ?? [])
@@ -4731,6 +4753,8 @@ test('advances executable worlds from the unified direction input unless the pla
     : [])
   assert.equal(rolls, 0)
   assert.equal(stageRequests.some(request => request.stage === 'world-action'), false)
+  assert.equal(stageRequests.filter(request => request.stage === 'character')
+    .every(request => request.dispatch.reasoningEffort === 'high'), true)
   assert.equal(characterBodies.length, 2)
   assert.equal(characterBodies.every(body => body.includes(inputText)), true)
   assert.deepEqual(result.worldEventSequences, storyPendingWorldEvents(installed).map(event => event.sequence))
@@ -4741,7 +4765,14 @@ test('advances executable worlds from the unified direction input unless the pla
   const directedSession = Session.create(SessionId('directed-story-world'))
   directedSession.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+    header: {
+      config: {
+        provider: 'fixture',
+        model: 'fixture',
+        reasoningEffort: 'high' as never,
+        maxTokens: 4_096,
+      },
+    },
   })
   const directedInput = '先让场地继续推进四个合法棋局动作；不要为了凑对白让人物开口。'
   const directedResult = await runStoryTurnPipeline({
@@ -4765,13 +4796,23 @@ test('advances executable worlds from the unified direction input unless the pla
   assert.equal(rollsAfterDirectedInput > 0, true)
   assert.equal(sessionEvents(directedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'world-action'), true)
+  assert.equal(sessionEvents(directedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+    .every(request => request.dispatch.reasoningEffort === 'low'), true)
   assert.equal((directedResult.worldEventSequences?.length ?? 0) > 0, true)
   assert.equal(store.get(installed.id).revision > installed.revision, true)
 
   const guardedSession = Session.create(SessionId('guarded-story-world'))
   guardedSession.append('request/header', {
     reason: 'initial',
-    header: { config: { provider: 'fixture', model: 'fixture', maxTokens: 4_096 } },
+    header: {
+      config: {
+        provider: 'fixture',
+        model: 'fixture',
+        reasoningEffort: 'high' as never,
+        maxTokens: 4_096,
+      },
+    },
   })
   const guardedInput = '验证 Host 拦截：让人物观察棋盘；不要推进棋局，规则状态保持不变。'
   const guardedResult = await runStoryTurnPipeline({
@@ -4793,6 +4834,9 @@ test('advances executable worlds from the unified direction input unless the pla
   })
   assert.equal(sessionEvents(guardedSession).some(event => event.type === 'agent-rp/story-stage-request'
     && event.data.stage === 'world-action'), false)
+  assert.equal(sessionEvents(guardedSession).flatMap(event => event.type === 'agent-rp/story-stage-request'
+    && event.data.stage === 'character' ? [event.data] : [])
+    .every(request => request.dispatch.reasoningEffort === 'high'), true)
   assert.doesNotMatch(guardedResult.finalDraft, /2号飞机|3号机|绕场|滑出三格/u)
 })
 

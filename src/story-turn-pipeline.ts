@@ -4897,7 +4897,7 @@ export async function runStoryTurnPipeline(input: RunStoryTurnPipelineInput): Pr
     enabledCharacters,
     input.workspace,
   )
-  const characterReasoningMode: StoryStageReasoningMode = automaticAdvance
+  const characterReasoningMode: StoryStageReasoningMode = worldAdvanceRequested
     && worldOutcome !== '' && recentExchange?.status !== 'open'
     ? 'routine'
     : 'quality'
